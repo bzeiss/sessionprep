@@ -10,8 +10,26 @@ This is a **preflight heuristic** and a **starting-point generator**, not a full
 automatic mix prep tool. Manual clip gain riding is still expected for
 section-to-section dynamics.
 
-<img width="1198" height="729" alt="image" src="https://github.com/user-attachments/assets/83f3b66d-06b3-47ba-a274-6583d657f4d4" />
-<img width="1263" height="787" alt="image" src="https://github.com/user-attachments/assets/8cea250c-f2cc-4c6f-83f3-6bbb558a8500" />
+<table>
+  <tr>
+    <td width="33%">
+      <a href="https://github.com/user-attachments/assets/50897f27-1b22-45ef-a017-586a893f8313">
+        <img src="https://github.com/user-attachments/assets/50897f27-1b22-45ef-a017-586a893f8313" alt="image 1" width="100%" />
+      </a>
+    </td>
+    <td width="33%">
+      <a href="https://github.com/user-attachments/assets/95b92d4f-4720-49bf-a8e5-8affe1685281">
+        <img src="https://github.com/user-attachments/assets/95b92d4f-4720-49bf-a8e5-8affe1685281" alt="image 2" width="100%" />
+      </a>
+    </td>
+    <td width="33%">
+      <a href="https://github.com/user-attachments/assets/eaec24fe-da54-41c7-ad22-1caf349bb740">
+        <img src="https://github.com/user-attachments/assets/eaec24fe-da54-41c7-ad22-1caf349bb740" alt="image 3" width="100%" />
+      </a>
+    </td>
+  </tr>
+</table>
+
 
 ---
 
