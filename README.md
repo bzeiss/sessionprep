@@ -121,7 +121,7 @@ The output is organized into four categories:
 
 For details on every detector, see [REFERENCE.md](REFERENCE.md).
 
-### Processing: Bimodal normalization
+### Processing: Bimodal normalization (CLI only)
 
 Most normalizers treat a kick drum and a synth pad the same. SessionPrep
 classifies tracks by crest factor and normalizes them differently:
@@ -133,7 +133,7 @@ For the engineering rationale, see [TECHNICAL.md](TECHNICAL.md).
 
 ---
 
-## Usage Examples
+## Usage Examples (CLI)
 
 ### Basic analysis (dry-run)
 ```bash
