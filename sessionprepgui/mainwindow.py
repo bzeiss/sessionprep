@@ -19,11 +19,13 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSplitter,
     QStackedWidget,
+    QStyle,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
     QTextBrowser,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QStatusBar,
     QWidget,
@@ -307,7 +309,49 @@ class SessionPrepWindow(QMainWindow):
 
         self._waveform = WaveformWidget()
         self._waveform.position_clicked.connect(self._on_waveform_seek)
-        file_splitter.addWidget(self._waveform)
+
+        # Waveform toolbar + widget container
+        wf_container = QWidget()
+        wf_layout = QVBoxLayout(wf_container)
+        wf_layout.setContentsMargins(0, 0, 0, 0)
+        wf_layout.setSpacing(0)
+
+        wf_toolbar = QHBoxLayout()
+        wf_toolbar.setContentsMargins(4, 2, 4, 2)
+
+        wf_toolbar.addStretch()  # push buttons to the right
+
+        style = self.style()
+
+        def _tb(text: str, tooltip: str, icon=None):
+            btn = QToolButton()
+            if icon is not None:
+                btn.setIcon(style.standardIcon(icon))
+            else:
+                btn.setText(text)
+            btn.setToolTip(tooltip)
+            btn.setAutoRaise(True)
+            wf_toolbar.addWidget(btn)
+            return btn
+
+        _tb("Fit", "Zoom to fit entire file", QStyle.SP_BrowserReload
+             ).clicked.connect(self._waveform.zoom_fit)
+        _tb("+", "Zoom in at cursor").clicked.connect(self._waveform.zoom_in)
+        _tb("\u2212", "Zoom out at cursor").clicked.connect(self._waveform.zoom_out)
+        _tb("", "Scale up (vertical)", QStyle.SP_ArrowUp
+             ).clicked.connect(self._waveform.scale_up)
+        _tb("", "Scale down (vertical)", QStyle.SP_ArrowDown
+             ).clicked.connect(self._waveform.scale_down)
+
+        toolbar_widget = QWidget()
+        toolbar_widget.setLayout(wf_toolbar)
+        toolbar_widget.setFixedHeight(28)
+        toolbar_widget.setStyleSheet(
+            "background-color: #2d2d2d; border-bottom: 1px solid #555;")
+        wf_layout.addWidget(toolbar_widget)
+        wf_layout.addWidget(self._waveform, 1)
+
+        file_splitter.addWidget(wf_container)
 
         file_splitter.setStretchFactor(0, 3)
         file_splitter.setStretchFactor(1, 1)
@@ -641,6 +685,7 @@ class SessionPrepWindow(QMainWindow):
         sr = track.samplerate
         self._time_label.setText(
             f"{fmt_time(sample_pos / sr)} / {fmt_time(track.total_samples / sr)}"
+            f"  \u2022  {sample_pos:,}"
         )
 
     @Slot()
