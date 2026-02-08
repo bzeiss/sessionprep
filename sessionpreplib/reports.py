@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from .audio import format_duration
+from .audio import dbfs_offset, format_duration
 from .models import SessionContext
 from .utils import protools_sort_key
 
@@ -336,12 +336,13 @@ def build_warnings(
                           type('', (), {"data": {}})()).data.get("dc_warn")]
     if dc_warn_tracks:
         dc_thresh = config.get("dc_offset_warn_db", -40.0)
+        _off = dbfs_offset(config)
         warnings.append(f"DC offset detected (>{dc_thresh} dBFS):")
         for t in dc_warn_tracks:
             dc_r = t.detector_results.get("dc_offset")
             dc_db = dc_r.data.get("dc_db", float('-inf')) if dc_r else float('-inf')
             if np.isfinite(dc_db):
-                warnings.append(f"  - {t.filename} is {dc_db:.1f} dBFS")
+                warnings.append(f"  - {t.filename} is {dc_db + _off:.1f} dBFS")
             else:
                 warnings.append(f"  - {t.filename}")
 

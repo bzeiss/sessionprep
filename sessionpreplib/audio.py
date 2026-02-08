@@ -13,6 +13,9 @@ from .models import TrackContext
 # Conversion helpers
 # ---------------------------------------------------------------------------
 
+AES17_OFFSET = 3.0103  # dB offset: 20 * log10(sqrt(2))
+
+
 def db_to_linear(db: float) -> float:
     return 10 ** (db / 20.0)
 
@@ -21,6 +24,14 @@ def linear_to_db(linear: float) -> float:
     if linear <= 0:
         return float(-np.inf)
     return float(20 * np.log10(linear))
+
+
+def dbfs_offset(config: dict) -> float:
+    """Return the dBFS offset for the configured convention.
+
+    Standard → 0.0; AES17 → +3.0103 dB.
+    """
+    return AES17_OFFSET if config.get("dbfs_convention") == "aes17" else 0.0
 
 
 def format_duration(samples: int, samplerate: int) -> str:

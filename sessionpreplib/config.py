@@ -191,6 +191,15 @@ ANALYSIS_PARAMS: list[ParamSpec] = [
         label="Relative gate (dB)",
         description="RMS windows quieter than (peak − gate) are excluded.",
     ),
+    ParamSpec(
+        key="dbfs_convention", type=str, default="standard",
+        choices=["standard", "aes17"],
+        label="dBFS convention",
+        description=(
+            "Standard: 0 dBFS = full-scale digital. "
+            "AES17: 0 dBFS = RMS of a full-scale sine (+3.01 dB offset)."
+        ),
+    ),
     # -- Global processing defaults ------------------------------------------
     ParamSpec(
         key="group_overlap", type=str, default="warn",

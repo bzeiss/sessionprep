@@ -47,6 +47,12 @@ class WaveformWidget(QWidget):
         self._view_start: int = 0
         self._view_end: int = 0
         self._vscale: float = 1.0
+        # RMS overlay
+        self._rms_window_samples: int = 0
+        self._show_rms: bool = False
+        self._rms_envelope: list[list[float]] = []
+        self._rms_combined: list[float] = []
+        self._rms_cache_key: tuple[int, int, int] = (0, 0, 0)
         self.setMinimumHeight(80)
         self.setMouseTracking(True)
 
@@ -74,6 +80,10 @@ class WaveformWidget(QWidget):
         self._peaks_cache = []
         self._cached_view = (0, 0, 0)
         self._issues = []
+        self._rms_window_samples = 0
+        self._rms_envelope = []
+        self._rms_combined = []
+        self._rms_cache_key = (0, 0, 0)
         self.update()
 
     def set_issues(self, issues: list):
@@ -157,6 +167,8 @@ class WaveformWidget(QWidget):
             return
 
         self._build_peaks(w)
+        if self._show_rms:
+            self._build_rms_envelope(w)
 
         nch = self._num_channels
         lane_h = h / nch
@@ -256,6 +268,40 @@ class WaveformWidget(QWidget):
                 painter.setPen(QPen(QColor("#555555"), 1))
                 painter.drawLine(0, sep_y, w, sep_y)
 
+        # --- RMS overlay (on top of waveform, below cursor) ---
+        if self._show_rms and self._rms_envelope:
+            ch_pen = QPen(QColor(255, 220, 60, 200), 1.0)     # yellow – per-channel
+            comb_pen = QPen(QColor(255, 100, 40, 220), 1.5)   # orange – combined
+            for ch in range(nch):
+                if ch >= len(self._rms_envelope):
+                    break
+                y_off = ch * lane_h
+                mid_y = y_off + lane_h / 2.0
+                scale = (lane_h / 2.0) * 0.85 * self._vscale
+                lane_top = int(y_off)
+                painter.setClipRect(0, lane_top, w, int(lane_h))
+                painter.setBrush(Qt.NoBrush)
+
+                # Per-channel RMS
+                ch_env = self._rms_envelope[ch]
+                ch_path = QPainterPath()
+                ch_path.moveTo(0, mid_y - ch_env[0] * scale)
+                for x in range(1, len(ch_env)):
+                    ch_path.lineTo(x, mid_y - ch_env[x] * scale)
+                painter.setPen(ch_pen)
+                painter.drawPath(ch_path)
+
+                # Combined RMS
+                if self._rms_combined:
+                    comb_path = QPainterPath()
+                    comb_path.moveTo(0, mid_y - self._rms_combined[0] * scale)
+                    for x in range(1, len(self._rms_combined)):
+                        comb_path.lineTo(x, mid_y - self._rms_combined[x] * scale)
+                    painter.setPen(comb_pen)
+                    painter.drawPath(comb_path)
+
+                painter.setClipping(False)
+
         # Playback cursor (spans all channels)
         if self._total_samples > 0:
             cursor_x = self._sample_to_x(self._cursor_sample, w)
@@ -268,6 +314,9 @@ class WaveformWidget(QWidget):
     def resizeEvent(self, event):
         self._peaks_cache = []
         self._cached_view = (0, 0, 0)
+        self._rms_envelope = []
+        self._rms_combined = []
+        self._rms_cache_key = (0, 0, 0)
         super().resizeEvent(event)
 
     def mousePressEvent(self, event):
@@ -325,6 +374,9 @@ class WaveformWidget(QWidget):
     def _invalidate_peaks(self):
         self._peaks_cache = []
         self._cached_view = (0, 0, 0)
+        self._rms_envelope = []
+        self._rms_combined = []
+        self._rms_cache_key = (0, 0, 0)
 
     def zoom_fit(self):
         """Reset horizontal zoom and vertical scale to show the entire file."""
@@ -383,3 +435,82 @@ class WaveformWidget(QWidget):
         """Decrease vertical amplitude scale."""
         self._vscale = max(self._vscale / 1.5, 0.1)
         self.update()
+
+    # ── RMS overlay ───────────────────────────────────────────────────────
+
+    def set_rms_data(self, window_samples: int):
+        """Set the RMS window size.  Per-channel envelopes are computed
+        on demand from the already-loaded channel data."""
+        self._rms_window_samples = max(window_samples, 0)
+        self._rms_envelope = []
+        self._rms_cache_key = (0, 0, 0)
+        self.update()
+
+    def toggle_rms(self, on: bool):
+        """Enable or disable the RMS overlay."""
+        self._show_rms = on
+        self.update()
+
+    def _build_rms_envelope(self, width: int):
+        """Compute per-channel AND combined RMS envelopes for *width* pixels.
+
+        Uses a sliding-window cumsum over each channel independently,
+        then picks the max-RMS within each pixel's sample range.
+
+        Results:
+            ``_rms_envelope``  – list (per channel) of list[float]
+            ``_rms_combined``  – list[float] (avg across channels)
+        """
+        win = self._rms_window_samples
+        if not self._channels or width <= 0 or win <= 0:
+            self._rms_envelope = []
+            self._rms_combined = []
+            return
+        cache_key = (width, self._view_start, self._view_end)
+        if self._rms_cache_key == cache_key and self._rms_envelope:
+            return
+
+        vs, ve = self._view_start, self._view_end
+        view_len = ve - vs
+        if view_len <= 0:
+            self._rms_envelope = []
+            self._rms_combined = []
+            return
+
+        half_win = win // 2
+        # Per-channel window-means arrays (full resolution)
+        ch_wms: list[np.ndarray] = []
+        for ch_data in self._channels:
+            n = len(ch_data)
+            if n <= win:
+                ch_wms.append(np.zeros(1, dtype=np.float64))
+                continue
+            sq = ch_data.astype(np.float64) ** 2
+            cs = np.empty(n + 1, dtype=np.float64)
+            cs[0] = 0.0
+            np.cumsum(sq, out=cs[1:])
+            ch_wms.append((cs[win:] - cs[: n - win + 1]) / win)
+
+        # Combined (average across channels)
+        min_len = min(len(wm) for wm in ch_wms)
+        combined_wm = np.mean(
+            np.column_stack([wm[:min_len] for wm in ch_wms]), axis=1
+        )
+
+        def _downsample(wm: np.ndarray) -> list[float]:
+            n_means = len(wm)
+            env: list[float] = []
+            for i in range(width):
+                s_start = vs + i * view_len // width
+                s_end = vs + (i + 1) * view_len // width
+                idx_start = max(0, s_start - half_win)
+                idx_end = min(n_means, max(s_end - half_win, idx_start + 1))
+                if idx_start >= idx_end:
+                    env.append(0.0)
+                else:
+                    env.append(float(np.sqrt(np.max(wm[idx_start:idx_end]))))
+            return env
+
+        self._rms_envelope = [_downsample(wm) for wm in ch_wms]
+        self._rms_combined = _downsample(combined_wm)
+        self._rms_cache_key = cache_key

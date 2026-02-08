@@ -12,7 +12,7 @@ from .models import (
     SessionContext,
     TrackContext,
 )
-from .audio import format_duration, linear_to_db
+from .audio import dbfs_offset, format_duration, linear_to_db
 
 
 # --------------------------------------------------------------------------
@@ -42,6 +42,7 @@ def build_diagnostic_summary(
     """
     ok_tracks = [t for t in session.tracks if t.status == "OK"]
     total_ok = len(ok_tracks)
+    _off = dbfs_offset(session.config)
 
     def add_group(dst, title, hint, items, standalone=False):
         if not items and not standalone:
@@ -178,7 +179,7 @@ def build_diagnostic_summary(
         if dc_r and dc_r.data.get("dc_warn"):
             dc_db = dc_r.data.get("dc_db", float(-np.inf))
             if np.isfinite(dc_db):
-                dc_items.append(f"{t.filename}: DC offset {dc_db:.1f} dBFS")
+                dc_items.append(f"{t.filename}: DC offset {dc_db + _off:.1f} dBFS")
             else:
                 dc_items.append(f"{t.filename}: DC offset issue")
             issue_names.add(t.filename)
@@ -231,7 +232,7 @@ def build_diagnostic_summary(
             r_db = oss_r.data.get("r_rms_db", float(-np.inf))
 
             def fmt_db(x):
-                return f"{float(x):.1f}" if np.isfinite(x) else "-inf"
+                return f"{float(x) + _off:.1f}" if np.isfinite(x) else "-inf"
 
             if side:
                 one_sided_items.append(
@@ -344,11 +345,13 @@ def build_diagnostic_summary(
 
     def safe_peak(t):
         cr = t.detector_results.get("crest_factor")
-        return cr.data.get("peak_db", float(-np.inf)) if cr else float(-np.inf)
+        v = cr.data.get("peak_db", float(-np.inf)) if cr else float(-np.inf)
+        return v + _off if np.isfinite(v) else v
 
     def safe_rms(t):
         cr = t.detector_results.get("crest_factor")
-        return cr.data.get("rms_anchor_db", float(-np.inf)) if cr else float(-np.inf)
+        v = cr.data.get("rms_anchor_db", float(-np.inf)) if cr else float(-np.inf)
+        return v + _off if np.isfinite(v) else v
 
     peak_candidates = [t for t in non_silent if np.isfinite(safe_peak(t))]
     rms_candidates = [t for t in non_silent if np.isfinite(safe_rms(t))]

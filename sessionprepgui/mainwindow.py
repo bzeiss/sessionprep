@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from sessionpreplib.audio import get_window_samples
 from sessionpreplib.config import default_config, flatten_structured_config
 from sessionpreplib.detectors import detector_help_map
 from sessionpreplib.utils import protools_sort_key
@@ -319,6 +320,16 @@ class SessionPrepWindow(QMainWindow):
         wf_toolbar = QHBoxLayout()
         wf_toolbar.setContentsMargins(4, 2, 4, 2)
 
+        self._rms_toggle = QToolButton()
+        self._rms_toggle.setText("RMS")
+        self._rms_toggle.setToolTip("Toggle RMS overlay")
+        self._rms_toggle.setCheckable(True)
+        self._rms_toggle.setAutoRaise(True)
+        self._rms_toggle.setStyleSheet(
+            "QToolButton:checked { background-color: #2a6db5; color: #ffffff; }")
+        self._rms_toggle.toggled.connect(self._waveform.toggle_rms)
+        wf_toolbar.addWidget(self._rms_toggle)
+
         wf_toolbar.addStretch()  # push buttons to the right
 
         style = self.style()
@@ -542,11 +553,17 @@ class SessionPrepWindow(QMainWindow):
             for result in track.detector_results.values():
                 all_issues.extend(getattr(result, "issues", []))
             self._waveform.set_issues(all_issues)
+            # RMS overlay: pass window size so per-channel RMS is computed on demand
+            flat_cfg = flatten_structured_config(self._config)
+            win_ms = flat_cfg.get("window", 400)
+            ws = get_window_samples(track, win_ms)
+            self._waveform.set_rms_data(ws)
             self._waveform.setVisible(True)
             self._play_btn.setEnabled(True)
             self._update_time_label(0)
         else:
             self._waveform.set_audio(None, 44100)
+            self._waveform.set_rms_data(0)
             self._waveform.setVisible(False)
             self._play_btn.setEnabled(False)
             self._update_time_label(0)
