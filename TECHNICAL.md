@@ -156,9 +156,12 @@ dynamics) may still require manual clip gain adjustments in the DAW.
 
 ### The Bimodal Classification Strategy
 
-  Classification uses two metrics: **crest factor** (peak-to-RMS ratio) and
-  **envelope decay rate** (how fast energy drops after the loudest moment).
-  When the two metrics disagree, the decay rate acts as a tiebreaker.
+  Classification uses three metrics: **crest factor** (peak-to-RMS ratio),
+  **envelope decay rate** (how fast energy drops after the loudest moment),
+  and **density** (fraction of the track containing active content).
+  Very sparse tracks with at least one agreeing dynamic metric are classified
+  as Transient (catches toms, crashes, FX hits). For non-sparse tracks, crest
+  and decay vote together with decay as tiebreaker.
 
   **TYPE 1: TRANSIENT MATERIAL** (High Crest + Fast Decay)
   (Drums, Percussion, Stabs)
@@ -299,11 +302,12 @@ positions end up closer to unity, but that is not guaranteed.
 
 ### Classification is heuristic (transient vs sustained)
 
-The transient/sustained split is intentionally a heuristic based on two metrics:
-crest factor (peak-to-RMS ratio) and envelope decay rate (energy drop after the
-loudest moment). When the metrics disagree, decay acts as a tiebreaker:
-  - High crest + slow decay → Sustained (plucked instruments, piano)
-  - Low crest + fast decay → Transient (compressed drums, loops)
+The transient/sustained split is intentionally a heuristic based on three metrics:
+crest factor (peak-to-RMS ratio), envelope decay rate (energy drop after the
+loudest moment), and density (fraction of active content). Classification priority:
+  1. Sparse + at least one dynamic metric agrees → Transient (toms, crashes, FX)
+  2. High crest + slow decay → Sustained (plucked instruments, piano)
+  3. Low crest + fast decay → Transient (compressed drums, loops)
 
 It will still be wrong for some sources. The script supports explicit overrides:
   - `--force_transient ...`
@@ -313,6 +317,7 @@ Thresholds are adjustable:
   - `--crest_threshold 12` (default) — crest factor above this suggests transient
   - `--decay_db_threshold 12` (default) — energy drop above this suggests transient
   - `--decay_lookahead_ms 200` (default) — time window for measuring decay
+  - `--sparse_density_threshold 0.25` (default) — tracks with less active content are sparse
 
 If you see repeated `Normalization hints` (or systematic misclassification), adjust
 thresholds for the session, and use the force flags to lock edge cases.

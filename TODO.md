@@ -201,13 +201,18 @@
 
 ### Classification Robustness
 
-- [x] **Audio classifier upgrade (crest + envelope decay)** (Status: ✅ Done)
-  - Replaced single crest-factor threshold with a two-metric vote:
-    crest factor + envelope decay rate (10 ms short-window energy envelope).
-  - Resolves compressed drums (low crest, fast decay → Transient) and
-    plucked instruments (high crest, slow decay → Sustained).
+- [x] **Audio classifier upgrade (crest + decay + density)** (Status: ✅ Done)
+  - Replaced single crest-factor threshold with a three-metric classifier:
+    crest factor, envelope decay rate (10 ms short-window energy envelope),
+    and content density (fraction of active RMS windows).
+  - Resolves compressed drums (low crest, fast decay → Transient),
+    plucked instruments (high crest, slow decay → Sustained), and
+    sparse percussion like toms/crashes (sparse + dynamic metric agreement).
+  - Sparse tracks require at least one dynamic metric (crest or decay) to
+    agree before being classified as Transient, preventing false positives
+    on sparse sustained content (e.g., guitar only in the outro).
   - New configurable params: `decay_lookahead_ms` (default 200),
-    `decay_db_threshold` (default 12.0).
+    `decay_db_threshold` (default 12.0), `sparse_density_threshold` (default 0.25).
   - Detector renamed: `crest_factor` → `audio_classifier`
     (`CrestFactorDetector` → `AudioClassifierDetector`).
   - File renamed: `crest_factor.py` → `audio_classifier.py`.

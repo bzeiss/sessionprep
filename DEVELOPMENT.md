@@ -654,9 +654,9 @@ cycles.
 #### 6.3.9 AudioClassifierDetector (`audio_classifier.py`)
 
 - **ID:** `audio_classifier` | **Depends on:** `["silence"]`
-- **Config:** `window`, `stereo_mode`, `rms_anchor`, `rms_percentile`, `gate_relative_db`, `crest_threshold`, `decay_lookahead_ms`, `decay_db_threshold`, `force_transient`, `force_sustained`
-- **Data:** `{"peak_db", "rms_max_db", "rms_anchor_db", "rms_anchor_mean", "crest", "decay_db", "classification", "is_transient", "near_threshold"}`
-- **Classification logic:** Two-metric vote — crest factor (peak-to-RMS ratio) and envelope decay rate (energy drop after loudest moment). When they disagree, decay acts as tiebreaker: high crest + slow decay → Sustained (plucked/piano); low crest + fast decay → Transient (compressed drums).
+- **Config:** `window`, `stereo_mode`, `rms_anchor`, `rms_percentile`, `gate_relative_db`, `crest_threshold`, `decay_lookahead_ms`, `decay_db_threshold`, `sparse_density_threshold`, `force_transient`, `force_sustained`
+- **Data:** `{"peak_db", "rms_max_db", "rms_anchor_db", "rms_anchor_mean", "crest", "decay_db", "density", "classification", "is_transient", "near_threshold"}`
+- **Classification logic:** Three-metric system — crest factor (peak-to-RMS ratio), envelope decay rate (energy drop after loudest moment), and density (fraction of active RMS windows). Sparse tracks with at least one agreeing dynamic metric are classified as Transient (catches toms, crashes, FX hits). For non-sparse tracks, crest and decay vote together with decay as tiebreaker: high crest + slow decay → Sustained (plucked/piano); low crest + fast decay → Transient (compressed drums).
 - **Severity:** Always `INFO`
 
 #### 6.3.10 TailExceedanceDetector (`tail_exceedance.py`)

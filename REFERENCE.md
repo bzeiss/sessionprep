@@ -213,27 +213,33 @@ sparse events.
   - `--gate_relative_db 40` means "keep windows within 40 dB of the loudest RMS
     window." It is not an absolute dBFS value (so it is not `-40`).
 
-### 3.5 Audio classification (crest factor + envelope decay)
+### 3.5 Audio classification (crest factor + envelope decay + density)
 
 **What it is:**
-  - A two-metric classifier that combines crest factor (peak-to-RMS ratio) with
-    envelope decay rate (how fast energy drops after the loudest moment).
+  - A three-metric classifier that combines crest factor (peak-to-RMS ratio),
+    envelope decay rate (how fast energy drops after the loudest moment), and
+    density (fraction of the track containing active content above the gate).
   - Crest factor alone can misclassify compressed drums (low crest but transient)
     and plucked instruments (high crest but sustained). The decay metric acts as
-    a tiebreaker when the two metrics disagree.
+    a tiebreaker when the two metrics disagree. Density catches sparse percussion
+    (toms, crashes, FX hits) that may have ambiguous crest and decay values.
 
-**Classification logic:**
-  - High crest + fast decay → Transient (drums, percussion)
-  - Low crest + slow decay → Sustained (pads, bass, vocals)
-  - High crest + slow decay → Sustained (plucked/piano — decay overrides)
-  - Low crest + fast decay → Transient (compressed drums — decay overrides)
+**Classification logic (in priority order):**
+  1. Keyword overrides (`--force_transient`, `--force_sustained`)
+  2. Sparse + at least one dynamic metric agrees → Transient (toms, crashes, FX)
+  3. High crest + fast decay → Transient (drums, percussion)
+  4. Low crest + slow decay → Sustained (pads, bass, vocals)
+  5. High crest + slow decay → Sustained (plucked/piano — decay overrides)
+  6. Low crest + fast decay → Transient (compressed drums — decay overrides)
 
 **Why it matters:**
   - Helps pick a more appropriate normalization strategy.
   - Explains why certain tracks behave differently when you drive dynamics and
     saturation processing.
-  - If either metric is close to its threshold, the `Normalization hints`
+  - If either crest or decay is close to its threshold, the `Normalization hints`
     section will flag an edge case and suggest `--force_transient` / `--force_sustained`.
+  - Sparse tracks (e.g., toms that only play occasionally) are caught by the
+    density metric even when crest and decay are ambiguous.
 
 ### 3.6 Tail exceedance report (significant regions above anchor)
 
@@ -306,9 +312,9 @@ threshold (`--crest_threshold` default `12 dB`, `--decay_db_threshold` default
 `12 dB`).
 
 Why this matters:
-  - The classification uses two metrics (crest factor and envelope decay rate)
-    that vote together. When either metric is borderline, the classification
-    could flip with small changes in the audio.
+  - The classification uses three metrics (crest factor, envelope decay rate,
+    and density) that vote together. When a dynamic metric is borderline, the
+    classification could flip with small changes in the audio.
   - Transient tracks are peak-normalized (`--target_peak`).
   - Sustained tracks are RMS-normalized (`--target_rms`) with a peak ceiling.
 

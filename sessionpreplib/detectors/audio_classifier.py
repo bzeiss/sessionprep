@@ -47,23 +47,37 @@ class AudioClassifierDetector(TrackDetector):
                     "transient. Higher values require a sharper drop."
                 ),
             ),
+            ParamSpec(
+                key="sparse_density_threshold", type=float, default=0.25,
+                min=0.0, max=1.0,
+                label="Sparse track density threshold",
+                description=(
+                    "Fraction of active (non-silent) RMS windows below which "
+                    "a track is classified as transient regardless of crest "
+                    "and decay. Catches sparse percussion like toms, crashes, "
+                    "and FX hits that have moderate crest and slow decay."
+                ),
+            ),
         ]
 
     @classmethod
     def html_help(cls) -> str:
         return (
             "<b>Description</b><br/>"
-            "Classifies a track as Transient or Sustained using two metrics: "
-            "crest factor (peak-to-RMS ratio) and envelope decay rate (how "
-            "fast energy drops after the loudest moment). Both metrics must "
-            "agree for a confident classification; when they disagree the "
-            "decay metric acts as a tiebreaker."
+            "Classifies a track as Transient or Sustained using three "
+            "metrics: crest factor (peak-to-RMS ratio), envelope decay "
+            "rate (how fast energy drops after the loudest moment), and "
+            "density (fraction of the track containing active content). "
+            "Very sparse tracks are classified as Transient regardless "
+            "of crest and decay. Otherwise, crest and decay vote together "
+            "with decay acting as tiebreaker."
             "<br/><br/>"
             "<b>Results</b><br/>"
             "<b>INFO</b> – Always reported with the crest factor, decay "
-            "rate, and resulting classification (Transient / Sustained)."
+            "rate, density, and resulting classification."
             "<br/><br/>"
             "<b>Interpretation</b><br/>"
+            "Sparse track (density below threshold) → Transient.<br/>"
             "High crest + fast decay → drums, percussion (Transient).<br/>"
             "Low crest + slow decay → pads, bass, vocals (Sustained).<br/>"
             "High crest + slow decay → plucked/piano (Sustained).<br/>"
@@ -81,6 +95,7 @@ class AudioClassifierDetector(TrackDetector):
         self.crest_threshold = config.get("crest_threshold", 12.0)
         self.decay_lookahead_ms = config.get("decay_lookahead_ms", 200)
         self.decay_db_threshold = config.get("decay_db_threshold", 12.0)
+        self.sparse_density_threshold = config.get("sparse_density_threshold", 0.25)
         self.force_transient = config.get("force_transient", [])
         self.force_sustained = config.get("force_sustained", [])
 
@@ -97,6 +112,7 @@ class AudioClassifierDetector(TrackDetector):
                     "rms_anchor_mean": 0.0,
                     "crest": 0.0,
                     "decay_db": 0.0,
+                    "density": 0.0,
                     "classification": "Silent",
                     "is_transient": False,
                     "near_threshold": False,
@@ -168,9 +184,16 @@ class AudioClassifierDetector(TrackDetector):
         tail_env_db = 10.0 * np.log10(max(tail_median, floor))
         decay_db = float(peak_env_db - tail_env_db)  # positive = energy dropped
 
-        # --- Two-metric classification ---
+        # --- Density: fraction of windows above the relative gate ---
+        density = (
+            float(len(active_means) / len(window_means))
+            if len(window_means) > 0 else 1.0
+        )
+
+        # --- Three-metric classification ---
         crest_says_transient = crest > self.crest_threshold
         decay_says_transient = decay_db > self.decay_db_threshold
+        is_sparse = density < self.sparse_density_threshold
 
         # Classification with overrides
         if matches_keywords(track.filename, self.force_transient):
@@ -179,6 +202,10 @@ class AudioClassifierDetector(TrackDetector):
         elif matches_keywords(track.filename, self.force_sustained):
             is_transient = False
             classification = "Sustained (Forced)"
+        elif is_sparse and (crest_says_transient or decay_says_transient):
+            # Sparse track + at least one dynamic metric agrees → percussion
+            is_transient = True
+            classification = "Transient"
         elif crest_says_transient and decay_says_transient:
             # Both agree → high-confidence transient
             is_transient = True
@@ -206,7 +233,8 @@ class AudioClassifierDetector(TrackDetector):
         )
 
         summary = (
-            f"crest {crest:.1f} dB, decay {decay_db:.1f} dB, {classification}"
+            f"crest {crest:.1f} dB, decay {decay_db:.1f} dB, "
+            f"density {density:.0%}, {classification}"
         )
 
         return DetectorResult(
@@ -220,6 +248,7 @@ class AudioClassifierDetector(TrackDetector):
                 "rms_anchor_mean": float(anchor_mean),
                 "crest": float(crest),
                 "decay_db": float(decay_db),
+                "density": float(density),
                 "classification": classification,
                 "is_transient": bool(is_transient),
                 "near_threshold": bool(near_threshold),
