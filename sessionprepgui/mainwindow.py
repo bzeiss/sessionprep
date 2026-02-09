@@ -511,8 +511,13 @@ class SessionPrepWindow(QMainWindow):
         config.update(flatten_structured_config(self._config))
         config["_source_dir"] = self._source_dir
 
+        self._progress_bar.setRange(0, 0)  # indeterminate until first value
+
         self._worker = AnalyzeWorker(self._source_dir, config)
         self._worker.progress.connect(self._on_worker_progress)
+        self._worker.progress_value.connect(self._on_worker_progress_value)
+        self._worker.track_analyzed.connect(self._on_track_analyzed)
+        self._worker.track_planned.connect(self._on_track_planned)
         self._worker.finished.connect(self._on_analyze_done)
         self._worker.error.connect(self._on_analyze_error)
         self._worker.start()
@@ -521,6 +526,104 @@ class SessionPrepWindow(QMainWindow):
     def _on_worker_progress(self, message: str):
         self._progress_label.setText(message)
         self._status_bar.showMessage(message)
+
+    @Slot(int, int)
+    def _on_worker_progress_value(self, current: int, total: int):
+        if self._progress_bar.maximum() != total:
+            self._progress_bar.setRange(0, total)
+        self._progress_bar.setValue(current)
+
+    def _find_table_row(self, filename: str) -> int:
+        """Return the table row index for *filename*, or -1 if not found."""
+        for row in range(self._track_table.rowCount()):
+            item = self._track_table.item(row, 0)
+            if item and item.text() == filename:
+                return row
+        return -1
+
+    @Slot(str, object)
+    def _on_track_analyzed(self, filename: str, track):
+        """Update the severity column for a track after detectors complete."""
+        row = self._find_table_row(filename)
+        if row < 0:
+            return
+        label, color = track_analysis_label(track)
+        analysis_item = _SortableItem(label, _SEVERITY_SORT.get(label, 9))
+        analysis_item.setForeground(QColor(color))
+        self._track_table.setItem(row, 1, analysis_item)
+
+    @Slot(str, object)
+    def _on_track_planned(self, filename: str, track):
+        """Update classification and gain columns after processors complete."""
+        row = self._find_table_row(filename)
+        if row < 0:
+            return
+        # Remove previous cell widgets
+        self._track_table.removeCellWidget(row, 2)
+        self._track_table.removeCellWidget(row, 3)
+
+        pr = (
+            next(iter(track.processor_results.values()), None)
+            if track.processor_results
+            else None
+        )
+        if track.status != "OK":
+            cls_item = _SortableItem("Error", "error")
+            cls_item.setForeground(FILE_COLOR_ERROR)
+            self._track_table.setItem(row, 2, cls_item)
+            gain_item = _SortableItem("", 0.0)
+            gain_item.setForeground(QColor(COLORS["dim"]))
+            self._track_table.setItem(row, 3, gain_item)
+        elif pr and pr.classification == "Silent":
+            cls_item = _SortableItem("Silent", "silent")
+            cls_item.setForeground(FILE_COLOR_SILENT)
+            self._track_table.setItem(row, 2, cls_item)
+            gain_item = _SortableItem("0.0 dB", 0.0)
+            gain_item.setForeground(QColor(COLORS["dim"]))
+            self._track_table.setItem(row, 3, gain_item)
+        elif pr:
+            cls_text = pr.classification or "Unknown"
+            if "Transient" in cls_text:
+                base_cls = "Transient"
+            elif cls_text == "Skip":
+                base_cls = "Skip"
+            elif "Sustained" in cls_text:
+                base_cls = "Sustained"
+            else:
+                base_cls = "Sustained"
+
+            sort_item = _SortableItem(base_cls, base_cls.lower())
+            self._track_table.setItem(row, 2, sort_item)
+
+            combo = QComboBox()
+            combo.addItems(["Transient", "Sustained", "Skip"])
+            combo.blockSignals(True)
+            combo.setCurrentText(base_cls)
+            combo.blockSignals(False)
+            combo.setProperty("track_filename", track.filename)
+            self._style_classification_combo(combo, base_cls)
+            combo.currentTextChanged.connect(self._on_classification_changed)
+            self._track_table.setCellWidget(row, 2, combo)
+
+            gain_db = pr.gain_db
+            gain_sort = _SortableItem(f"{gain_db:+.1f}", gain_db)
+            self._track_table.setItem(row, 3, gain_sort)
+
+            spin = QDoubleSpinBox()
+            spin.setRange(-60.0, 60.0)
+            spin.setSingleStep(0.1)
+            spin.setDecimals(1)
+            spin.setSuffix(" dB")
+            spin.blockSignals(True)
+            spin.setValue(gain_db)
+            spin.blockSignals(False)
+            spin.setProperty("track_filename", track.filename)
+            spin.setEnabled(base_cls != "Skip")
+            spin.setStyleSheet(
+                f"QDoubleSpinBox {{ color: {COLORS['text']}; }}"
+            )
+            spin.valueChanged.connect(self._on_gain_changed)
+            self._track_table.setCellWidget(row, 3, spin)
 
     @Slot(object, object)
     def _on_analyze_done(self, session, summary):
@@ -860,11 +963,16 @@ class SessionPrepWindow(QMainWindow):
                     gain_sort._sort_key = new_gain
                 break
 
-        # Refresh File tab if this track is currently displayed
+        # Refresh File tab and overlay menu if this track is currently displayed
         if self._current_track and self._current_track.filename == fname:
             html = render_track_detail_html(track, self._session,
                                             show_clean=self._show_clean)
             self._file_report.setHtml(self._wrap_html(html))
+            # Rebuild overlay menu with updated is_relevant checks
+            all_issues = []
+            for result in track.detector_results.values():
+                all_issues.extend(getattr(result, "issues", []))
+            self._update_overlay_menu(all_issues)
 
     @Slot(float)
     def _on_gain_changed(self, value: float):

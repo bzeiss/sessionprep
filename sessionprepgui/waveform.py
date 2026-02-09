@@ -512,7 +512,7 @@ class WaveformWidget(QWidget):
         if self._peak_sample >= 0:
             px = x0 + self._sample_to_x(self._peak_sample, draw_w)
             if x0 <= px <= x0 + draw_w:
-                peak_color = QColor(255, 80, 180, 200)
+                peak_color = QColor(180, 50, 220, 240)
                 painter.setPen(QPen(peak_color, 1))
                 painter.drawLine(px, 0, px, h)
                 painter.setFont(marker_font)
@@ -535,7 +535,7 @@ class WaveformWidget(QWidget):
         if self._rms_max_sample >= 0:
             rx = x0 + self._sample_to_x(self._rms_max_sample, draw_w)
             if x0 <= rx <= x0 + draw_w:
-                rms_color = QColor(100, 220, 255, 200)
+                rms_color = QColor(40, 160, 220, 240)
                 painter.setPen(QPen(rms_color, 1))
                 painter.drawLine(rx, 0, rx, h)
                 painter.setFont(marker_font)

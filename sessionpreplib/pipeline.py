@@ -153,9 +153,12 @@ class Pipeline:
         Computes gains and classifications without modifying audio.
         Also handles group gain equalization and fader offsets.
         """
-        for track in session.tracks:
+        total = len(session.tracks)
+        for idx, track in enumerate(session.tracks):
             if track.status != "OK":
                 continue
+            self._emit("track.plan_start", filename=track.filename,
+                       index=idx, total=total)
             for proc in self.audio_processors:
                 try:
                     self._emit("processor.start", processor_id=proc.id,
@@ -172,6 +175,8 @@ class Pipeline:
                         method="None",
                         error=str(e),
                     )
+            self._emit("track.plan_complete", filename=track.filename,
+                       index=idx, total=total)
 
         # --- Group gain equalization ---
         self._equalize_group_gains(session)
