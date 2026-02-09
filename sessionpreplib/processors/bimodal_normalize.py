@@ -119,7 +119,7 @@ class BimodalNormalizeProcessor(AudioProcessor):
             },
         )
 
-    def render_html(self, result: ProcessorResult) -> str:
+    def render_html(self, result: ProcessorResult, track=None) -> str:
         """Render the normalization analysis as summary line + comparison table."""
         d = result.data
         cls_text = result.classification or "Unknown"

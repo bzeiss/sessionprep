@@ -44,6 +44,9 @@ def build_diagnostic_summary(
     total_ok = len(ok_tracks)
     _off = dbfs_offset(session.config)
 
+    # Detector instance map for is_relevant() checks
+    _det_map = {d.id: d for d in getattr(session, "detectors", None) or []}
+
     def add_group(dst, title, hint, items, standalone=False):
         if not items and not standalone:
             return
@@ -263,16 +266,21 @@ def build_diagnostic_summary(
         # Tail exceedance
         tail_r = t.detector_results.get("tail_exceedance")
         if tail_r:
-            summary = tail_r.data.get("tail_summary", {})
-            regions = int(summary.get("regions", 0))
-            if regions > 0:
-                max_exceed = float(summary.get("max_exceed_db", 0.0))
-                tail_min = session.config.get("tail_min_exceed_db", 3.0)
-                tail_items.append(
-                    f"{t.filename}: {regions} tail region(s) exceed anchor "
-                    f"by >{float(tail_min):g} dB (max +{max_exceed:.1f} dB)"
-                )
-                issue_names.add(t.filename)
+            # Let the detector decide whether this result is relevant
+            tail_det = _det_map.get("tail_exceedance")
+            if tail_det and not tail_det.is_relevant(tail_r, t):
+                pass  # suppressed by detector (e.g. non-RMS normalization)
+            else:
+                summary = tail_r.data.get("tail_summary", {})
+                regions = int(summary.get("regions", 0))
+                if regions > 0:
+                    max_exceed = float(summary.get("max_exceed_db", 0.0))
+                    tail_min = session.config.get("tail_min_exceed_db", 3.0)
+                    tail_items.append(
+                        f"{t.filename}: {regions} tail region(s) exceed anchor "
+                        f"by >{float(tail_min):g} dB (max +{max_exceed:.1f} dB)"
+                    )
+                    issue_names.add(t.filename)
 
     # Build groups
     add_group(problems_groups, "Digital clipping",

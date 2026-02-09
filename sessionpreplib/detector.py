@@ -42,12 +42,32 @@ class TrackDetector(ABC):
         """Analyze one track. Return a DetectorResult."""
         ...
 
-    def render_html(self, result: DetectorResult) -> str:
+    def is_relevant(self, result: DetectorResult, track: TrackContext | None = None) -> bool:
+        """Return whether this detector's result is meaningful for *track*.
+
+        Override in subclasses to suppress results that are not applicable
+        given the full track context (e.g. other detector or processor
+        results).  Called by both ``render_html`` and the diagnostic
+        summary builder.  Default: ``True``.
+        """
+        return True
+
+    def render_html(self, result: DetectorResult, track: TrackContext | None = None) -> str:
         """Return an HTML table row for this detector's result.
 
         Override in subclasses for richer per-detector output.
         The default renders ``severity | id | summary``.
+        Returns an empty string when :meth:`is_relevant` is ``False``.
+
+        Parameters
+        ----------
+        result : DetectorResult
+        track : TrackContext | None
+            The full track context (with detector and processor results)
+            so that the detector can decide its own rendering relevance.
         """
+        if not self.is_relevant(result, track):
+            return ""
         sev = result.severity.value if hasattr(result.severity, "value") else str(result.severity)
         sev_color, sev_label = {
             "problem":     ("#ff4444", "PROBLEM"),
@@ -116,7 +136,7 @@ class SessionDetector(ABC):
         """
         ...
 
-    def render_html(self, result: DetectorResult) -> str:
+    def render_html(self, result: DetectorResult, track: TrackContext | None = None) -> str:
         """Return an HTML table row for this detector's result."""
         sev = result.severity.value if hasattr(result.severity, "value") else str(result.severity)
         sev_color, sev_label = {

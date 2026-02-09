@@ -61,6 +61,19 @@ class TailExceedanceDetector(TrackDetector):
             "section-based gain riding."
         )
 
+    def is_relevant(self, result: DetectorResult, track: TrackContext | None = None) -> bool:
+        """Tail exceedance is only meaningful when normalizing to the RMS anchor.
+
+        If the processor chose a peak-based method (Transient peak targeting
+        or Sustained peak-limited), the anchor is irrelevant and this
+        detector's result would be noise.
+        """
+        if track and track.processor_results:
+            pr = next(iter(track.processor_results.values()), None)
+            if pr and pr.method and "RMS" not in pr.method:
+                return False
+        return True
+
     def configure(self, config):
         self.window_ms = config.get("window", 400)
         self.stereo_mode = config.get("stereo_mode", "avg")

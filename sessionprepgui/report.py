@@ -205,7 +205,7 @@ def render_track_detail_html(track, session=None, *, show_clean: bool = True) ->
                          f'font-weight:bold;">{esc(proc_map[proc_id].name if proc_id in proc_map else proc_id)}</div>')
             proc_inst = proc_map.get(proc_id)
             if proc_inst:
-                parts.append(proc_inst.render_html(pr))
+                parts.append(proc_inst.render_html(pr, track))
             else:
                 # Fallback: basic display
                 parts.append(
@@ -221,33 +221,31 @@ def render_track_detail_html(track, session=None, *, show_clean: bool = True) ->
         if track.detector_results:
             parts.append(f'<div style="margin-top:20px; color:{COLORS["heading"]}; '
                          f'font-weight:bold;">Detectors</div>')
-            parts.append(
-                '<table cellpadding="3" cellspacing="2" '
-                'style="margin-left:8px; margin-top:4px;">'
-            )
             _SEV_ORDER = {"problem": 0, "attention": 1, "information": 2, "info": 2, "clean": 3}
             def _det_sort_key(item):
                 det_id, result = item
                 sev = result.severity.value if hasattr(result.severity, "value") else str(result.severity)
                 name = det_map[det_id].name if det_id in det_map else det_id
                 return (_SEV_ORDER.get(sev, 99), name.lower())
+            det_rows = []
             for det_id, result in sorted(track.detector_results.items(), key=_det_sort_key):
                 sev = result.severity.value if hasattr(result.severity, "value") else str(result.severity)
                 if not show_clean and sev == "clean":
                     continue
                 det_inst = det_map.get(det_id)
                 if det_inst:
-                    parts.append(det_inst.render_html(result))
+                    html_frag = det_inst.render_html(result, track)
+                    if html_frag:
+                        det_rows.append(html_frag)
                 else:
                     # Fallback: generic row
-                    sev = result.severity.value if hasattr(result.severity, "value") else str(result.severity)
                     sev_color, sev_label = {
                         "problem":     (COLORS["problems"],    "PROBLEM"),
                         "attention":   (COLORS["attention"],   "ATTENTION"),
                         "information": (COLORS["information"], "INFO"),
                         "clean":       (COLORS["clean"],       "OK"),
                     }.get(sev, (COLORS["information"], "INFO"))
-                    parts.append(
+                    det_rows.append(
                         f'<tr>'
                         f'<td width="90" style="background-color:{sev_color}; color:#000;'
                         f' font-weight:bold; font-size:8pt; text-align:center;'
@@ -259,6 +257,15 @@ def render_track_detail_html(track, session=None, *, show_clean: bool = True) ->
                         f'{esc(result.summary)}</td>'
                         f'</tr>'
                     )
-            parts.append('</table>')
+            if det_rows:
+                parts.append(
+                    '<table cellpadding="3" cellspacing="2" '
+                    'style="margin-left:8px; margin-top:4px;">'
+                )
+                parts.extend(det_rows)
+                parts.append('</table>')
+            else:
+                parts.append(f'<div style="margin-left:8px; margin-top:4px; '
+                             f'color:{COLORS["dim"]};">None</div>')
 
     return "\n".join(parts)

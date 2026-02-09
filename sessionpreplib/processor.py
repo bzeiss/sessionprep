@@ -43,11 +43,18 @@ class AudioProcessor(ABC):
         """
         ...
 
-    def render_html(self, result: ProcessorResult) -> str:
+    def render_html(self, result: ProcessorResult, track: TrackContext | None = None) -> str:
         """Return an HTML fragment for this processor's result.
 
         Override in subclasses for richer output (e.g. comparison tables).
         The default renders classification, method, and gain.
+
+        Parameters
+        ----------
+        result : ProcessorResult
+        track : TrackContext | None
+            The full track context (with detector and processor results)
+            so that the processor can decide its own rendering relevance.
         """
         cls_text = result.classification or "Unknown"
         return (

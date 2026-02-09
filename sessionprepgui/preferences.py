@@ -381,7 +381,7 @@ class PreferencesDialog(QDialog):
         # Parent page: general detector display settings
         det_gui_params = [
             ParamSpec(
-                key="show_clean_detectors", type=bool, default=True,
+                key="show_clean_detectors", type=bool, default=False,
                 label="Show clean detector results",
                 description=(
                     "When enabled, detectors that found no issues (OK) are "
