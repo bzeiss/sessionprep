@@ -72,6 +72,7 @@ class WaveformWidget(QWidget):
         self._mouse_y: int = -1
         self.setMinimumHeight(80)
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.StrongFocus)
 
     def set_audio(self, audio_data: np.ndarray | None, samplerate: int):
         """Load audio data (numpy array, shape (samples,) or (samples, channels))."""
@@ -569,6 +570,7 @@ class WaveformWidget(QWidget):
         super().resizeEvent(event)
 
     def mousePressEvent(self, event):
+        self.setFocus()  # grab keyboard focus for R/T shortcuts
         if self._total_samples > 0 and event.button() == Qt.LeftButton:
             x0, draw_w = self._draw_area()
             sample = self._x_to_sample(event.position().x() - x0, draw_w)
@@ -645,38 +647,130 @@ class WaveformWidget(QWidget):
         super().leaveEvent(event)
 
     def wheelEvent(self, event):
-        """Mouse-wheel zoom: up = zoom in, down = zoom out, centered on pointer."""
+        """Mouse-wheel navigation.
+
+        Ctrl + wheel            — horizontal zoom (centered on pointer)
+        Ctrl + Shift + wheel    — vertical zoom
+        Shift + wheel           — scroll left / right
+        """
         if self._total_samples <= 0:
             event.ignore()
             return
 
+        mods = event.modifiers()
         delta = event.angleDelta().y()
         if delta == 0:
             event.ignore()
             return
 
-        x0, draw_w = self._draw_area()
-        mx = event.position().x()
-        # Fraction of draw area where the mouse is (0.0 = left, 1.0 = right)
-        frac = max(0.0, min((mx - x0) / max(draw_w, 1), 1.0))
-        # Sample under the mouse pointer — must stay at this pixel after zoom
-        anchor_sample = self._x_to_sample(mx - x0, draw_w)
-        anchor_sample = max(self._view_start, min(anchor_sample, self._view_end))
+        ctrl = bool(mods & Qt.ControlModifier)
+        shift = bool(mods & Qt.ShiftModifier)
 
+        if ctrl and shift:
+            # ── Vertical zoom ─────────────────────────────────────────
+            if delta > 0:
+                self._vscale = min(self._vscale * 1.25, 20.0)
+            else:
+                self._vscale = max(self._vscale / 1.25, 0.1)
+            self.update()
+            event.accept()
+
+        elif ctrl:
+            # ── Horizontal zoom (centered on pointer) ─────────────────
+            x0, draw_w = self._draw_area()
+            mx = event.position().x()
+            frac = max(0.0, min((mx - x0) / max(draw_w, 1), 1.0))
+            anchor_sample = self._x_to_sample(mx - x0, draw_w)
+            anchor_sample = max(self._view_start,
+                                min(anchor_sample, self._view_end))
+
+            view_len = self._view_end - self._view_start
+            if delta > 0:
+                new_len = max(view_len * 2 // 3, 100)
+            else:
+                new_len = min(view_len * 3 // 2, self._total_samples)
+
+            if new_len == view_len:
+                event.accept()
+                return
+
+            new_start = int(anchor_sample - frac * new_len)
+            new_end = new_start + new_len
+            if new_start < 0:
+                new_start = 0
+                new_end = min(new_len, self._total_samples)
+            if new_end > self._total_samples:
+                new_end = self._total_samples
+                new_start = max(0, new_end - new_len)
+            self._view_start = new_start
+            self._view_end = new_end
+            self._invalidate_peaks()
+            self.update()
+            event.accept()
+
+        elif shift:
+            # ── Scroll left / right ───────────────────────────────────
+            view_len = self._view_end - self._view_start
+            scroll_amount = max(1, view_len // 8)
+            if delta > 0:
+                scroll_amount = -scroll_amount  # scroll left
+            new_start = self._view_start + scroll_amount
+            new_end = self._view_end + scroll_amount
+            if new_start < 0:
+                new_start = 0
+                new_end = min(view_len, self._total_samples)
+            if new_end > self._total_samples:
+                new_end = self._total_samples
+                new_start = max(0, new_end - view_len)
+            self._view_start = new_start
+            self._view_end = new_end
+            self._invalidate_peaks()
+            self.update()
+            event.accept()
+
+        else:
+            event.ignore()
+
+    def keyPressEvent(self, event):
+        """Pro Tools keyboard shortcuts: R = zoom in, T = zoom out.
+
+        When the mouse is hovering over the waveform, zoom is centered on
+        the mouse guide position.  Otherwise falls back to cursor position.
+        """
+        key = event.key()
+        if key == Qt.Key_R:
+            self._zoom_at_guide(zoom_in=True)
+        elif key == Qt.Key_T:
+            self._zoom_at_guide(zoom_in=False)
+        else:
+            super().keyPressEvent(event)
+
+    def _zoom_at_guide(self, zoom_in: bool):
+        """Zoom centered on mouse guide position (or cursor if not hovering)."""
+        if self._total_samples <= 0:
+            return
         view_len = self._view_end - self._view_start
-        if delta > 0:
-            # Zoom in
+
+        x0, draw_w = self._draw_area()
+        if self._mouse_x >= 0:
+            # Mouse is hovering — use guide position
+            frac = max(0.0, min((self._mouse_x - x0) / max(draw_w, 1), 1.0))
+            anchor = self._x_to_sample(self._mouse_x - x0, draw_w)
+            anchor = max(self._view_start, min(anchor, self._view_end))
+        else:
+            # Not hovering — fall back to cursor
+            anchor = max(self._view_start, min(self._cursor_sample, self._view_end))
+            frac = (anchor - self._view_start) / max(view_len, 1)
+
+        if zoom_in:
             new_len = max(view_len * 2 // 3, 100)
         else:
-            # Zoom out
             new_len = min(view_len * 3 // 2, self._total_samples)
 
         if new_len == view_len:
-            event.accept()
             return
 
-        # Position the view so anchor_sample stays at the same pixel fraction
-        new_start = int(anchor_sample - frac * new_len)
+        new_start = int(anchor - frac * new_len)
         new_end = new_start + new_len
         if new_start < 0:
             new_start = 0
@@ -688,7 +782,6 @@ class WaveformWidget(QWidget):
         self._view_end = new_end
         self._invalidate_peaks()
         self.update()
-        event.accept()
 
     # ── Zoom / vertical-scale public API ──────────────────────────────────
 

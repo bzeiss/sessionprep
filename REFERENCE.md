@@ -439,3 +439,41 @@ If either metric is within +/-2 dB of its threshold, the warning is a prompt
 to sanity-check the musical intent and optionally override:
   - Use `--force_transient` for drum-like / hit-like material.
   - Use `--force_sustained` for pad-like / sustained material.
+
+---
+
+## 7. GUI Waveform Controls
+
+### 7.1 Mouse
+
+| Action | Effect |
+|--------|--------|
+| **Click** | Set playback cursor position |
+| **Hover** | Crosshair guide (horizontal + vertical) with dBFS readout |
+| **Ctrl + wheel** | Horizontal zoom (centered on pointer) |
+| **Ctrl + Shift + wheel** | Vertical zoom (amplitude scale) |
+| **Shift + wheel** | Scroll left / right |
+
+### 7.2 Keyboard Shortcuts
+
+| Key | Effect |
+|-----|--------|
+| **R** | Zoom in (centered on mouse guide, or cursor if not hovering) |
+| **T** | Zoom out (centered on mouse guide, or cursor if not hovering) |
+
+> The waveform must have keyboard focus (click it first) for keyboard
+> shortcuts to work.
+
+### 7.3 Toolbar Buttons
+
+| Button | Effect |
+|--------|--------|
+| **Detector Overlays ▾** | Toggle visibility of individual detector overlays |
+| **Peak / RMS Max** | Toggle peak ("P") and max-RMS ("R") markers |
+| **RMS L/R** | Toggle per-channel RMS envelope (yellow) |
+| **RMS AVG** | Toggle combined RMS envelope (orange) |
+| **Fit** | Reset zoom to show entire file |
+| **+** | Zoom in at cursor |
+| **−** | Zoom out at cursor |
+| **↑** | Scale up (vertical amplitude) |
+| **↓** | Scale down (vertical amplitude) |
