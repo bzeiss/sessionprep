@@ -33,6 +33,12 @@ class BimodalNormalizeProcessor(AudioProcessor):
     def configure(self, config):
         self.target_rms = config.get("target_rms", -18.0)
         self.target_peak = config.get("target_peak", -6.0)
+        anchor_mode = config.get("rms_anchor", "percentile")
+        if anchor_mode == "max":
+            self._rms_anchor_label = "max"
+        else:
+            pct = config.get("rms_percentile", 95.0)
+            self._rms_anchor_label = f"p{pct:g}"
 
     def process(self, track: TrackContext) -> ProcessorResult:
         # Read from audio_classifier detector
@@ -79,16 +85,15 @@ class BimodalNormalizeProcessor(AudioProcessor):
             classification = crest_result.data["classification"]
             is_transient = crest_result.data["is_transient"]
 
+        # Compute both gain paths for transparency
+        gain_for_peak = self.target_peak - peak_db
+        gain_for_rms = self.target_rms - rms_anchor_db
+
         if is_transient:
-            # TRANSIENT — normalize to peak
-            gain = self.target_peak - peak_db
+            gain = gain_for_peak
             method = f"Peak → {self.target_peak:.0f} dB"
         else:
-            # SUSTAINED — normalize to RMS, but respect peak ceiling
-            gain_for_rms = self.target_rms - rms_anchor_db
-            gain_for_peak = self.target_peak - peak_db
             gain = min(gain_for_rms, gain_for_peak)
-
             if gain == gain_for_rms:
                 method = f"RMS → {self.target_rms:.0f} dB"
             else:
@@ -99,7 +104,16 @@ class BimodalNormalizeProcessor(AudioProcessor):
             gain_db=float(gain),
             classification=classification,
             method=method,
-            data={"gain_db_individual": float(gain)},
+            data={
+                "gain_db_individual": float(gain),
+                "target_peak": self.target_peak,
+                "target_rms": self.target_rms,
+                "detected_peak_db": peak_db,
+                "detected_rms_db": rms_anchor_db,
+                "rms_anchor_label": self._rms_anchor_label,
+                "gain_for_peak": float(gain_for_peak),
+                "gain_for_rms": float(gain_for_rms),
+            },
         )
 
     def apply(self, track: TrackContext, result: ProcessorResult) -> np.ndarray:

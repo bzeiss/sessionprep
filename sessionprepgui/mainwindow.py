@@ -10,6 +10,7 @@ from PySide6.QtGui import QAction, QFont, QColor, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
@@ -32,7 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from sessionpreplib.audio import get_window_samples
+from sessionpreplib.audio import dbfs_offset, get_window_samples
 from sessionpreplib.config import default_config, flatten_structured_config
 from sessionpreplib.detectors import detector_help_map
 from sessionpreplib.utils import protools_sort_key
@@ -215,9 +216,9 @@ class SessionPrepWindow(QMainWindow):
 
         # Track table
         self._track_table = QTableWidget()
-        self._track_table.setColumnCount(3)
+        self._track_table.setColumnCount(4)
         self._track_table.setHorizontalHeaderLabels(
-            ["File", "Analysis", "Classification"]
+            ["File", "Analysis", "Classification", "Gain"]
         )
         self._track_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._track_table.setSelectionMode(QTableWidget.SingleSelection)
@@ -233,8 +234,10 @@ class SessionPrepWindow(QMainWindow):
         header.setSectionResizeMode(0, QHeaderView.Stretch)
         header.setSectionResizeMode(1, QHeaderView.Interactive)
         header.setSectionResizeMode(2, QHeaderView.Interactive)
+        header.setSectionResizeMode(3, QHeaderView.Interactive)
         header.resizeSection(1, 150)
         header.resizeSection(2, 120)
+        header.resizeSection(3, 90)
 
         self._track_table.cellClicked.connect(self._on_row_clicked)
         self._track_table.currentCellChanged.connect(self._on_current_cell_changed)
@@ -430,7 +433,7 @@ class SessionPrepWindow(QMainWindow):
             item = _SortableItem(fname, protools_sort_key(fname))
             item.setForeground(FILE_COLOR_OK)
             self._track_table.setItem(row, 0, item)
-            for col in range(1, 3):
+            for col in range(1, 4):
                 cell = _SortableItem("", "")
                 cell.setForeground(QColor(COLORS["dim"]))
                 self._track_table.setItem(row, col, cell)
@@ -570,7 +573,7 @@ class SessionPrepWindow(QMainWindow):
             self._update_time_label(0)
 
         # Detail HTML
-        html = render_track_detail_html(track)
+        html = render_track_detail_html(track, self._get_db_offset())
         self._file_report.setHtml(self._wrap_html(html))
 
         # Enable and switch to File tab
@@ -582,8 +585,9 @@ class SessionPrepWindow(QMainWindow):
         self._track_table.setSortingEnabled(False)
         track_map = {t.filename: t for t in session.tracks}
         for row in range(self._track_table.rowCount()):
-            # Remove any previous cell widget before repopulating
+            # Remove any previous cell widgets before repopulating
             self._track_table.removeCellWidget(row, 2)
+            self._track_table.removeCellWidget(row, 3)
 
             fname_item = self._track_table.item(row, 0)
             if not fname_item:
@@ -599,6 +603,7 @@ class SessionPrepWindow(QMainWindow):
             self._track_table.setItem(row, 1, analysis_item)
 
             # Column 2: classification (combo or static)
+            # Column 3: gain (spin box or static)
             pr = (
                 next(iter(track.processor_results.values()), None)
                 if track.processor_results
@@ -608,10 +613,16 @@ class SessionPrepWindow(QMainWindow):
                 cls_item = _SortableItem("Error", "error")
                 cls_item.setForeground(FILE_COLOR_ERROR)
                 self._track_table.setItem(row, 2, cls_item)
+                gain_item = _SortableItem("", 0.0)
+                gain_item.setForeground(QColor(COLORS["dim"]))
+                self._track_table.setItem(row, 3, gain_item)
             elif pr and pr.classification == "Silent":
                 cls_item = _SortableItem("Silent", "silent")
                 cls_item.setForeground(FILE_COLOR_SILENT)
                 self._track_table.setItem(row, 2, cls_item)
+                gain_item = _SortableItem("0.0 dB", 0.0)
+                gain_item.setForeground(QColor(COLORS["dim"]))
+                self._track_table.setItem(row, 3, gain_item)
             elif pr:
                 # Determine effective classification
                 cls_text = pr.classification or "Unknown"
@@ -628,7 +639,7 @@ class SessionPrepWindow(QMainWindow):
                 sort_item = _SortableItem(base_cls, base_cls.lower())
                 self._track_table.setItem(row, 2, sort_item)
 
-                # Combo widget
+                # Classification combo widget
                 combo = QComboBox()
                 combo.addItems(["Transient", "Sustained", "Skip"])
                 combo.blockSignals(True)
@@ -638,18 +649,41 @@ class SessionPrepWindow(QMainWindow):
                 self._style_classification_combo(combo, base_cls)
                 combo.currentTextChanged.connect(self._on_classification_changed)
                 self._track_table.setCellWidget(row, 2, combo)
+
+                # Gain spin box
+                gain_db = pr.gain_db
+                gain_sort = _SortableItem(f"{gain_db:+.1f}", gain_db)
+                self._track_table.setItem(row, 3, gain_sort)
+
+                spin = QDoubleSpinBox()
+                spin.setRange(-60.0, 60.0)
+                spin.setSingleStep(0.1)
+                spin.setDecimals(1)
+                spin.setSuffix(" dB")
+                spin.blockSignals(True)
+                spin.setValue(gain_db)
+                spin.blockSignals(False)
+                spin.setProperty("track_filename", track.filename)
+                spin.setEnabled(base_cls != "Skip")
+                spin.setStyleSheet(
+                    f"QDoubleSpinBox {{ color: {COLORS['text']}; }}"
+                )
+                spin.valueChanged.connect(self._on_gain_changed)
+                self._track_table.setCellWidget(row, 3, spin)
             else:
                 cls_item = _SortableItem("", "zzz")
                 self._track_table.setItem(row, 2, cls_item)
+                gain_item = _SortableItem("", 0.0)
+                self._track_table.setItem(row, 3, gain_item)
         self._track_table.setSortingEnabled(True)
 
-        # Auto-fit columns 1 & 2 to content, File column stays Stretch
+        # Auto-fit columns 1–3 to content, File column stays Stretch
         header = self._track_table.horizontalHeader()
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        for col in (1, 2, 3):
+            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         self._track_table.resizeColumnsToContents()
-        header.setSectionResizeMode(1, QHeaderView.Interactive)
-        header.setSectionResizeMode(2, QHeaderView.Interactive)
+        for col in (1, 2, 3):
+            header.setSectionResizeMode(col, QHeaderView.Interactive)
 
     # ── Classification override helpers ───────────────────────────────────
 
@@ -685,19 +719,69 @@ class SessionPrepWindow(QMainWindow):
         # Update combo color
         self._style_classification_combo(combo, text)
 
-        # Update hidden sort item
+        # Update hidden sort items and gain spin box in the same row
+        pr = next(iter(track.processor_results.values()), None)
+        new_gain = pr.gain_db if pr else 0.0
         for row in range(self._track_table.rowCount()):
             item = self._track_table.item(row, 0)
             if item and item.text() == fname:
+                # Classification sort item
                 sort_item = self._track_table.item(row, 2)
                 if sort_item:
                     sort_item.setText(text)
                     sort_item._sort_key = text.lower()
+                # Gain spin box
+                spin = self._track_table.cellWidget(row, 3)
+                if isinstance(spin, QDoubleSpinBox):
+                    spin.blockSignals(True)
+                    spin.setValue(new_gain)
+                    spin.setEnabled(text != "Skip")
+                    spin.blockSignals(False)
+                # Gain sort item
+                gain_sort = self._track_table.item(row, 3)
+                if gain_sort:
+                    gain_sort.setText(f"{new_gain:+.1f}")
+                    gain_sort._sort_key = new_gain
                 break
 
         # Refresh File tab if this track is currently displayed
         if self._current_track and self._current_track.filename == fname:
-            html = render_track_detail_html(track)
+            html = render_track_detail_html(track, self._get_db_offset())
+            self._file_report.setHtml(self._wrap_html(html))
+
+    @Slot(float)
+    def _on_gain_changed(self, value: float):
+        """Handle user manually editing the gain spin box."""
+        spin = self.sender()
+        if not spin or not self._session:
+            return
+        fname = spin.property("track_filename")
+        if not fname:
+            return
+        track = next(
+            (t for t in self._session.tracks if t.filename == fname), None
+        )
+        if not track:
+            return
+
+        # Write gain directly to the processor result
+        pr = next(iter(track.processor_results.values()), None)
+        if pr:
+            pr.gain_db = value
+
+        # Update hidden sort item
+        for row in range(self._track_table.rowCount()):
+            item = self._track_table.item(row, 0)
+            if item and item.text() == fname:
+                gain_sort = self._track_table.item(row, 3)
+                if gain_sort:
+                    gain_sort.setText(f"{value:+.1f}")
+                    gain_sort._sort_key = value
+                break
+
+        # Refresh File tab if this track is currently displayed
+        if self._current_track and self._current_track.filename == fname:
+            html = render_track_detail_html(track, self._get_db_offset())
             self._file_report.setHtml(self._wrap_html(html))
 
     def _recalculate_processor(self, track):
@@ -710,6 +794,11 @@ class SessionPrepWindow(QMainWindow):
         proc.configure(flat_cfg)
         result = proc.process(track)
         track.processor_results[proc.id] = result
+
+    def _get_db_offset(self) -> float:
+        """Return the dBFS display offset from the current config."""
+        flat_cfg = flatten_structured_config(self._config)
+        return dbfs_offset(flat_cfg)
 
     @staticmethod
     def _wrap_html(body: str) -> str:
