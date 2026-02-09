@@ -5,8 +5,8 @@ from __future__ import annotations
 import numpy as np
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import (QColor, QLinearGradient, QPainter, QPainterPath,
-                          QPen)
+from PySide6.QtGui import (QColor, QFont, QLinearGradient, QPainter,
+                          QPainterPath, QPen)
 from PySide6.QtWidgets import QToolTip, QWidget
 
 from .theme import COLORS
@@ -33,6 +33,8 @@ class WaveformWidget(QWidget):
         "information": QColor(68, 153, 255, 100),
         "info": QColor(68, 153, 255, 100),
     }
+    _MARGIN_LEFT = 30
+    _MARGIN_RIGHT = 30
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -53,6 +55,14 @@ class WaveformWidget(QWidget):
         self._rms_envelope: list[list[float]] = []
         self._rms_combined: list[float] = []
         self._rms_cache_key: tuple[int, int, int] = (0, 0, 0)
+        # Markers
+        self._peak_sample: int = -1
+        self._peak_channel: int = -1
+        self._peak_db: float = float('-inf')
+        self._peak_amplitude: float = 0.0  # signed amplitude on the peak channel
+        self._rms_max_sample: int = -1
+        self._rms_max_db: float = float('-inf')
+        self._rms_max_amplitude: float = 0.0  # linear RMS at max window
         self.setMinimumHeight(80)
         self.setMouseTracking(True)
 
@@ -72,6 +82,30 @@ class WaveformWidget(QWidget):
                 ]
             self._num_channels = len(self._channels)
             self._total_samples = len(self._channels[0])
+        # Find peak sample position and amplitude
+        if self._channels:
+            if self._num_channels == 1:
+                self._peak_sample = int(np.argmax(np.abs(self._channels[0])))
+                self._peak_channel = 0
+            else:
+                abs_cols = np.column_stack([np.abs(ch) for ch in self._channels])
+                max_per_sample = np.max(abs_cols, axis=1)
+                self._peak_sample = int(np.argmax(max_per_sample))
+                self._peak_channel = int(
+                    np.argmax(abs_cols[self._peak_sample])
+                )
+            peak_lin = abs(float(self._channels[self._peak_channel][self._peak_sample]))
+            self._peak_db = 20.0 * np.log10(peak_lin) if peak_lin > 0 else float('-inf')
+            self._peak_amplitude = float(
+                self._channels[self._peak_channel][self._peak_sample]
+            )
+        else:
+            self._peak_sample = -1
+            self._peak_channel = -1
+            self._peak_db = float('-inf')
+            self._peak_amplitude = 0.0
+        self._rms_max_sample = -1
+        self._rms_max_db = float('-inf')
         self._samplerate = samplerate
         self._cursor_sample = 0
         self._view_start = 0
@@ -105,6 +139,12 @@ class WaveformWidget(QWidget):
             self._view_end = min(self._cursor_sample + view_len, self._total_samples)
             self._invalidate_peaks()
         self.update()
+
+    def _draw_area(self) -> tuple[int, int]:
+        """Return (x0, draw_w) for the waveform drawing area."""
+        w = self.width()
+        draw_w = max(1, w - self._MARGIN_LEFT - self._MARGIN_RIGHT)
+        return self._MARGIN_LEFT, draw_w
 
     def _build_peaks(self, width: int):
         """Downsample audio to peak envelope for the given pixel width, per channel."""
@@ -166,12 +206,16 @@ class WaveformWidget(QWidget):
             painter.end()
             return
 
-        self._build_peaks(w)
+        x0, draw_w = self._draw_area()
+        self._build_peaks(draw_w)
         if self._show_rms:
-            self._build_rms_envelope(w)
+            self._build_rms_envelope(draw_w)
 
         nch = self._num_channels
         lane_h = h / nch
+
+        # --- dB scale and grid lines ---
+        self._draw_db_scale(painter, x0, draw_w, h, nch, lane_h)
 
         # --- Draw issue overlays (behind waveform) ---
         for issue in self._issues:
@@ -179,10 +223,11 @@ class WaveformWidget(QWidget):
             fill = self._SEVERITY_OVERLAY.get(sev_val, QColor(255, 255, 255, 30))
             border = self._SEVERITY_BORDER.get(sev_val, QColor(255, 255, 255, 60))
 
-            x1 = self._sample_to_x(issue.sample_start, w)
-            x2 = self._sample_to_x(issue.sample_end, w) if issue.sample_end is not None else x1
-            rx = x1
-            rw = max(x2 - x1, 2)  # min 2px wide so point issues are visible
+            ix1 = x0 + self._sample_to_x(issue.sample_start, draw_w)
+            ix2 = (x0 + self._sample_to_x(issue.sample_end, draw_w)
+                   if issue.sample_end is not None else ix1)
+            rx = ix1
+            rw = max(ix2 - ix1, 2)  # min 2px wide so point issues are visible
 
             if issue.channel is None:
                 # Spans all channels
@@ -206,10 +251,10 @@ class WaveformWidget(QWidget):
             mid_y = y_off + lane_h / 2.0
             scale = (lane_h / 2.0) * 0.85 * self._vscale
 
-            # Clip painting to this channel's lane
+            # Clip painting to this channel's lane within drawing area
             lane_top = int(y_off)
             lane_bot = int(y_off + lane_h)
-            painter.setClipRect(0, lane_top, w, lane_bot - lane_top)
+            painter.setClipRect(x0, lane_top, draw_w, lane_bot - lane_top)
 
             color = QColor(self._CHANNEL_COLORS[ch % len(self._CHANNEL_COLORS)])
             peaks = self._peaks_cache[ch]
@@ -217,12 +262,12 @@ class WaveformWidget(QWidget):
             # Build closed envelope path: top edge L→R, bottom edge R→L
             top_path = QPainterPath()
             bot_path = QPainterPath()
-            top_path.moveTo(0, mid_y - peaks[0][1] * scale)
-            bot_path.moveTo(0, mid_y - peaks[0][0] * scale)
+            top_path.moveTo(x0, mid_y - peaks[0][1] * scale)
+            bot_path.moveTo(x0, mid_y - peaks[0][0] * scale)
             for x in range(1, len(peaks)):
                 lo, hi = peaks[x]
-                top_path.lineTo(x, mid_y - hi * scale)
-                bot_path.lineTo(x, mid_y - lo * scale)
+                top_path.lineTo(x0 + x, mid_y - hi * scale)
+                bot_path.lineTo(x0 + x, mid_y - lo * scale)
 
             # Combine into a single closed shape
             envelope = QPainterPath(top_path)
@@ -257,7 +302,7 @@ class WaveformWidget(QWidget):
             center_color = QColor(COLORS["accent"])
             center_color.setAlpha(80)
             painter.setPen(QPen(center_color, 1, Qt.DotLine))
-            painter.drawLine(0, int(mid_y), w, int(mid_y))
+            painter.drawLine(x0, int(mid_y), x0 + draw_w, int(mid_y))
 
             # Remove clip before drawing separator
             painter.setClipping(False)
@@ -279,37 +324,182 @@ class WaveformWidget(QWidget):
                 mid_y = y_off + lane_h / 2.0
                 scale = (lane_h / 2.0) * 0.85 * self._vscale
                 lane_top = int(y_off)
-                painter.setClipRect(0, lane_top, w, int(lane_h))
+                painter.setClipRect(x0, lane_top, draw_w, int(lane_h))
                 painter.setBrush(Qt.NoBrush)
 
                 # Per-channel RMS
                 ch_env = self._rms_envelope[ch]
                 ch_path = QPainterPath()
-                ch_path.moveTo(0, mid_y - ch_env[0] * scale)
+                ch_path.moveTo(x0, mid_y - ch_env[0] * scale)
                 for x in range(1, len(ch_env)):
-                    ch_path.lineTo(x, mid_y - ch_env[x] * scale)
+                    ch_path.lineTo(x0 + x, mid_y - ch_env[x] * scale)
                 painter.setPen(ch_pen)
                 painter.drawPath(ch_path)
 
                 # Combined RMS
                 if self._rms_combined:
                     comb_path = QPainterPath()
-                    comb_path.moveTo(0, mid_y - self._rms_combined[0] * scale)
+                    comb_path.moveTo(x0, mid_y - self._rms_combined[0] * scale)
                     for x in range(1, len(self._rms_combined)):
-                        comb_path.lineTo(x, mid_y - self._rms_combined[x] * scale)
+                        comb_path.lineTo(x0 + x, mid_y - self._rms_combined[x] * scale)
                     painter.setPen(comb_pen)
                     painter.drawPath(comb_path)
 
                 painter.setClipping(False)
 
+        # --- Peak and RMS max markers ---
+        self._draw_markers(painter, x0, draw_w, h, nch, lane_h)
+
         # Playback cursor (spans all channels)
         if self._total_samples > 0:
-            cursor_x = self._sample_to_x(self._cursor_sample, w)
-            if 0 <= cursor_x <= w:
+            cursor_x = x0 + self._sample_to_x(self._cursor_sample, draw_w)
+            if x0 <= cursor_x <= x0 + draw_w:
                 painter.setPen(QPen(QColor("#ffffff"), 1))
                 painter.drawLine(cursor_x, 0, cursor_x, h)
 
         painter.end()
+
+    def _draw_db_scale(self, painter, x0, draw_w, h, nch, lane_h):
+        """Draw dB measurement scale on left/right margins and grid lines."""
+        _DB_TICKS = [0, -3, -6, -12, -18, -24, -36, -48, -60]
+        _MIN_TICK_SPACING = 18  # minimum pixels between ticks
+
+        scale_font = QFont("Consolas", 7)
+        painter.setFont(scale_font)
+        fm = painter.fontMetrics()
+        text_h = fm.height()
+
+        grid_color = QColor(COLORS["accent"])
+        grid_color.setAlpha(35)
+        grid_pen = QPen(grid_color, 1, Qt.DotLine)
+
+        label_color = QColor(COLORS["dim"])
+        tick_pen = QPen(label_color, 1)
+
+        for ch in range(nch):
+            y_off = ch * lane_h
+            mid_y = y_off + lane_h / 2.0
+            scale = (lane_h / 2.0) * 0.85 * self._vscale
+
+            lane_top = int(y_off)
+            lane_bot = int(y_off + lane_h)
+            painter.setClipRect(0, lane_top,
+                                x0 + draw_w + self._MARGIN_RIGHT,
+                                lane_bot - lane_top)
+
+            visible_ticks: list[tuple[int, float, float]] = []
+            used_ys: list[float] = []  # all placed label y-positions
+            for db_val in _DB_TICKS:
+                amp = 10.0 ** (db_val / 20.0)
+                pixel_offset = amp * scale
+                if pixel_offset >= lane_h / 2.0:
+                    continue  # outside visible lane
+                y_top = mid_y - pixel_offset
+                y_bot = mid_y + pixel_offset
+                # Skip if labels would be too close to lane edges
+                if y_top < lane_top + text_h or y_bot > lane_bot - text_h:
+                    continue
+                # Check that both y_top and y_bot are far enough from
+                # every previously placed label position
+                too_close = False
+                for uy in used_ys:
+                    if abs(uy - y_top) < _MIN_TICK_SPACING:
+                        too_close = True
+                        break
+                    if db_val != 0 and abs(uy - y_bot) < _MIN_TICK_SPACING:
+                        too_close = True
+                        break
+                if too_close:
+                    continue
+                visible_ticks.append((db_val, y_top, y_bot))
+                used_ys.append(y_top)
+                if db_val != 0:
+                    used_ys.append(y_bot)
+
+            for db_val, y_top, y_bot in visible_ticks:
+                label = str(db_val)
+
+                # Horizontal grid lines across waveform area
+                painter.setPen(grid_pen)
+                painter.drawLine(x0, int(y_top), x0 + draw_w, int(y_top))
+                if db_val != 0:
+                    painter.drawLine(x0, int(y_bot), x0 + draw_w, int(y_bot))
+
+                # Left margin labels (right-aligned)
+                painter.setPen(tick_pen)
+                text_w = fm.horizontalAdvance(label)
+                lx = x0 - 5 - text_w
+                painter.drawText(int(lx), int(y_top + text_h / 3), label)
+                if db_val != 0:
+                    painter.drawText(int(lx), int(y_bot + text_h / 3), label)
+
+                # Right margin labels (left-aligned)
+                rx = x0 + draw_w + 5
+                painter.drawText(int(rx), int(y_top + text_h / 3), label)
+                if db_val != 0:
+                    painter.drawText(int(rx), int(y_bot + text_h / 3), label)
+
+                # Small tick marks at edges of waveform area
+                painter.drawLine(x0 - 3, int(y_top), x0, int(y_top))
+                painter.drawLine(x0 + draw_w, int(y_top),
+                                 x0 + draw_w + 3, int(y_top))
+                if db_val != 0:
+                    painter.drawLine(x0 - 3, int(y_bot), x0, int(y_bot))
+                    painter.drawLine(x0 + draw_w, int(y_bot),
+                                     x0 + draw_w + 3, int(y_bot))
+
+            painter.setClipping(False)
+
+    def _draw_markers(self, painter, x0, draw_w, h, nch, lane_h):
+        """Draw peak and max RMS marker vertical lines."""
+        marker_font = QFont("Consolas", 7, QFont.Bold)
+        _CROSS_HALF = 6  # half-width of horizontal crosshair
+
+        # Peak marker (magenta, solid)
+        if self._peak_sample >= 0:
+            px = x0 + self._sample_to_x(self._peak_sample, draw_w)
+            if x0 <= px <= x0 + draw_w:
+                peak_color = QColor(255, 80, 180, 200)
+                painter.setPen(QPen(peak_color, 1))
+                painter.drawLine(px, 0, px, h)
+                painter.setFont(marker_font)
+                painter.setPen(peak_color)
+                painter.drawText(px + 3, 12, "P")
+
+                # Horizontal crosshair at peak amplitude on the peak channel
+                if 0 <= self._peak_channel < nch:
+                    painter.setPen(QPen(peak_color, 1))
+                    ch = self._peak_channel
+                    amp = self._peak_amplitude
+                    y_off = ch * lane_h
+                    mid_y = y_off + lane_h / 2.0
+                    scale = (lane_h / 2.0) * 0.85 * self._vscale
+                    cy = int(mid_y - amp * scale)
+                    painter.drawLine(px - _CROSS_HALF, cy,
+                                     px + _CROSS_HALF, cy)
+
+        # Max RMS marker (cyan, solid)
+        if self._rms_max_sample >= 0:
+            rx = x0 + self._sample_to_x(self._rms_max_sample, draw_w)
+            if x0 <= rx <= x0 + draw_w:
+                rms_color = QColor(100, 220, 255, 200)
+                painter.setPen(QPen(rms_color, 1))
+                painter.drawLine(rx, 0, rx, h)
+                painter.setFont(marker_font)
+                painter.setPen(rms_color)
+                painter.drawText(rx + 3, 24, "R")
+
+                # Horizontal crosshair at RMS amplitude (positive side only)
+                amp = self._rms_max_amplitude
+                if amp > 0:
+                    painter.setPen(QPen(rms_color, 1))
+                    for ch in range(nch):
+                        y_off = ch * lane_h
+                        mid_y = y_off + lane_h / 2.0
+                        scale = (lane_h / 2.0) * 0.85 * self._vscale
+                        cy = int(mid_y - amp * scale)
+                        painter.drawLine(rx - _CROSS_HALF, cy,
+                                         rx + _CROSS_HALF, cy)
 
     def resizeEvent(self, event):
         self._peaks_cache = []
@@ -321,18 +511,19 @@ class WaveformWidget(QWidget):
 
     def mousePressEvent(self, event):
         if self._total_samples > 0 and event.button() == Qt.LeftButton:
-            sample = self._x_to_sample(event.position().x(), self.width())
+            x0, draw_w = self._draw_area()
+            sample = self._x_to_sample(event.position().x() - x0, draw_w)
             self._cursor_sample = sample
             self.update()
             self.position_clicked.emit(sample)
 
     def mouseMoveEvent(self, event):
-        """Show tooltip when hovering over an issue region."""
-        if not self._issues or self._total_samples <= 0:
+        """Show tooltip when hovering over an issue region or marker."""
+        if self._total_samples <= 0:
             QToolTip.hideText()
             return
 
-        w = self.width()
+        x0, draw_w = self._draw_area()
         h = self.height()
         mx = event.position().x()
         my = event.position().y()
@@ -340,17 +531,30 @@ class WaveformWidget(QWidget):
         lane_h = h / nch if nch > 0 else h
 
         # Convert mouse x to sample position
-        sample = self._x_to_sample(mx, w)
+        sample = self._x_to_sample(mx - x0, draw_w)
         # Determine which channel lane the mouse is in
         mouse_ch = int(my / lane_h) if lane_h > 0 else 0
         mouse_ch = max(0, min(mouse_ch, nch - 1))
 
         # Hit tolerance: at least 5 pixels worth of samples on each side
         view_len = self._view_end - self._view_start
-        samples_per_px = view_len / max(w, 1)
+        samples_per_px = view_len / max(draw_w, 1)
         tolerance = int(samples_per_px * 5)
 
-        tips = []
+        tips: list[str] = []
+
+        # Marker tooltips (check pixel proximity)
+        _MARKER_PX_TOL = 6
+        if self._peak_sample >= 0:
+            peak_px = x0 + self._sample_to_x(self._peak_sample, draw_w)
+            if abs(mx - peak_px) <= _MARKER_PX_TOL:
+                tips.append(f"Peak: {self._peak_db:.1f} dBFS")
+        if self._rms_max_sample >= 0:
+            rms_px = x0 + self._sample_to_x(self._rms_max_sample, draw_w)
+            if abs(mx - rms_px) <= _MARKER_PX_TOL:
+                tips.append(f"Max RMS: {self._rms_max_db:.1f} dBFS")
+
+        # Issue tooltips
         for issue in self._issues:
             s_start = issue.sample_start
             s_end = issue.sample_end if issue.sample_end is not None else s_start
@@ -444,12 +648,43 @@ class WaveformWidget(QWidget):
         self._rms_window_samples = max(window_samples, 0)
         self._rms_envelope = []
         self._rms_cache_key = (0, 0, 0)
+        self._compute_rms_max_sample()
         self.update()
 
     def toggle_rms(self, on: bool):
         """Enable or disable the RMS overlay."""
         self._show_rms = on
         self.update()
+
+    def _compute_rms_max_sample(self):
+        """Find the sample position of the maximum momentary RMS window."""
+        win = self._rms_window_samples
+        if not self._channels or win <= 0:
+            self._rms_max_sample = -1
+            return
+        ch_wms: list[np.ndarray] = []
+        for ch_data in self._channels:
+            n = len(ch_data)
+            if n <= win:
+                ch_wms.append(np.zeros(1, dtype=np.float64))
+                continue
+            sq = ch_data.astype(np.float64) ** 2
+            cs = np.empty(n + 1, dtype=np.float64)
+            cs[0] = 0.0
+            np.cumsum(sq, out=cs[1:])
+            ch_wms.append((cs[win:] - cs[:n - win + 1]) / win)
+        min_len = min(len(wm) for wm in ch_wms)
+        if min_len == 0:
+            self._rms_max_sample = -1
+            return
+        combined = np.mean(
+            np.column_stack([wm[:min_len] for wm in ch_wms]), axis=1
+        )
+        max_idx = int(np.argmax(combined))
+        self._rms_max_sample = max_idx + win // 2
+        max_rms_lin = float(np.sqrt(combined[max_idx]))
+        self._rms_max_db = 20.0 * np.log10(max_rms_lin) if max_rms_lin > 0 else float('-inf')
+        self._rms_max_amplitude = max_rms_lin
 
     def _build_rms_envelope(self, width: int):
         """Compute per-channel AND combined RMS envelopes for *width* pixels.
