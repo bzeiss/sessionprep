@@ -289,7 +289,7 @@ sessionpreplib/
         mono_folddown.py         # MonoFolddownDetector
         one_sided_silence.py     # OneSidedSilenceDetector
         subsonic.py              # SubsonicDetector
-        crest_factor.py          # CrestFactorDetector
+        audio_classifier.py      # AudioClassifierDetector
         tail_exceedance.py       # TailExceedanceDetector
         format_consistency.py    # FormatConsistencyDetector (session-level)
         length_consistency.py    # LengthConsistencyDetector (session-level)
@@ -651,16 +651,17 @@ cycles.
 - **Severity:** `ATTENTION` if exceeds threshold, `CLEAN` otherwise
 - **Hint:** `"consider HPF ~{cutoff_hz} Hz"`
 
-#### 6.3.9 CrestFactorDetector (`crest_factor.py`)
+#### 6.3.9 AudioClassifierDetector (`audio_classifier.py`)
 
-- **ID:** `crest_factor` | **Depends on:** `["silence"]`
-- **Config:** `window`, `stereo_mode`, `rms_anchor`, `rms_percentile`, `gate_relative_db`, `crest_threshold`, `force_transient`, `force_sustained`
-- **Data:** `{"peak_db", "rms_max_db", "rms_anchor_db", "crest", "classification", "is_transient", "near_threshold"}`
+- **ID:** `audio_classifier` | **Depends on:** `["silence"]`
+- **Config:** `window`, `stereo_mode`, `rms_anchor`, `rms_percentile`, `gate_relative_db`, `crest_threshold`, `decay_lookahead_ms`, `decay_db_threshold`, `force_transient`, `force_sustained`
+- **Data:** `{"peak_db", "rms_max_db", "rms_anchor_db", "rms_anchor_mean", "crest", "decay_db", "classification", "is_transient", "near_threshold"}`
+- **Classification logic:** Two-metric vote — crest factor (peak-to-RMS ratio) and envelope decay rate (energy drop after loudest moment). When they disagree, decay acts as tiebreaker: high crest + slow decay → Sustained (plucked/piano); low crest + fast decay → Transient (compressed drums).
 - **Severity:** Always `INFO`
 
 #### 6.3.10 TailExceedanceDetector (`tail_exceedance.py`)
 
-- **ID:** `tail_exceedance` | **Depends on:** `["silence", "crest_factor"]`
+- **ID:** `tail_exceedance` | **Depends on:** `["silence", "audio_classifier"]`
 - **Config:** `window`, `stereo_mode`, `rms_anchor`, `rms_percentile`, `gate_relative_db`, `tail_min_exceed_db`, `tail_max_regions`, `tail_hop_ms`
 - **Data:** `{"tail_regions": list[dict], "tail_summary": {"regions", "total_duration_sec", "max_exceed_db", "anchor_db"}}`
 - **Issues:** Per-region `IssueLocation` (all channels) for each exceedance region
@@ -687,7 +688,7 @@ def default_detectors() -> list[TrackDetector | SessionDetector]:
     return [
         SilenceDetector(), ClippingDetector(), DCOffsetDetector(),
         StereoCorrelationDetector(), DualMonoDetector(), MonoFolddownDetector(),
-        OneSidedSilenceDetector(), SubsonicDetector(), CrestFactorDetector(),
+        OneSidedSilenceDetector(), SubsonicDetector(), AudioClassifierDetector(),
         TailExceedanceDetector(), FormatConsistencyDetector(), LengthConsistencyDetector(),
     ]
 ```
@@ -728,7 +729,7 @@ class AudioProcessor(ABC):
 ### 7.3 BimodalNormalizeProcessor (`bimodal_normalize.py`)
 
 - **ID:** `bimodal_normalize` | **Priority:** `PRIORITY_NORMALIZE` (100)
-- **Reads:** `silence.data["is_silent"]`, `crest_factor.data["peak_db", "rms_anchor_db", "classification", "is_transient"]`
+- **Reads:** `silence.data["is_silent"]`, `audio_classifier.data["peak_db", "rms_anchor_db", "classification", "is_transient"]`
 - **Config:** `target_rms`, `target_peak`
 - **Logic:**
   - Silent -> gain 0, classification "Silent"

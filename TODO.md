@@ -201,21 +201,17 @@
 
 ### Classification Robustness
 
-- [ ] **Crest factor classification improvements** (Status: ❌) `EXPANDED`
-  - Problem: A 12 dB threshold is arbitrary, and borderline cases are common.
-  - Issues:
-    - Metal kicks hit 15-18 dB crest
-    - Compressed EDM leads sit at 6-8 dB
-    - Genre-dependent behavior not accounted for
-  - Options:
-    1. `--crest_threshold` per-genre presets: `--preset metal`, `--preset edm`
-    2. Adaptive threshold based on session statistics
-    3. Spectral analysis to supplement crest (drums have specific spectral signatures)
-  - Example output showing fragility:
-    ```
-    Break Harm_01.wav: borderline crest factor (crest 12.0 dB vs threshold 12.0 dB, Δ +0.0 dB)
-    Vs harms_01.wav: borderline crest factor (crest 12.6 dB vs threshold 12.0 dB, Δ +0.6 dB)
-    ```
+- [x] **Audio classifier upgrade (crest + envelope decay)** (Status: ✅ Done)
+  - Replaced single crest-factor threshold with a two-metric vote:
+    crest factor + envelope decay rate (10 ms short-window energy envelope).
+  - Resolves compressed drums (low crest, fast decay → Transient) and
+    plucked instruments (high crest, slow decay → Sustained).
+  - New configurable params: `decay_lookahead_ms` (default 200),
+    `decay_db_threshold` (default 12.0).
+  - Detector renamed: `crest_factor` → `audio_classifier`
+    (`CrestFactorDetector` → `AudioClassifierDetector`).
+  - File renamed: `crest_factor.py` → `audio_classifier.py`.
+  - All consumers updated (tail_exceedance, bimodal_normalize, rendering).
 
 - [ ] **Loudness Range (LRA) / dynamics measurement** (Status: ❌)
   - Why: Beyond crest—flag heavily compressed vs genuinely dynamic tracks.
@@ -348,7 +344,7 @@
 | **4** | Metering depth | LRA, LUFS (P2), True-peak/ISP (P2) |
 | **5** | Subsonic improvements | Per-channel analysis, Windowed option, Documentation |
 | **6** | Auto-fix capabilities | DC removal, SRC |
-| **7** | Classification v2 | Crest improvements, Spectral analysis |
+| ~~**7**~~ | ~~Classification v2~~ | ~~Crest improvements~~ → ✅ Done (audio classifier with decay metric) |
 | **8** | DAW scripting | DawProcessor ABC, backends, PTSL integration |
 | **Ongoing** | Low-hanging fruit | Stereo narrowness, Start offset, Name mismatch, `rich` optional |
 

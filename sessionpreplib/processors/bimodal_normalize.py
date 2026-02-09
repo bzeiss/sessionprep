@@ -35,8 +35,8 @@ class BimodalNormalizeProcessor(AudioProcessor):
         self.target_peak = config.get("target_peak", -6.0)
 
     def process(self, track: TrackContext) -> ProcessorResult:
-        # Read from crest_factor detector
-        crest_result = track.detector_results.get("crest_factor")
+        # Read from audio_classifier detector
+        crest_result = track.detector_results.get("audio_classifier")
         silence_result = track.detector_results.get("silence")
 
         if silence_result and silence_result.data.get("is_silent"):
@@ -55,7 +55,7 @@ class BimodalNormalizeProcessor(AudioProcessor):
                 classification="Unknown",
                 method="None",
                 data={"gain_db_individual": 0.0},
-                error="crest_factor detector result missing",
+                error="audio_classifier detector result missing",
             )
 
         peak_db = crest_result.data["peak_db"]

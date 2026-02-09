@@ -142,10 +142,15 @@ For details on every detector, see [REFERENCE.md](REFERENCE.md).
 ### Processing: Bimodal normalization (CLI only)
 
 Most normalizers treat a kick drum and a synth pad the same. SessionPrep
-classifies tracks by crest factor and normalizes them differently:
+classifies tracks using crest factor and envelope decay rate, then normalizes
+them differently:
 
-- **Transient** (crest > 12 dB): peak-normalized to `--target_peak` (-6 dBFS)
-- **Sustained** (crest <= 12 dB): RMS-normalized to `--target_rms` (-18 dBFS), peak-limited
+- **Transient** (high crest + fast decay): peak-normalized to `--target_peak` (-6 dBFS)
+- **Sustained** (low crest + slow decay): RMS-normalized to `--target_rms` (-18 dBFS), peak-limited
+
+The two-metric approach resolves common misclassifications: compressed drums
+(low crest but fast decay → correctly Transient) and plucked instruments
+(high crest but slow decay → correctly Sustained).
 
 For the engineering rationale, see [TECHNICAL.md](TECHNICAL.md).
 

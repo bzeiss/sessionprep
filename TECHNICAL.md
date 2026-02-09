@@ -156,13 +156,19 @@ dynamics) may still require manual clip gain adjustments in the DAW.
 
 ### The Bimodal Classification Strategy
 
-  **TYPE 1: TRANSIENT MATERIAL** (High Crest Factor > 12dB)
+  Classification uses two metrics: **crest factor** (peak-to-RMS ratio) and
+  **envelope decay rate** (how fast energy drops after the loudest moment).
+  When the two metrics disagree, the decay rate acts as a tiebreaker.
+
+  **TYPE 1: TRANSIENT MATERIAL** (High Crest + Fast Decay)
   (Drums, Percussion, Stabs)
   -> The Script normalizes these to PEAK Level (-6 dBFS).
   -> Goal: Preserve impact and headroom. We don't care about RMS voltage here;
      we care about not clipping the transient.
+  -> Also catches compressed drums (low crest but fast decay) that crest factor
+     alone would misclassify as sustained.
 
-  **TYPE 2: SUSTAINED MATERIAL** (Low Crest Factor < 12dB)
+  **TYPE 2: SUSTAINED MATERIAL** (Low Crest + Slow Decay)
   (Bass, Vocals, Guitars, Synths)
   -> The Script targets RMS Level (-18 dBFS) but is peak-limited by the
      configured peak ceiling (-6 dBFS).
@@ -170,6 +176,8 @@ dynamics) may still require manual clip gain adjustments in the DAW.
      characteristics of your plugins (Tubes, Tape, Transformers).
      If a file hits the peak ceiling before reaching the RMS target, it will end
      up below the RMS target by design.
+  -> Also catches plucked instruments and piano (high crest but slow decay) that
+     crest factor alone would misclassify as transient.
 
 This hybrid approach ensures that drums remain punchy while sustained instruments
 get the "thick" analog sound you want.
@@ -291,21 +299,23 @@ positions end up closer to unity, but that is not guaranteed.
 
 ### Classification is heuristic (transient vs sustained)
 
-The transient/sustained split is intentionally a heuristic based on crest factor.
-It will be wrong for some sources. The script supports explicit overrides so you
-can force classification when the musical role does not match the math:
+The transient/sustained split is intentionally a heuristic based on two metrics:
+crest factor (peak-to-RMS ratio) and envelope decay rate (energy drop after the
+loudest moment). When the metrics disagree, decay acts as a tiebreaker:
+  - High crest + slow decay → Sustained (plucked instruments, piano)
+  - Low crest + fast decay → Transient (compressed drums, loops)
+
+It will still be wrong for some sources. The script supports explicit overrides:
   - `--force_transient ...`
   - `--force_sustained ...`
 
-Crest threshold is not universal:
-  - The default `--crest_threshold 12` is a reasonable starting point for many
-    pop/rock sessions.
-  - Metal kicks and sharp percussion can often land in the ~15-18 dB crest range.
-  - Very compressed sustained material (some EDM leads, basses, pads) can sit
-    closer to ~6-10 dB crest.
+Thresholds are adjustable:
+  - `--crest_threshold 12` (default) — crest factor above this suggests transient
+  - `--decay_db_threshold 12` (default) — energy drop above this suggests transient
+  - `--decay_lookahead_ms 200` (default) — time window for measuring decay
 
 If you see repeated `Normalization hints` (or systematic misclassification), adjust
-`--crest_threshold` for the session, and use the force flags to lock edge cases.
+thresholds for the session, and use the force flags to lock edge cases.
 
 ### Multi-mic sources (phase vs non-linearity)
 

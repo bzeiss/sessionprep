@@ -18,7 +18,7 @@ from ..audio import (
 class TailExceedanceDetector(TrackDetector):
     id = "tail_exceedance"
     name = "Tail Regions Exceeded Anchor"
-    depends_on = ["silence", "crest_factor"]
+    depends_on = ["silence", "audio_classifier"]
 
     @classmethod
     def config_params(cls) -> list[ParamSpec]:
@@ -98,13 +98,13 @@ class TailExceedanceDetector(TrackDetector):
                 data=empty_data,
             )
 
-        # Read anchor_mean from crest_factor detector result
-        crest_result = track.detector_results.get("crest_factor")
+        # Read anchor_mean from audio_classifier detector result
+        crest_result = track.detector_results.get("audio_classifier")
         if crest_result is None:
             return DetectorResult(
                 detector_id=self.id,
                 severity=Severity.CLEAN,
-                summary="crest_factor result missing",
+                summary="audio_classifier result missing",
                 data=empty_data,
             )
 

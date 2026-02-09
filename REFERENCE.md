@@ -213,17 +213,26 @@ sparse events.
   - `--gate_relative_db 40` means "keep windows within 40 dB of the loudest RMS
     window." It is not an absolute dBFS value (so it is not `-40`).
 
-### 3.5 Crest factor + classification
+### 3.5 Audio classification (crest factor + envelope decay)
 
 **What it is:**
-  - A simple crest factor estimate: `peak - anchor_rms`.
-  - Used to classify tracks as "transient" vs "sustained".
+  - A two-metric classifier that combines crest factor (peak-to-RMS ratio) with
+    envelope decay rate (how fast energy drops after the loudest moment).
+  - Crest factor alone can misclassify compressed drums (low crest but transient)
+    and plucked instruments (high crest but sustained). The decay metric acts as
+    a tiebreaker when the two metrics disagree.
+
+**Classification logic:**
+  - High crest + fast decay → Transient (drums, percussion)
+  - Low crest + slow decay → Sustained (pads, bass, vocals)
+  - High crest + slow decay → Sustained (plucked/piano — decay overrides)
+  - Low crest + fast decay → Transient (compressed drums — decay overrides)
 
 **Why it matters:**
   - Helps pick a more appropriate normalization strategy.
   - Explains why certain tracks behave differently when you drive dynamics and
     saturation processing.
-  - If the crest factor is close to `--crest_threshold`, the `Normalization hints`
+  - If either metric is close to its threshold, the `Normalization hints`
     section will flag an edge case and suggest `--force_transient` / `--force_sustained`.
 
 ### 3.6 Tail exceedance report (significant regions above anchor)
@@ -292,17 +301,18 @@ normalization. It is always printed (even without `-x`) so you can review edge
 cases without having to re-run in execute mode.
 
 In the `Normalization hints` section, "near transient/sustained threshold" means
-the file is very close to the crest threshold (`--crest_threshold`, default
+the file's crest factor or envelope decay is very close to its respective
+threshold (`--crest_threshold` default `12 dB`, `--decay_db_threshold` default
 `12 dB`).
 
 Why this matters:
-  - Above the threshold, the file is treated as transient and normalized by peak
-    (`--target_peak`).
-  - Below the threshold, the file is treated as sustained and normalized by RMS
-    (`--target_rms`) with a peak ceiling.
+  - The classification uses two metrics (crest factor and envelope decay rate)
+    that vote together. When either metric is borderline, the classification
+    could flip with small changes in the audio.
+  - Transient tracks are peak-normalized (`--target_peak`).
+  - Sustained tracks are RMS-normalized (`--target_rms`) with a peak ceiling.
 
-If the crest factor is within +/-2 dB of the threshold, small differences in the
-measurement (windowing, gating, fades, edits) can flip the classification. The
-warning is a prompt to sanity-check the musical intent and optionally override:
+If either metric is within +/-2 dB of its threshold, the warning is a prompt
+to sanity-check the musical intent and optionally override:
   - Use `--force_transient` for drum-like / hit-like material.
   - Use `--force_sustained` for pad-like / sustained material.

@@ -321,7 +321,7 @@ def build_diagnostic_summary(
     normalization_hints = []
     crest_threshold = session.config.get("crest_threshold", 12.0)
     for t in ok_tracks:
-        crest_r = t.detector_results.get("crest_factor")
+        crest_r = t.detector_results.get("audio_classifier")
         if crest_r is None:
             continue
         if crest_r.data.get("near_threshold"):
@@ -344,12 +344,12 @@ def build_diagnostic_summary(
     ]
 
     def safe_peak(t):
-        cr = t.detector_results.get("crest_factor")
+        cr = t.detector_results.get("audio_classifier")
         v = cr.data.get("peak_db", float(-np.inf)) if cr else float(-np.inf)
         return v + _off if np.isfinite(v) else v
 
     def safe_rms(t):
-        cr = t.detector_results.get("crest_factor")
+        cr = t.detector_results.get("audio_classifier")
         v = cr.data.get("rms_anchor_db", float(-np.inf)) if cr else float(-np.inf)
         return v + _off if np.isfinite(v) else v
 
