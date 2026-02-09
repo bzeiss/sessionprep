@@ -913,8 +913,10 @@ class EventBus:
 | `detector.complete` | Pipeline | `detector_id`, `filename`, `severity` |
 | `session_detector.start` | Pipeline | `detector_id` |
 | `session_detector.complete` | Pipeline | `detector_id` |
+| `track.plan_start` | Pipeline | `filename`, `index`, `total` |
 | `processor.start` | Pipeline | `processor_id`, `filename` |
 | `processor.complete` | Pipeline | `processor_id`, `filename` |
+| `track.plan_complete` | Pipeline | `filename`, `index`, `total` |
 | `track.write_start` | Pipeline | `filename`, `index`, `total` |
 | `track.write_complete` | Pipeline | `filename`, `index`, `total` |
 | `job.start` | Queue | `job_id` |
@@ -1082,9 +1084,9 @@ group).
 | `settings.py` | `load_config()`, `save_config()`, `config_path()` — persistent GUI preferences |
 | `theme.py` | `COLORS` dict, `FILE_COLOR_*` constants, dark palette + stylesheet |
 | `helpers.py` | `esc()`, `track_analysis_label()`, `fmt_time()`, severity maps |
-| `worker.py` | `AnalyzeWorker` (QThread) — runs pipeline in background thread |
+| `worker.py` | `AnalyzeWorker` (QThread) — runs pipeline in background thread, emits real progress (`progress_value`), per-track completion signals (`track_analyzed`, `track_planned`) for incremental table updates |
 | `report.py` | HTML rendering: `render_summary_html()`, `render_fader_table_html()`, `render_track_detail_html()` |
-| `waveform.py` | `WaveformWidget` — per-channel waveform painting, dB measurement scale, peak/RMS markers, mouse guide, issue overlays, playback cursor, tooltips |
+| `waveform.py` | `WaveformWidget` — per-channel waveform painting, dB measurement scale, peak/RMS markers (toggleable), mouse guide, detector issue overlays (filtered by label), RMS L/R and RMS AVG envelopes (separate toggles), playback cursor, tooltips |
 | `playback.py` | `PlaybackController` — sounddevice OutputStream lifecycle, QTimer cursor updates, signal-based API |
 | `preferences.py` | `PreferencesDialog` — tree-navigated settings dialog, ParamSpec-driven widgets, reset-to-default, HiDPI scaling |
 | `mainwindow.py` | `SessionPrepWindow` (QMainWindow) — orchestrator, UI layout, slot handlers |
@@ -1113,20 +1115,36 @@ No circular imports. `settings`, `theme`, and `helpers` are pure leaves.
 - **WaveformWidget** renders issue overlays from `IssueLocation` objects.
   Per-channel regions are drawn in the corresponding channel lane; whole-file
   issues span all channels. Tooltips use a 5-pixel hit tolerance for narrow
-  markers. Additional features:
+  markers. Overlays and tooltips are filtered by `_enabled_overlays` — only
+  detectors checked in the Detector Overlays dropdown are painted/hoverable.
+  Additional features:
+  - **Waveform toolbar** — layout:
+    `[▾ Detector Overlays] [Peak / RMS Max] [RMS L/R] [RMS AVG]  ... [Fit] [+] [−] [↑] [↓]`
+    The Detector Overlays dropdown is a `QToolButton` with a `QMenu` of
+    checkable actions, one per detector that produced issues for the current
+    track. All unchecked by default. Detectors suppressed by `is_relevant()`
+    are excluded. The button label shows a count when items are checked
+    (e.g. "Detector Overlays (2)"). Menu is rebuilt on track selection and
+    on classification override changes.
   - **dB measurement scale** — left/right margins (30 px) with dBFS tick
     labels (0, −3, −6, −12, −18, −24, −36, −48, −60), tick marks, and
     faint connector lines spanning the waveform area. Adaptive spacing
     (min 18 px between ticks, lane-edge padding to prevent cross-channel
     overlap). Scale adjusts dynamically with vertical resize and `_vscale`.
-  - **Peak marker ("P")** — magenta solid vertical line at the sample with
-    the highest absolute amplitude across all channels. A small horizontal
-    crosshair is drawn at the peak amplitude on the owning channel only.
-    Hovering shows "Peak: X.X dBFS" tooltip.
-  - **Max RMS marker ("R")** — cyan solid vertical line at the centre of
-    the loudest momentary RMS window (combined across channels). Horizontal
-    crosshair on the positive side of each channel lane. Hovering shows
-    "Max RMS: X.X dBFS" tooltip.
+  - **Peak marker ("P")** — dark violet solid vertical line at the sample
+    with the highest absolute amplitude across all channels. A small
+    horizontal crosshair is drawn at the peak amplitude on the owning
+    channel only. Hovering shows "Peak: X.X dBFS" tooltip. Controlled
+    by the "Peak / RMS Max" toggle (default: on).
+  - **Max RMS marker ("R")** — dark teal-blue solid vertical line at the
+    centre of the loudest momentary RMS window (combined across channels).
+    Horizontal crosshair on the positive side of each channel lane.
+    Hovering shows "Max RMS: X.X dBFS" tooltip. Controlled by the same
+    "Peak / RMS Max" toggle.
+  - **RMS L/R overlay** — per-channel RMS envelope curve (yellow), toggled
+    via the "RMS L/R" toolbar button.
+  - **RMS AVG overlay** — combined (average) RMS envelope curve (orange),
+    toggled via the "RMS AVG" toolbar button.
   - **Mouse guide** — a thin grey dashed horizontal line follows the mouse
     cursor across the full widget width. The corresponding dBFS value is
     shown at the top of the current channel's scale margins (left and right).
@@ -1160,7 +1178,9 @@ file in the OS-specific user preferences directory:
 ```json
 {
     "gui": {
-        "scale_factor": 1.0
+        "scale_factor": 1.0,
+        "show_clean_detectors": false,
+        "default_project_dir": ""
     },
     "analysis": {
         "window": 400,
@@ -1182,8 +1202,8 @@ file in the OS-specific user preferences directory:
 }
 ```
 
-- **`gui`** — GUI-specific settings (HiDPI scale factor); not consumed by the
-  analysis pipeline
+- **`gui`** — GUI-specific settings (HiDPI scale factor, show/hide clean
+  detectors, default project directory); not consumed by the analysis pipeline
 - **`analysis`** — shared RMS / loudness parameters and global processing
   defaults (from `ANALYSIS_PARAMS`)
 - **`detectors.<id>`** — per-detector parameters (from each detector's `config_params()`)

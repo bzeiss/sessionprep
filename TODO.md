@@ -386,3 +386,10 @@
 | ~~HiDPI scaling~~ | — | ✅ Resolved (QT_SCALE_FACTOR, persisted in gui.scale_factor) |
 | ~~Detector/processor help text~~ | — | ✅ Resolved (visible subtext + rich tooltips) |
 | ~~About dialog~~ | — | ✅ Resolved (version from importlib.metadata) |
+| ~~Waveform overlay controls~~ | — | ✅ Resolved (Detector Overlays dropdown with per-detector checkable items, filtered by is_relevant) |
+| ~~Peak/RMS marker toggle~~ | — | ✅ Resolved (Peak / RMS Max toggle button, dark violet/teal-blue colors) |
+| ~~RMS L/R and RMS AVG split~~ | — | ✅ Resolved (separate toggle buttons replacing single RMS toggle) |
+| ~~Show clean detector results pref~~ | — | ✅ Resolved (show_clean_detectors in Detectors section, default off) |
+| ~~Default project directory pref~~ | — | ✅ Resolved (directory picker in General prefs, Open Folder starts there) |
+| ~~Real progress bar~~ | — | ✅ Resolved (determinate bar from EventBus events, async table row updates) |
+| ~~Tail exceedance relevance~~ | — | ✅ Resolved (is_relevant on TrackDetector, suppressed for peak/peak-limited methods) |
