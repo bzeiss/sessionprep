@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt, Slot, QSize, QEvent
 from PySide6.QtGui import QAction, QFont, QColor, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
@@ -581,6 +582,9 @@ class SessionPrepWindow(QMainWindow):
         self._track_table.setSortingEnabled(False)
         track_map = {t.filename: t for t in session.tracks}
         for row in range(self._track_table.rowCount()):
+            # Remove any previous cell widget before repopulating
+            self._track_table.removeCellWidget(row, 2)
+
             fname_item = self._track_table.item(row, 0)
             if not fname_item:
                 continue
@@ -594,7 +598,7 @@ class SessionPrepWindow(QMainWindow):
             analysis_item.setForeground(QColor(color))
             self._track_table.setItem(row, 1, analysis_item)
 
-            # Column 2: classification
+            # Column 2: classification (combo or static)
             pr = (
                 next(iter(track.processor_results.values()), None)
                 if track.processor_results
@@ -603,19 +607,40 @@ class SessionPrepWindow(QMainWindow):
             if track.status != "OK":
                 cls_item = _SortableItem("Error", "error")
                 cls_item.setForeground(FILE_COLOR_ERROR)
+                self._track_table.setItem(row, 2, cls_item)
+            elif pr and pr.classification == "Silent":
+                cls_item = _SortableItem("Silent", "silent")
+                cls_item.setForeground(FILE_COLOR_SILENT)
+                self._track_table.setItem(row, 2, cls_item)
             elif pr:
+                # Determine effective classification
                 cls_text = pr.classification or "Unknown"
-                if cls_text == "Silent":
-                    cls_color = FILE_COLOR_SILENT
-                elif "Transient" in cls_text:
-                    cls_color = FILE_COLOR_TRANSIENT
+                if "Transient" in cls_text:
+                    base_cls = "Transient"
+                elif cls_text == "Skip":
+                    base_cls = "Skip"
+                elif "Sustained" in cls_text:
+                    base_cls = "Sustained"
                 else:
-                    cls_color = FILE_COLOR_SUSTAINED
-                cls_item = _SortableItem(cls_text, cls_text.lower())
-                cls_item.setForeground(cls_color)
+                    base_cls = "Sustained"
+
+                # Hidden sort item (widget overlays it)
+                sort_item = _SortableItem(base_cls, base_cls.lower())
+                self._track_table.setItem(row, 2, sort_item)
+
+                # Combo widget
+                combo = QComboBox()
+                combo.addItems(["Transient", "Sustained", "Skip"])
+                combo.blockSignals(True)
+                combo.setCurrentText(base_cls)
+                combo.blockSignals(False)
+                combo.setProperty("track_filename", track.filename)
+                self._style_classification_combo(combo, base_cls)
+                combo.currentTextChanged.connect(self._on_classification_changed)
+                self._track_table.setCellWidget(row, 2, combo)
             else:
                 cls_item = _SortableItem("", "zzz")
-            self._track_table.setItem(row, 2, cls_item)
+                self._track_table.setItem(row, 2, cls_item)
         self._track_table.setSortingEnabled(True)
 
         # Auto-fit columns 1 & 2 to content, File column stays Stretch
@@ -625,6 +650,66 @@ class SessionPrepWindow(QMainWindow):
         self._track_table.resizeColumnsToContents()
         header.setSectionResizeMode(1, QHeaderView.Interactive)
         header.setSectionResizeMode(2, QHeaderView.Interactive)
+
+    # ── Classification override helpers ───────────────────────────────────
+
+    def _style_classification_combo(self, combo: QComboBox, cls_text: str):
+        """Apply classification-specific color to a combo box."""
+        if cls_text == "Transient":
+            color = FILE_COLOR_TRANSIENT.name()
+        elif cls_text == "Sustained":
+            color = FILE_COLOR_SUSTAINED.name()
+        else:
+            color = FILE_COLOR_SILENT.name()
+        combo.setStyleSheet(f"QComboBox {{ color: {color}; font-weight: bold; }}")
+
+    @Slot(str)
+    def _on_classification_changed(self, text: str):
+        """Handle user changing the classification dropdown."""
+        combo = self.sender()
+        if not combo or not self._session:
+            return
+        fname = combo.property("track_filename")
+        if not fname:
+            return
+        track = next(
+            (t for t in self._session.tracks if t.filename == fname), None
+        )
+        if not track:
+            return
+
+        # Set override and recalculate processor result
+        track.classification_override = text
+        self._recalculate_processor(track)
+
+        # Update combo color
+        self._style_classification_combo(combo, text)
+
+        # Update hidden sort item
+        for row in range(self._track_table.rowCount()):
+            item = self._track_table.item(row, 0)
+            if item and item.text() == fname:
+                sort_item = self._track_table.item(row, 2)
+                if sort_item:
+                    sort_item.setText(text)
+                    sort_item._sort_key = text.lower()
+                break
+
+        # Refresh File tab if this track is currently displayed
+        if self._current_track and self._current_track.filename == fname:
+            html = render_track_detail_html(track)
+            self._file_report.setHtml(self._wrap_html(html))
+
+    def _recalculate_processor(self, track):
+        """Re-run the normalization processor for a single track."""
+        from sessionpreplib.processors.bimodal_normalize import (
+            BimodalNormalizeProcessor,
+        )
+        proc = BimodalNormalizeProcessor()
+        flat_cfg = flatten_structured_config(self._config)
+        proc.configure(flat_cfg)
+        result = proc.process(track)
+        track.processor_results[proc.id] = result
 
     @staticmethod
     def _wrap_html(body: str) -> str:

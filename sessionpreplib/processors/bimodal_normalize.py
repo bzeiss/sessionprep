@@ -58,10 +58,26 @@ class BimodalNormalizeProcessor(AudioProcessor):
                 error="audio_classifier detector result missing",
             )
 
+        # Check for user override from the GUI dropdown
+        override = track.classification_override
+        if override == "Skip":
+            return ProcessorResult(
+                processor_id=self.id,
+                gain_db=0.0,
+                classification="Skip",
+                method="None",
+                data={"gain_db_individual": 0.0},
+            )
+
         peak_db = crest_result.data["peak_db"]
         rms_anchor_db = crest_result.data["rms_anchor_db"]
-        classification = crest_result.data["classification"]
-        is_transient = crest_result.data["is_transient"]
+
+        if override in ("Transient", "Sustained"):
+            classification = override
+            is_transient = override == "Transient"
+        else:
+            classification = crest_result.data["classification"]
+            is_transient = crest_result.data["is_transient"]
 
         if is_transient:
             # TRANSIENT — normalize to peak

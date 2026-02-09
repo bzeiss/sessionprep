@@ -97,6 +97,7 @@ class TrackContext:
     detector_results: dict[str, DetectorResult] = field(default_factory=dict)
     processor_results: dict[str, ProcessorResult] = field(default_factory=dict)
     group: str | None = None
+    classification_override: str | None = None
     _cache: dict[str, Any] = field(default_factory=dict, repr=False)
 
 
