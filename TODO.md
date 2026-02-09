@@ -247,13 +247,15 @@
   - Capped by `subsonic_max_regions` (default 20).
   - `subsonic_windowed_ratios()` added to `audio.py`.
   - Whole-file analysis always runs regardless of windowed setting.
-  - Three safeguards for accurate windowed results:
-    1. Silent-window gating (RMS < −80 dBFS → skip, prevents false positives
-       from floating-point noise in near-silent gaps).
+  - Four safeguards for accurate windowed results:
+    1. Absolute subsonic power gate (window_rms_db + ratio_db < −40 dBFS → skip;
+       prevents amp hum/noise in quiet gaps from false positives).
     2. Threshold relaxation (windowed threshold = configured − 6 dB, compensates
        for reduced frequency resolution in short windows).
-    3. Whole-file fallback (if no windowed regions found but whole-file analysis
-       triggers ATTENTION, a full-file overlay is shown).
+    3. Active-signal fallback (if no ratio-based regions found, marks windows
+       within 20 dB of the loudest window — matches where signal is active).
+    4. Whole-file fallback (if even active-signal finds nothing, a full-file
+       overlay is shown so ATTENTION always has a visible issue).
 
 - [ ] **Reverb/bleed estimation** (Status: ❌) `NEW`
   - Why: A "dry" vocal with 2 seconds of reverb tail affects processing decisions. A "kick" track with hi-hat bleed means I can't gate it cleanly.

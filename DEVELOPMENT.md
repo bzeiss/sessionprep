@@ -650,11 +650,12 @@ cycles.
 - **Config:** `subsonic_hz`, `subsonic_warn_ratio_db`, `subsonic_windowed` (default `True`), `subsonic_window_ms`, `subsonic_max_regions`
 - **Data:** `{"subsonic_ratio_db": float, "subsonic_warn": bool, "per_channel": {ch: {"ratio_db", "warn"}}, "windowed_regions"?: list[dict]}`
 - **Per-channel analysis** (always active for stereo+): Each channel is analyzed independently via `subsonic_ratio_db_1d`. If only one channel triggers the warning, the issue is reported per-channel with `channel` set to the offending channel index; if all channels trigger, a whole-file issue is reported.
-- **Windowed analysis** (default on via `subsonic_windowed`): Splits each channel into windows (`subsonic_window_ms`, default 500 ms), computes per-window subsonic ratios, and merges contiguous exceeding windows into regions. Regions are reported as `IssueLocation` objects with precise `sample_start`/`sample_end`. Capped by `subsonic_max_regions`. Three safeguards:
-  1. **Silent-window gating:** Windows with RMS below −80 dBFS are skipped (prevents false positives from floating-point noise in near-silent gaps).
+- **Windowed analysis** (default on via `subsonic_windowed`): Splits each channel into windows (`subsonic_window_ms`, default 500 ms), computes per-window subsonic ratios, and merges contiguous exceeding windows into regions. Regions are reported as `IssueLocation` objects with precise `sample_start`/`sample_end`. Capped by `subsonic_max_regions`. Safeguards:
+  1. **Absolute subsonic power gate:** Each window's absolute subsonic energy level is checked (`window_rms_db + ratio_db`). Windows where this is below −40 dBFS are suppressed — their subsonic content is too quiet to matter regardless of the ratio. Prevents amp hum/noise in quiet gaps from producing false positives.
   2. **Threshold relaxation:** The windowed threshold is relaxed by 6 dB below the configured threshold. Short windows have less frequency resolution than the whole-file FFT, so borderline subsonic content that triggers the whole-file check may not reach the same threshold per-window.
-  3. **Whole-file fallback:** If windowed analysis produces no regions but the whole-file ratio still exceeds the threshold, a whole-file `IssueLocation` is emitted so ATTENTION always has at least one visible overlay.
-- **Issues:** Per-region `IssueLocation` in windowed mode; falls back to per-channel or whole-file span when no windowed regions are found
+  3. **Active-signal fallback:** If no windows exceed the relaxed threshold, the detector falls back to marking windows that have significant signal (RMS within 20 dB of the loudest window). Since the whole-file analysis already confirmed subsonic content, the active-signal windows are where it lives.
+  4. **Whole-file fallback:** If even the active-signal approach produces no regions, a whole-file `IssueLocation` is emitted so ATTENTION always has at least one visible overlay.
+- **Issues:** Per-region `IssueLocation` in windowed mode; falls back to active-signal regions or whole-file span
 - **Severity:** `ATTENTION` if exceeds threshold (whole-file or any channel), `CLEAN` otherwise
 - **Hint:** `"consider HPF ~{cutoff_hz} Hz"`
 
@@ -786,25 +787,56 @@ execute()   -> Apply gains, backup originals, write processed files
 
 ```python
 class Pipeline:
-    def __init__(self, detectors, audio_processors, config, event_bus): ...
+    def __init__(self, detectors, audio_processors, config, event_bus,
+                 max_workers=None): ...
     def analyze(self, session: SessionContext) -> SessionContext: ...
     def plan(self, session: SessionContext) -> SessionContext: ...
     def execute(self, session, output_dir, backup_dir, is_overwriting) -> SessionContext: ...
 ```
 
+### 8.4 Parallel Execution
+
+All three parallelizable stages use `concurrent.futures.ThreadPoolExecutor`:
+
+1. **File loading** (`load_session`): WAV files are read from disk in parallel.
+   I/O-bound — threading gives significant speedup.
+2. **Track analysis** (`analyze`): Per-track detector chains run in parallel
+   across files.  Within a single track, detectors still run sequentially
+   (topological order from `depends_on`).  Session-level detectors run after
+   all tracks complete (barrier).
+3. **Track planning** (`plan`): Per-track processor chains run in parallel.
+   Group equalization and fader offsets run after all tracks complete.
+
+**Why threads, not processes:** Detector/processor compute is dominated by
+numpy FFT/RMS operations which release the GIL, giving real parallelism
+without the serialization overhead of multiprocessing (audio data arrays are
+large).
+
+**Thread safety:**
+- `EventBus` is protected by `threading.Lock` (safe to emit from pool threads).
+- Detector/processor instances are shared across threads but are read-only
+  after `configure()` — `analyze()`/`process()` methods only read `self` and
+  write to the per-track `TrackContext` (unique per thread).
+- Progress counter in `AnalyzeWorker` uses `threading.Lock` for atomic
+  increment + emit.
+
+**Worker count:** `max_workers` defaults to `min(os.cpu_count(), 8)`, capped
+at the number of tracks.
+
 `plan()` internally calls:
 - `_equalize_group_gains()` — grouped tracks get minimum gain
 - `_compute_fader_offsets()` — inverse gain + anchor adjustment
 
-### 8.4 `load_session()` Helper
+### 8.5 `load_session()` Helper
 
 ```python
 def load_session(source_dir, config, event_bus=None) -> SessionContext
 ```
 
-Loads all WAVs from `source_dir`, assigns groups, generates overlap warnings.
+Loads all WAVs from `source_dir` in parallel, assigns groups, generates
+overlap warnings.
 
-### 8.5 Topological Sort
+### 8.6 Topological Sort
 
 `_topo_sort_detectors()` uses Kahn's algorithm. Raises `ConfigError` on
 cycles or missing dependencies.
@@ -1091,9 +1123,9 @@ group).
 | `settings.py` | `load_config()`, `save_config()`, `config_path()` — persistent GUI preferences |
 | `theme.py` | `COLORS` dict, `FILE_COLOR_*` constants, dark palette + stylesheet |
 | `helpers.py` | `esc()`, `track_analysis_label()`, `fmt_time()`, severity maps |
-| `worker.py` | `AnalyzeWorker` (QThread) — runs pipeline in background thread, emits real progress (`progress_value`), per-track completion signals (`track_analyzed`, `track_planned`) for incremental table updates |
+| `worker.py` | `AnalyzeWorker` (QThread) — runs pipeline in background thread, thread-safe progress counting (`threading.Lock`), emits real progress (`progress_value`), per-track completion signals (`track_analyzed`, `track_planned`) for incremental table updates |
 | `report.py` | HTML rendering: `render_summary_html()`, `render_fader_table_html()`, `render_track_detail_html()` |
-| `waveform.py` | `WaveformWidget` — per-channel waveform painting, dB measurement scale, peak/RMS markers (toggleable), mouse guide, detector issue overlays (filtered by label), RMS L/R and RMS AVG envelopes (separate toggles), playback cursor, tooltips |
+| `waveform.py` | `WaveformWidget` — per-channel waveform painting, dB measurement scale, peak/RMS markers (toggleable), crosshair mouse guide (horizontal + vertical), mouse-wheel zoom (centered on pointer), detector issue overlays (filtered by label), RMS L/R and RMS AVG envelopes (separate toggles), playback cursor, tooltips |
 | `playback.py` | `PlaybackController` — sounddevice OutputStream lifecycle, QTimer cursor updates, signal-based API |
 | `preferences.py` | `PreferencesDialog` — tree-navigated settings dialog, ParamSpec-driven widgets, reset-to-default, HiDPI scaling |
 | `mainwindow.py` | `SessionPrepWindow` (QMainWindow) — orchestrator, UI layout, slot handlers |

@@ -154,9 +154,11 @@ merged into regions with precise sample ranges, visible as waveform overlays.
 This serves two purposes:
   1. **Localization** — shows *where* subsonic content is concentrated (bass
      drops, HVAC bleed in quiet sections) instead of painting the entire file.
-  2. **Silent-window gating** — windows with RMS below −80 dBFS are
-     automatically skipped, preventing false positives from near-silent gaps
-     between notes where floating-point noise can produce misleading ratios.
+  2. **Absolute subsonic power gate** — each window's absolute subsonic energy
+     level is checked (`window_rms_db + ratio_db`).  Windows where this is
+     below −40 dBFS are suppressed.  This prevents amp hum or noise in quiet
+     gaps from producing false positives — a high subsonic *ratio* is
+     meaningless when the absolute energy is too quiet to waste headroom.
 
 **Threshold relaxation for windowed analysis:**
 
@@ -168,9 +170,18 @@ uses a relaxed threshold (6 dB below the configured threshold). This ensures
 that windows where subsonic energy is concentrated still produce visible
 regions.
 
-If even the relaxed threshold produces no regions (very diffuse subsonic
-content), a whole-file overlay is shown as fallback — an ATTENTION result
-always has at least one visible issue.
+**Fallback for diffuse subsonic content:**
+
+If no windows exceed the relaxed threshold (the subsonic energy is spread
+evenly across the file rather than concentrated), the detector falls back to
+marking **active-signal regions** — windows whose RMS is within 20 dB of the
+loudest window.  Since the whole-file analysis already confirmed subsonic
+content, these active windows are where it lives.  This avoids painting
+silent gaps between notes while still showing meaningful overlays.
+
+If even the active-signal approach produces no regions, a whole-file overlay
+is shown as a last resort — an ATTENTION result always has at least one
+visible issue.
 
 ### 2.11 Tail regions exceeded anchor
 

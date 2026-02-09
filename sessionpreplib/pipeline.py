@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
 
 import numpy as np
@@ -31,9 +32,11 @@ class Pipeline:
         audio_processors: list[AudioProcessor] | None = None,
         config: dict[str, Any] | None = None,
         event_bus: EventBus | None = None,
+        max_workers: int | None = None,
     ):
         self.config = config or {}
         self.event_bus = event_bus
+        self.max_workers = max_workers or min(os.cpu_count() or 4, 8)
 
         # Separate track vs session detectors
         self.track_detectors: list[TrackDetector] = [
@@ -86,33 +89,56 @@ class Pipeline:
     # Phase 1: Analyze (run all detectors)
     # ------------------------------------------------------------------
 
+    def _analyze_track(self, track: TrackContext, idx: int, total: int):
+        """Run all track-level detectors for a single track (thread-safe)."""
+        self._emit("track.analyze_start", filename=track.filename,
+                   index=idx, total=total)
+        for det in self.track_detectors:
+            try:
+                self._emit("detector.start", detector_id=det.id,
+                           filename=track.filename)
+                result = det.analyze(track)
+                track.detector_results[det.id] = result
+                self._emit("detector.complete", detector_id=det.id,
+                           filename=track.filename,
+                           severity=result.severity)
+            except Exception as e:
+                track.detector_results[det.id] = DetectorResult(
+                    detector_id=det.id,
+                    severity=Severity.PROBLEM,
+                    summary=f"detector error: {e}",
+                    data={},
+                    error=str(e),
+                )
+        self._emit("track.analyze_complete", filename=track.filename,
+                   index=idx, total=total)
+
     def analyze(self, session: SessionContext) -> SessionContext:
-        """Run all track-level and session-level detectors."""
+        """Run all track-level and session-level detectors.
+
+        Track-level detectors run in parallel across files using a thread pool.
+        Session-level detectors run sequentially after all tracks complete.
+        """
         total = len(session.tracks)
-        for idx, track in enumerate(session.tracks):
-            if track.status != "OK":
-                continue
-            self._emit("track.analyze_start", filename=track.filename,
-                       index=idx, total=total)
-            for det in self.track_detectors:
-                try:
-                    self._emit("detector.start", detector_id=det.id,
-                               filename=track.filename)
-                    result = det.analyze(track)
-                    track.detector_results[det.id] = result
-                    self._emit("detector.complete", detector_id=det.id,
+        ok_items = [
+            (idx, track)
+            for idx, track in enumerate(session.tracks)
+            if track.status == "OK"
+        ]
+
+        workers = min(self.max_workers, len(ok_items)) if ok_items else 1
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(self._analyze_track, track, idx, total): track
+                for idx, track in ok_items
+            }
+            for future in as_completed(futures):
+                exc = future.exception()
+                if exc:
+                    track = futures[future]
+                    self._emit("track.analyze_complete",
                                filename=track.filename,
-                               severity=result.severity)
-                except Exception as e:
-                    track.detector_results[det.id] = DetectorResult(
-                        detector_id=det.id,
-                        severity=Severity.PROBLEM,
-                        summary=f"detector error: {e}",
-                        data={},
-                        error=str(e),
-                    )
-            self._emit("track.analyze_complete", filename=track.filename,
-                       index=idx, total=total)
+                               index=0, total=total)
 
         # Session-level detectors
         track_map = {t.filename: t for t in session.tracks}
@@ -147,36 +173,58 @@ class Pipeline:
     # Phase 2: Plan (run audio processors, compute gains)
     # ------------------------------------------------------------------
 
+    def _plan_track(self, track: TrackContext, idx: int, total: int):
+        """Run all audio processors for a single track (thread-safe)."""
+        self._emit("track.plan_start", filename=track.filename,
+                   index=idx, total=total)
+        for proc in self.audio_processors:
+            try:
+                self._emit("processor.start", processor_id=proc.id,
+                           filename=track.filename)
+                result = proc.process(track)
+                track.processor_results[proc.id] = result
+                self._emit("processor.complete", processor_id=proc.id,
+                           filename=track.filename)
+            except Exception as e:
+                track.processor_results[proc.id] = ProcessorResult(
+                    processor_id=proc.id,
+                    gain_db=0.0,
+                    classification="Error",
+                    method="None",
+                    error=str(e),
+                )
+        self._emit("track.plan_complete", filename=track.filename,
+                   index=idx, total=total)
+
     def plan(self, session: SessionContext) -> SessionContext:
         """
         Run all audio processors in priority order.
         Computes gains and classifications without modifying audio.
         Also handles group gain equalization and fader offsets.
+
+        Per-track processors run in parallel using a thread pool.
+        Group equalization and fader offsets run after all tracks complete.
         """
         total = len(session.tracks)
-        for idx, track in enumerate(session.tracks):
-            if track.status != "OK":
-                continue
-            self._emit("track.plan_start", filename=track.filename,
-                       index=idx, total=total)
-            for proc in self.audio_processors:
-                try:
-                    self._emit("processor.start", processor_id=proc.id,
-                               filename=track.filename)
-                    result = proc.process(track)
-                    track.processor_results[proc.id] = result
-                    self._emit("processor.complete", processor_id=proc.id,
-                               filename=track.filename)
-                except Exception as e:
-                    track.processor_results[proc.id] = ProcessorResult(
-                        processor_id=proc.id,
-                        gain_db=0.0,
-                        classification="Error",
-                        method="None",
-                        error=str(e),
-                    )
-            self._emit("track.plan_complete", filename=track.filename,
-                       index=idx, total=total)
+        ok_items = [
+            (idx, track)
+            for idx, track in enumerate(session.tracks)
+            if track.status == "OK"
+        ]
+
+        workers = min(self.max_workers, len(ok_items)) if ok_items else 1
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(self._plan_track, track, idx, total): track
+                for idx, track in ok_items
+            }
+            for future in as_completed(futures):
+                exc = future.exception()
+                if exc:
+                    track = futures[future]
+                    self._emit("track.plan_complete",
+                               filename=track.filename,
+                               index=0, total=total)
 
         # --- Group gain equalization ---
         self._equalize_group_gains(session)
@@ -320,6 +368,35 @@ class Pipeline:
 # Helpers
 # --------------------------------------------------------------------------
 
+def _load_one_track(
+    source_dir: str,
+    filename: str,
+    idx: int,
+    total: int,
+    event_bus: EventBus | None,
+) -> TrackContext:
+    """Load a single WAV file (used by thread pool in load_session)."""
+    filepath = os.path.join(source_dir, filename)
+    if event_bus:
+        event_bus.emit("track.load", filename=filename,
+                       index=idx, total=total)
+    try:
+        return load_track(filepath)
+    except Exception as e:
+        return TrackContext(
+            filename=filename,
+            filepath=filepath,
+            audio_data=None,
+            samplerate=0,
+            channels=0,
+            total_samples=0,
+            bitdepth="",
+            subtype="",
+            duration_sec=0.0,
+            status=f"Error: {e}",
+        )
+
+
 def load_session(
     source_dir: str,
     config: dict[str, Any],
@@ -327,6 +404,7 @@ def load_session(
 ) -> SessionContext:
     """
     Load all WAV files from source_dir into a SessionContext.
+    Files are loaded in parallel using a thread pool.
     Handles group assignment.
     """
     files = sorted(
@@ -334,28 +412,20 @@ def load_session(
         key=protools_sort_key,
     )
 
-    tracks: list[TrackContext] = []
-    for idx, filename in enumerate(files):
-        filepath = os.path.join(source_dir, filename)
-        if event_bus:
-            event_bus.emit("track.load", filename=filename,
-                           index=idx, total=len(files))
-        try:
-            track = load_track(filepath)
-            tracks.append(track)
-        except Exception as e:
-            tracks.append(TrackContext(
-                filename=filename,
-                filepath=filepath,
-                audio_data=None,
-                samplerate=0,
-                channels=0,
-                total_samples=0,
-                bitdepth="",
-                subtype="",
-                duration_sec=0.0,
-                status=f"Error: {e}",
-            ))
+    total = len(files)
+    workers = min(os.cpu_count() or 4, 8, total) if total else 1
+    tracks: list[TrackContext] = [None] * total  # type: ignore[list-item]
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(
+                _load_one_track, source_dir, filename, idx, total, event_bus
+            ): idx
+            for idx, filename in enumerate(files)
+        }
+        for future in as_completed(futures):
+            idx = futures[future]
+            tracks[idx] = future.result()
 
     session = SessionContext(tracks=tracks, config=dict(config))
 

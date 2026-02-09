@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 from PySide6.QtCore import QThread, Signal
 
 from sessionpreplib.pipeline import Pipeline, load_session
@@ -61,20 +63,25 @@ class AnalyzeWorker(QThread):
             )
             self._step = 0
             self._total = max(total_steps, 1)
+            self._step_lock = threading.Lock()
 
             # Track map for emitting track objects
             track_map = {t.filename: t for t in session.tracks}
 
-            # Subscribe to pipeline events
+            # Subscribe to pipeline events (called from pool threads)
             def on_detector_complete(detector_id, filename, **_kw):
-                self._step += 1
+                with self._step_lock:
+                    self._step += 1
+                    step = self._step
                 self.progress.emit(f"Analyzing {filename} \u2014 {detector_id}")
-                self.progress_value.emit(self._step, self._total)
+                self.progress_value.emit(step, self._total)
 
             def on_session_detector_complete(detector_id, **_kw):
-                self._step += 1
+                with self._step_lock:
+                    self._step += 1
+                    step = self._step
                 self.progress.emit(f"Session detector \u2014 {detector_id}")
-                self.progress_value.emit(self._step, self._total)
+                self.progress_value.emit(step, self._total)
 
             def on_track_analyze_complete(filename, **_kw):
                 track = track_map.get(filename)
@@ -82,9 +89,11 @@ class AnalyzeWorker(QThread):
                     self.track_analyzed.emit(filename, track)
 
             def on_processor_complete(processor_id, filename, **_kw):
-                self._step += 1
+                with self._step_lock:
+                    self._step += 1
+                    step = self._step
                 self.progress.emit(f"Planning {filename} \u2014 {processor_id}")
-                self.progress_value.emit(self._step, self._total)
+                self.progress_value.emit(step, self._total)
 
             def on_track_plan_complete(filename, **_kw):
                 track = track_map.get(filename)
@@ -97,19 +106,21 @@ class AnalyzeWorker(QThread):
             event_bus.subscribe("processor.complete", on_processor_complete)
             event_bus.subscribe("track.plan_complete", on_track_plan_complete)
 
-            # Phase 1: Analyze
+            # Phase 1: Analyze (per-track detectors run in parallel)
             self.progress.emit("Analyzing\u2026")
             self.progress_value.emit(0, self._total)
             session = pipeline.analyze(session)
 
-            # Phase 2: Plan
+            # Phase 2: Plan (per-track processors run in parallel)
             self.progress.emit("Planning\u2026")
             session = pipeline.plan(session)
 
             # Build summary
-            self._step += 1
+            with self._step_lock:
+                self._step += 1
+                step = self._step
             self.progress.emit("Building summary\u2026")
-            self.progress_value.emit(self._step, self._total)
+            self.progress_value.emit(step, self._total)
             summary = build_diagnostic_summary(session)
 
             self.finished.emit(session, summary)
