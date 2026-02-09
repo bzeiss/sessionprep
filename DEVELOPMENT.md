@@ -305,7 +305,7 @@ sessionprepgui/                  # GUI package (PySide6)
     helpers.py                   # esc(), track_analysis_label(), fmt_time(), severity maps
     worker.py                    # AnalyzeWorker (QThread)
     report.py                    # HTML report rendering (summary, fader table, track detail)
-    waveform.py                  # WaveformWidget (per-channel waveform + issue overlays)
+    waveform.py                  # WaveformWidget (per-channel waveform, dB scale, markers, mouse guide)
     playback.py                  # PlaybackController (sounddevice lifecycle + signals)
     preferences.py               # PreferencesDialog (tree nav + per-param pages, reset-to-default)
     mainwindow.py                # SessionPrepWindow (QMainWindow) + main()
@@ -1084,7 +1084,7 @@ group).
 | `helpers.py` | `esc()`, `track_analysis_label()`, `fmt_time()`, severity maps |
 | `worker.py` | `AnalyzeWorker` (QThread) — runs pipeline in background thread |
 | `report.py` | HTML rendering: `render_summary_html()`, `render_fader_table_html()`, `render_track_detail_html()` |
-| `waveform.py` | `WaveformWidget` — per-channel waveform painting, issue overlays, playback cursor, tooltips |
+| `waveform.py` | `WaveformWidget` — per-channel waveform painting, dB measurement scale, peak/RMS markers, mouse guide, issue overlays, playback cursor, tooltips |
 | `playback.py` | `PlaybackController` — sounddevice OutputStream lifecycle, QTimer cursor updates, signal-based API |
 | `preferences.py` | `PreferencesDialog` — tree-navigated settings dialog, ParamSpec-driven widgets, reset-to-default, HiDPI scaling |
 | `mainwindow.py` | `SessionPrepWindow` (QMainWindow) — orchestrator, UI layout, slot handlers |
@@ -1113,7 +1113,24 @@ No circular imports. `settings`, `theme`, and `helpers` are pure leaves.
 - **WaveformWidget** renders issue overlays from `IssueLocation` objects.
   Per-channel regions are drawn in the corresponding channel lane; whole-file
   issues span all channels. Tooltips use a 5-pixel hit tolerance for narrow
-  markers.
+  markers. Additional features:
+  - **dB measurement scale** — left/right margins (30 px) with dBFS tick
+    labels (0, −3, −6, −12, −18, −24, −36, −48, −60), tick marks, and
+    faint connector lines spanning the waveform area. Adaptive spacing
+    (min 18 px between ticks, lane-edge padding to prevent cross-channel
+    overlap). Scale adjusts dynamically with vertical resize and `_vscale`.
+  - **Peak marker ("P")** — magenta solid vertical line at the sample with
+    the highest absolute amplitude across all channels. A small horizontal
+    crosshair is drawn at the peak amplitude on the owning channel only.
+    Hovering shows "Peak: X.X dBFS" tooltip.
+  - **Max RMS marker ("R")** — cyan solid vertical line at the centre of
+    the loudest momentary RMS window (combined across channels). Horizontal
+    crosshair on the positive side of each channel lane. Hovering shows
+    "Max RMS: X.X dBFS" tooltip.
+  - **Mouse guide** — a thin grey dashed horizontal line follows the mouse
+    cursor across the full widget width. The corresponding dBFS value is
+    shown at the top of the current channel's scale margins (left and right).
+    The guide disappears when the mouse leaves the widget.
 - **report.py** contains pure HTML-building functions (no widget references),
   making them independently testable.
 - **PreferencesDialog** dynamically generates settings pages from each
