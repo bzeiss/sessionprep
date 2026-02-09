@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sys
 
-from PySide6.QtCore import Qt, Slot, QSize, QEvent
+from PySide6.QtCore import Qt, Slot, QSize, QEvent, QTimer
 from PySide6.QtGui import QAction, QFont, QColor, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -53,7 +53,7 @@ from .helpers import track_analysis_label, esc, fmt_time
 from .preferences import PreferencesDialog
 from .report import render_summary_html, render_track_detail_html
 from .worker import AnalyzeWorker
-from .waveform import WaveformWidget
+from .waveform import WaveformWidget, WaveformLoadWorker
 from .playback import PlaybackController
 
 _TAB_SUMMARY = 0
@@ -128,6 +128,7 @@ class SessionPrepWindow(QMainWindow):
         self._summary = None
         self._source_dir = None
         self._worker = None
+        self._wf_worker: WaveformLoadWorker | None = None
         self._current_track = None
         self._detector_help = detector_help_map()
 
@@ -708,43 +709,80 @@ class SessionPrepWindow(QMainWindow):
         self._summary_view.setHtml(self._wrap_html(html))
 
     def _show_track_detail(self, track):
-        """Populate the File tab with per-track detail + waveform."""
+        """Populate the File tab with per-track detail + waveform.
+
+        The HTML report is rendered and displayed immediately so the UI
+        feels responsive.  Waveform loading (dtype conversion, peak
+        finding, RMS setup) is deferred to the next event-loop iteration
+        via ``QTimer.singleShot`` so the tab switch paints first.
+        """
         self._on_stop()
         self._current_track = track
 
-        # Waveform
+        # Show HTML report immediately
+        html = render_track_detail_html(track, self._session,
+                                        show_clean=self._show_clean)
+        self._file_report.setHtml(self._wrap_html(html))
+
+        # Enable and switch to File tab before heavy work
+        self._detail_tabs.setTabEnabled(_TAB_FILE, True)
+        self._detail_tabs.setCurrentIndex(_TAB_FILE)
+
+        # Defer waveform loading so the UI repaints first
+        QTimer.singleShot(0, lambda: self._load_waveform(track))
+
+    def _load_waveform(self, track):
+        """Start background waveform loading for *track*."""
+        # Guard: user may have clicked a different track while we were queued
+        if self._current_track is not track:
+            return
+
+        # Cancel any in-flight worker
+        if self._wf_worker is not None:
+            self._wf_worker.finished.disconnect()
+            self._wf_worker = None
+
         has_audio = track.audio_data is not None and track.audio_data.size > 0
         if has_audio:
-            self._waveform.set_audio(track.audio_data, track.samplerate)
-            all_issues = []
-            for result in track.detector_results.values():
-                all_issues.extend(getattr(result, "issues", []))
-            self._waveform.set_issues(all_issues)
-            self._update_overlay_menu(all_issues)
-            # RMS overlay: pass window size so per-channel RMS is computed on demand
+            self._waveform.set_loading(True)
+            self._waveform.setVisible(True)
+            self._play_btn.setEnabled(False)
+            self._update_time_label(0)
+
             flat_cfg = flatten_structured_config(self._config)
             win_ms = flat_cfg.get("window", 400)
             ws = get_window_samples(track, win_ms)
-            self._waveform.set_rms_data(ws)
-            self._waveform.setVisible(True)
-            self._play_btn.setEnabled(True)
-            self._update_time_label(0)
+
+            self._wf_worker = WaveformLoadWorker(
+                track.audio_data, track.samplerate, ws, parent=self)
+            self._wf_worker.finished.connect(
+                lambda result, t=track: self._on_waveform_loaded(result, t))
+            self._wf_worker.start()
         else:
             self._waveform.set_audio(None, 44100)
-            self._waveform.set_rms_data(0)
             self._update_overlay_menu([])
             self._waveform.setVisible(False)
             self._play_btn.setEnabled(False)
             self._update_time_label(0)
 
-        # Detail HTML
-        html = render_track_detail_html(track, self._session,
-                                        show_clean=self._show_clean)
-        self._file_report.setHtml(self._wrap_html(html))
+    @Slot(object, object)
+    def _on_waveform_loaded(self, result: dict, track):
+        """Receive pre-computed waveform data from the background worker."""
+        self._wf_worker = None
 
-        # Enable and switch to File tab
-        self._detail_tabs.setTabEnabled(_TAB_FILE, True)
-        self._detail_tabs.setCurrentIndex(_TAB_FILE)
+        # Discard if user switched to a different track
+        if self._current_track is not track:
+            return
+
+        self._waveform.set_precomputed(result)
+
+        all_issues = []
+        for det_result in track.detector_results.values():
+            all_issues.extend(getattr(det_result, "issues", []))
+        self._waveform.set_issues(all_issues)
+        self._update_overlay_menu(all_issues)
+        self._play_btn.setEnabled(True)
+        self._update_time_label(0)
 
     # ── Overlay dropdown ────────────────────────────────────────────────
 

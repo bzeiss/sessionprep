@@ -4,12 +4,99 @@ from __future__ import annotations
 
 import numpy as np
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import (QColor, QFont, QLinearGradient, QPainter,
                           QPainterPath, QPen)
 from PySide6.QtWidgets import QToolTip, QWidget
 
 from .theme import COLORS
+
+
+class WaveformLoadWorker(QThread):
+    """Background thread for heavy waveform preparation work.
+
+    Splits channels, finds peak position, and computes RMS-max position
+    so the main thread stays responsive.
+    """
+
+    finished = Signal(object)  # emits a dict with all computed results
+
+    def __init__(self, audio_data: np.ndarray, samplerate: int,
+                 rms_window_samples: int, parent=None):
+        super().__init__(parent)
+        self._audio_data = audio_data
+        self._samplerate = samplerate
+        self._rms_win = rms_window_samples
+
+    def run(self):
+        data = self._audio_data
+        sr = self._samplerate
+        win = self._rms_win
+
+        # --- Channel splitting ---
+        if data.ndim == 1:
+            channels = [np.ascontiguousarray(data)]
+        else:
+            channels = [
+                np.ascontiguousarray(data[:, ch])
+                for ch in range(data.shape[1])
+            ]
+        nch = len(channels)
+        total = len(channels[0])
+
+        # --- Peak finding ---
+        if nch == 1:
+            peak_sample = int(np.argmax(np.abs(channels[0])))
+            peak_channel = 0
+        else:
+            abs_cols = np.column_stack([np.abs(ch) for ch in channels])
+            max_per_sample = np.max(abs_cols, axis=1)
+            peak_sample = int(np.argmax(max_per_sample))
+            peak_channel = int(np.argmax(abs_cols[peak_sample]))
+        peak_lin = abs(float(channels[peak_channel][peak_sample]))
+        peak_db = 20.0 * np.log10(peak_lin) if peak_lin > 0 else float('-inf')
+        peak_amplitude = float(channels[peak_channel][peak_sample])
+
+        # --- RMS max finding ---
+        rms_max_sample = -1
+        rms_max_db = float('-inf')
+        rms_max_amplitude = 0.0
+        if win > 0:
+            ch_wms: list[np.ndarray] = []
+            for ch_data in channels:
+                n = len(ch_data)
+                if n <= win:
+                    ch_wms.append(np.zeros(1, dtype=np.float64))
+                    continue
+                sq = ch_data.astype(np.float64) ** 2
+                cs = np.empty(n + 1, dtype=np.float64)
+                cs[0] = 0.0
+                np.cumsum(sq, out=cs[1:])
+                ch_wms.append((cs[win:] - cs[:n - win + 1]) / win)
+            min_len = min(len(wm) for wm in ch_wms)
+            if min_len > 0:
+                combined = np.mean(
+                    np.column_stack([wm[:min_len] for wm in ch_wms]), axis=1
+                )
+                max_idx = int(np.argmax(combined))
+                rms_max_sample = max_idx + win // 2
+                rms_lin = float(np.sqrt(combined[max_idx]))
+                rms_max_db = 20.0 * np.log10(rms_lin) if rms_lin > 0 else float('-inf')
+                rms_max_amplitude = rms_lin
+
+        self.finished.emit({
+            "channels": channels,
+            "samplerate": sr,
+            "total_samples": total,
+            "peak_sample": peak_sample,
+            "peak_channel": peak_channel,
+            "peak_db": peak_db,
+            "peak_amplitude": peak_amplitude,
+            "rms_window_samples": win,
+            "rms_max_sample": rms_max_sample,
+            "rms_max_db": rms_max_db,
+            "rms_max_amplitude": rms_max_amplitude,
+        })
 
 
 class WaveformWidget(QWidget):
@@ -64,9 +151,13 @@ class WaveformWidget(QWidget):
         self._peak_channel: int = -1
         self._peak_db: float = float('-inf')
         self._peak_amplitude: float = 0.0  # signed amplitude on the peak channel
+        self._peak_dirty: bool = False      # True = needs recomputation
         self._rms_max_sample: int = -1
         self._rms_max_db: float = float('-inf')
         self._rms_max_amplitude: float = 0.0  # linear RMS at max window
+        self._rms_max_dirty: bool = False    # True = needs recomputation
+        # Loading state
+        self._loading: bool = False
         # Mouse guide (crosshair)
         self._mouse_x: int = -1  # -1 = not hovering
         self._mouse_y: int = -1
@@ -75,45 +166,34 @@ class WaveformWidget(QWidget):
         self.setFocusPolicy(Qt.StrongFocus)
 
     def set_audio(self, audio_data: np.ndarray | None, samplerate: int):
-        """Load audio data (numpy array, shape (samples,) or (samples, channels))."""
+        """Load audio data (numpy array, shape (samples,) or (samples, channels)).
+
+        Stores contiguous per-channel arrays (no dtype conversion).
+        Peak finding is deferred until markers are first painted.
+        """
         if audio_data is None or audio_data.size == 0:
             self._channels = []
             self._num_channels = 0
             self._total_samples = 0
         else:
             if audio_data.ndim == 1:
-                self._channels = [audio_data.astype(np.float32)]
+                self._channels = [np.ascontiguousarray(audio_data)]
             else:
                 self._channels = [
-                    audio_data[:, ch].astype(np.float32)
+                    np.ascontiguousarray(audio_data[:, ch])
                     for ch in range(audio_data.shape[1])
                 ]
             self._num_channels = len(self._channels)
             self._total_samples = len(self._channels[0])
-        # Find peak sample position and amplitude
-        if self._channels:
-            if self._num_channels == 1:
-                self._peak_sample = int(np.argmax(np.abs(self._channels[0])))
-                self._peak_channel = 0
-            else:
-                abs_cols = np.column_stack([np.abs(ch) for ch in self._channels])
-                max_per_sample = np.max(abs_cols, axis=1)
-                self._peak_sample = int(np.argmax(max_per_sample))
-                self._peak_channel = int(
-                    np.argmax(abs_cols[self._peak_sample])
-                )
-            peak_lin = abs(float(self._channels[self._peak_channel][self._peak_sample]))
-            self._peak_db = 20.0 * np.log10(peak_lin) if peak_lin > 0 else float('-inf')
-            self._peak_amplitude = float(
-                self._channels[self._peak_channel][self._peak_sample]
-            )
-        else:
-            self._peak_sample = -1
-            self._peak_channel = -1
-            self._peak_db = float('-inf')
-            self._peak_amplitude = 0.0
+        # Mark peak as needing computation (deferred to first paint)
+        self._peak_sample = -1
+        self._peak_channel = -1
+        self._peak_db = float('-inf')
+        self._peak_amplitude = 0.0
+        self._peak_dirty = bool(self._channels)
         self._rms_max_sample = -1
         self._rms_max_db = float('-inf')
+        self._rms_max_dirty = False
         self._samplerate = samplerate
         self._cursor_sample = 0
         self._view_start = 0
@@ -126,6 +206,45 @@ class WaveformWidget(QWidget):
         self._rms_envelope = []
         self._rms_combined = []
         self._rms_cache_key = (0, 0, 0)
+        self.update()
+
+    def set_loading(self, loading: bool):
+        """Show or hide a 'Loading waveform…' placeholder."""
+        self._loading = loading
+        if loading:
+            self._channels = []
+            self._num_channels = 0
+            self._total_samples = 0
+            self._peaks_cache = []
+            self._cached_view = (0, 0, 0)
+        self.update()
+
+    def set_precomputed(self, result: dict):
+        """Apply pre-computed waveform data from a WaveformLoadWorker."""
+        self._channels = result["channels"]
+        self._num_channels = len(self._channels)
+        self._total_samples = result["total_samples"]
+        self._samplerate = result["samplerate"]
+        self._peak_sample = result["peak_sample"]
+        self._peak_channel = result["peak_channel"]
+        self._peak_db = result["peak_db"]
+        self._peak_amplitude = result["peak_amplitude"]
+        self._peak_dirty = False
+        self._rms_window_samples = result["rms_window_samples"]
+        self._rms_max_sample = result["rms_max_sample"]
+        self._rms_max_db = result["rms_max_db"]
+        self._rms_max_amplitude = result["rms_max_amplitude"]
+        self._rms_max_dirty = False
+        self._cursor_sample = 0
+        self._view_start = 0
+        self._view_end = self._total_samples
+        self._vscale = 1.0
+        self._peaks_cache = []
+        self._cached_view = (0, 0, 0)
+        self._rms_envelope = []
+        self._rms_combined = []
+        self._rms_cache_key = (0, 0, 0)
+        self._loading = False
         self.update()
 
     def set_issues(self, issues: list):
@@ -242,6 +361,12 @@ class WaveformWidget(QWidget):
 
         # Background
         painter.fillRect(0, 0, w, h, QColor(COLORS["bg"]))
+
+        if self._loading:
+            painter.setPen(QPen(QColor(COLORS["dim"])))
+            painter.drawText(self.rect(), Qt.AlignCenter, "Loading waveform\u2026")
+            painter.end()
+            return
 
         if not self._channels or self._total_samples == 0:
             painter.setPen(QPen(QColor(COLORS["dim"])))
@@ -545,8 +670,41 @@ class WaveformWidget(QWidget):
 
             painter.setClipping(False)
 
+    def _ensure_peak_computed(self):
+        """Lazily compute peak sample position on first demand."""
+        if not self._peak_dirty:
+            return
+        self._peak_dirty = False
+        if not self._channels:
+            return
+        if self._num_channels == 1:
+            self._peak_sample = int(np.argmax(np.abs(self._channels[0])))
+            self._peak_channel = 0
+        else:
+            abs_cols = np.column_stack([np.abs(ch) for ch in self._channels])
+            max_per_sample = np.max(abs_cols, axis=1)
+            self._peak_sample = int(np.argmax(max_per_sample))
+            self._peak_channel = int(
+                np.argmax(abs_cols[self._peak_sample])
+            )
+        peak_lin = abs(float(self._channels[self._peak_channel][self._peak_sample]))
+        self._peak_db = 20.0 * np.log10(peak_lin) if peak_lin > 0 else float('-inf')
+        self._peak_amplitude = float(
+            self._channels[self._peak_channel][self._peak_sample]
+        )
+
+    def _ensure_rms_max_computed(self):
+        """Lazily compute RMS max sample position on first demand."""
+        if not self._rms_max_dirty:
+            return
+        self._rms_max_dirty = False
+        self._compute_rms_max_sample()
+
     def _draw_markers(self, painter, x0, draw_w, h, nch, lane_h):
         """Draw peak and max RMS marker vertical lines."""
+        self._ensure_peak_computed()
+        self._ensure_rms_max_computed()
+
         marker_font = QFont("Consolas", 7, QFont.Bold)
         _CROSS_HALF = 6  # half-width of horizontal crosshair
 
@@ -893,7 +1051,11 @@ class WaveformWidget(QWidget):
         self._rms_window_samples = max(window_samples, 0)
         self._rms_envelope = []
         self._rms_cache_key = (0, 0, 0)
-        self._compute_rms_max_sample()
+        # Defer RMS max computation to first paint
+        self._rms_max_sample = -1
+        self._rms_max_db = float('-inf')
+        self._rms_max_amplitude = 0.0
+        self._rms_max_dirty = bool(self._channels and window_samples > 0)
         self.update()
 
     def toggle_markers(self, on: bool):
