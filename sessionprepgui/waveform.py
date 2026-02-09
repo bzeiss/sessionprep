@@ -63,6 +63,8 @@ class WaveformWidget(QWidget):
         self._rms_max_sample: int = -1
         self._rms_max_db: float = float('-inf')
         self._rms_max_amplitude: float = 0.0  # linear RMS at max window
+        # Mouse guide
+        self._mouse_y: int = -1  # -1 = not hovering
         self.setMinimumHeight(80)
         self.setMouseTracking(True)
 
@@ -357,6 +359,40 @@ class WaveformWidget(QWidget):
                 painter.setPen(QPen(QColor("#ffffff"), 1))
                 painter.drawLine(cursor_x, 0, cursor_x, h)
 
+        # --- Horizontal mouse guide with dBFS readout ---
+        if self._mouse_y >= 0 and nch > 0:
+            my = self._mouse_y
+            mouse_ch = int(my / lane_h) if lane_h > 0 else 0
+            mouse_ch = max(0, min(mouse_ch, nch - 1))
+            ch_y_off = mouse_ch * lane_h
+            ch_mid_y = ch_y_off + lane_h / 2.0
+            ch_scale = (lane_h / 2.0) * 0.85 * self._vscale
+
+            # Draw guide line across full width
+            guide_color = QColor(200, 200, 200, 60)
+            painter.setPen(QPen(guide_color, 1, Qt.DashLine))
+            painter.drawLine(0, my, w, my)
+
+            # Compute dBFS from mouse y position
+            if ch_scale > 0:
+                amp = abs(ch_mid_y - my) / ch_scale
+                if amp > 0:
+                    db_val = 20.0 * np.log10(amp)
+                    db_label = f"{db_val:.1f}"
+                else:
+                    db_label = "-\u221e"
+                # Draw label at top of left scale margin
+                painter.setFont(QFont("Consolas", 7))
+                label_color = QColor(180, 180, 180, 120)
+                painter.setPen(label_color)
+                fm = painter.fontMetrics()
+                tw = fm.horizontalAdvance(db_label)
+                painter.drawText(x0 - 5 - tw, int(ch_y_off) + fm.ascent() + 1,
+                                 db_label)
+                # Also on the right
+                painter.drawText(x0 + draw_w + 5, int(ch_y_off) + fm.ascent() + 1,
+                                 db_label)
+
         painter.end()
 
     def _draw_db_scale(self, painter, x0, draw_w, h, nch, lane_h):
@@ -448,6 +484,15 @@ class WaveformWidget(QWidget):
                     painter.drawLine(x0 + draw_w, int(y_bot),
                                      x0 + draw_w + 3, int(y_bot))
 
+                # Thin connecting lines spanning full width (behind waveform)
+                conn_color = QColor(45, 45, 45)
+                painter.setPen(QPen(conn_color, 1))
+                painter.drawLine(0, int(y_top),
+                                 x0 + draw_w + self._MARGIN_RIGHT, int(y_top))
+                if db_val != 0:
+                    painter.drawLine(0, int(y_bot),
+                                     x0 + draw_w + self._MARGIN_RIGHT, int(y_bot))
+
             painter.setClipping(False)
 
     def _draw_markers(self, painter, x0, draw_w, h, nch, lane_h):
@@ -519,6 +564,9 @@ class WaveformWidget(QWidget):
 
     def mouseMoveEvent(self, event):
         """Show tooltip when hovering over an issue region or marker."""
+        self._mouse_y = int(event.position().y())
+        self.update()  # repaint for horizontal guide
+
         if self._total_samples <= 0:
             QToolTip.hideText()
             return
@@ -572,6 +620,11 @@ class WaveformWidget(QWidget):
             QToolTip.showText(event.globalPosition().toPoint(), "\n".join(tips), self)
         else:
             QToolTip.hideText()
+
+    def leaveEvent(self, event):
+        self._mouse_y = -1
+        self.update()
+        super().leaveEvent(event)
 
     # ── Zoom / vertical-scale public API ──────────────────────────────────
 
