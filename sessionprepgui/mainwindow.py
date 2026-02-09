@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from sessionpreplib.audio import dbfs_offset, get_window_samples
+from sessionpreplib.audio import get_window_samples
 from sessionpreplib.config import default_config, flatten_structured_config
 from sessionpreplib.detectors import detector_help_map
 from sessionpreplib.utils import protools_sort_key
@@ -573,7 +573,7 @@ class SessionPrepWindow(QMainWindow):
             self._update_time_label(0)
 
         # Detail HTML
-        html = render_track_detail_html(track, self._get_db_offset())
+        html = render_track_detail_html(track, self._session)
         self._file_report.setHtml(self._wrap_html(html))
 
         # Enable and switch to File tab
@@ -746,7 +746,7 @@ class SessionPrepWindow(QMainWindow):
 
         # Refresh File tab if this track is currently displayed
         if self._current_track and self._current_track.filename == fname:
-            html = render_track_detail_html(track, self._get_db_offset())
+            html = render_track_detail_html(track, self._session)
             self._file_report.setHtml(self._wrap_html(html))
 
     @Slot(float)
@@ -781,24 +781,16 @@ class SessionPrepWindow(QMainWindow):
 
         # Refresh File tab if this track is currently displayed
         if self._current_track and self._current_track.filename == fname:
-            html = render_track_detail_html(track, self._get_db_offset())
+            html = render_track_detail_html(track, self._session)
             self._file_report.setHtml(self._wrap_html(html))
 
     def _recalculate_processor(self, track):
         """Re-run the normalization processor for a single track."""
-        from sessionpreplib.processors.bimodal_normalize import (
-            BimodalNormalizeProcessor,
-        )
-        proc = BimodalNormalizeProcessor()
-        flat_cfg = flatten_structured_config(self._config)
-        proc.configure(flat_cfg)
-        result = proc.process(track)
-        track.processor_results[proc.id] = result
-
-    def _get_db_offset(self) -> float:
-        """Return the dBFS display offset from the current config."""
-        flat_cfg = flatten_structured_config(self._config)
-        return dbfs_offset(flat_cfg)
+        if not self._session or not self._session.processors:
+            return
+        for proc in self._session.processors:
+            result = proc.process(track)
+            track.processor_results[proc.id] = result
 
     @staticmethod
     def _wrap_html(body: str) -> str:

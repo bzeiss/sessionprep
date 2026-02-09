@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 from ..config import ParamSpec
 from ..processor import AudioProcessor, PRIORITY_NORMALIZE
 from ..models import ProcessorResult, TrackContext
-from ..audio import db_to_linear
+from ..audio import db_to_linear, dbfs_offset
 
 
 class BimodalNormalizeProcessor(AudioProcessor):
@@ -33,6 +35,7 @@ class BimodalNormalizeProcessor(AudioProcessor):
     def configure(self, config):
         self.target_rms = config.get("target_rms", -18.0)
         self.target_peak = config.get("target_peak", -6.0)
+        self._db_offset = dbfs_offset(config)
         anchor_mode = config.get("rms_anchor", "percentile")
         if anchor_mode == "max":
             self._rms_anchor_label = "max"
@@ -115,6 +118,118 @@ class BimodalNormalizeProcessor(AudioProcessor):
                 "gain_for_rms": float(gain_for_rms),
             },
         )
+
+    def render_html(self, result: ProcessorResult) -> str:
+        """Render the normalization analysis as summary line + comparison table."""
+        d = result.data
+        cls_text = result.classification or "Unknown"
+
+        # Classification color
+        if "Transient" in cls_text:
+            type_color = "#cc77ff"
+        elif "Sustained" in cls_text:
+            type_color = "#44cccc"
+        elif cls_text == "Skip":
+            type_color = "#888888"
+        else:
+            type_color = "#888888"
+
+        # Skip / Silent / Unknown: single-line, no breakdown
+        if cls_text in ("Skip", "Silent", "Unknown"):
+            return (
+                f'<div style="margin-left:8px;">'
+                f'Classification: <span style="color:{type_color}; font-weight:bold;">'
+                f'{cls_text}</span> &mdash; no normalization</div>'
+            )
+
+        off = self._db_offset
+
+        def fmt_abs(val):
+            if not math.isfinite(val):
+                return "&minus;&infin;"
+            return f"{val + off:.1f}"
+
+        def fmt_rel(val):
+            if not math.isfinite(val):
+                return "&minus;&infin;"
+            return f"{val:+.1f}"
+
+        det_peak = d.get("detected_peak_db", float("-inf"))
+        det_rms = d.get("detected_rms_db", float("-inf"))
+        tgt_peak = d.get("target_peak", self.target_peak)
+        tgt_rms = d.get("target_rms", self.target_rms)
+        anchor_label = d.get("rms_anchor_label", self._rms_anchor_label)
+        gain_for_peak = d.get("gain_for_peak", 0.0)
+        gain_for_rms = d.get("gain_for_rms", 0.0)
+
+        rms_metric = f"RMS ({anchor_label})" if anchor_label else "RMS"
+        is_transient = "Transient" in cls_text
+        is_peak_limited = result.method == "Peak Limited"
+
+        peak_active = is_transient or is_peak_limited
+        rms_active = not is_transient and not is_peak_limited
+
+        # --- Summary line ---
+        summary = (
+            f'<div style="margin-left:8px; margin-top:4px;">'
+            f'<span style="color:{type_color}; font-weight:bold;">{cls_text}</span>'
+            f' &nbsp;&middot;&nbsp; {result.method}'
+            f' &nbsp;&middot;&nbsp; <b>{result.gain_db:+.1f} dB</b>'
+            f'</div>'
+        )
+
+        # --- Comparison table ---
+        hdr = ('color:#ffffff; font-weight:bold; font-size:9pt;'
+               ' padding:3px 16px 3px 0; border-bottom:1px solid #3a3a3a;')
+        cell = 'padding:3px 16px 3px 0; white-space:nowrap;'
+        dim = "#888888"
+        active_color = "#44cc44"
+        inactive_color = "#dddddd"
+
+        def row_style(active):
+            c = active_color if active else inactive_color
+            w = "font-weight:bold;" if active else ""
+            return c, w
+
+        pk_c, pk_w = row_style(peak_active)
+        pk_note = ""
+        if is_peak_limited:
+            pk_note = f'<span style="color:{dim}; font-size:9pt;"> (chosen, limiting)</span>'
+        elif is_transient:
+            pk_note = f'<span style="color:{dim}; font-size:9pt;"> (chosen)</span>'
+
+        rms_c, rms_w = row_style(rms_active)
+        rms_note = ""
+        if is_peak_limited:
+            rms_note = f'<span style="color:{dim}; font-size:9pt;"> (would exceed peak)</span>'
+        elif rms_active:
+            rms_note = f'<span style="color:{dim}; font-size:9pt;"> (chosen)</span>'
+
+        table = (
+            f'<table cellpadding="0" cellspacing="0" '
+            f'style="margin-left:8px; margin-top:12px;">'
+            f'<tr>'
+            f'<td style="{hdr}"></td>'
+            f'<td style="{hdr}">Detected</td>'
+            f'<td style="{hdr}">Target</td>'
+            f'<td style="{hdr}">Gain</td>'
+            f'</tr>'
+            f'<tr>'
+            f'<td style="{cell} color:{dim};">Peak</td>'
+            f'<td style="{cell} color:{pk_c}; {pk_w}">{fmt_abs(det_peak)} dBFS</td>'
+            f'<td style="{cell} color:{pk_c}; {pk_w}">{tgt_peak:.1f} dBFS</td>'
+            f'<td style="{cell} color:{pk_c}; {pk_w}">{fmt_rel(gain_for_peak)} dB{pk_note}</td>'
+            f'</tr>'
+            f'<tr>'
+            f'<td style="{cell} color:{dim};">{rms_metric}</td>'
+            f'<td style="{cell} color:{rms_c}; {rms_w}">{fmt_abs(det_rms)} dBFS</td>'
+            f'<td style="{cell} color:{rms_c}; {rms_w}">{tgt_rms:.1f} dBFS</td>'
+            f'<td style="{cell} color:{rms_c}; {rms_w}">{fmt_rel(gain_for_rms)} dB{rms_note}</td>'
+            f'</tr>'
+            f'</table>'
+        )
+
+        return summary + table
 
     def apply(self, track: TrackContext, result: ProcessorResult) -> np.ndarray:
         if result.classification == "Silent" or result.gain_db == 0.0:

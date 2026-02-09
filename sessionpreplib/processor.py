@@ -43,6 +43,21 @@ class AudioProcessor(ABC):
         """
         ...
 
+    def render_html(self, result: ProcessorResult) -> str:
+        """Return an HTML fragment for this processor's result.
+
+        Override in subclasses for richer output (e.g. comparison tables).
+        The default renders classification, method, and gain.
+        """
+        cls_text = result.classification or "Unknown"
+        return (
+            f'<div style="margin-left:8px;">'
+            f'Classification: <b>{cls_text}</b>'
+            f' &nbsp;&middot;&nbsp; {result.method}'
+            f' &nbsp;&middot;&nbsp; {result.gain_db:+.1f} dB'
+            f'</div>'
+        )
+
     @abstractmethod
     def apply(self, track: TrackContext, result: ProcessorResult) -> np.ndarray:
         """

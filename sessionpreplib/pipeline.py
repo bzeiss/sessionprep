@@ -138,6 +138,9 @@ class Pipeline:
                     )
                 ]
 
+        # Store configured detector instances on the session for render-time access
+        session.detectors = self.track_detectors + self.session_detectors
+
         return session
 
     # ------------------------------------------------------------------
@@ -175,6 +178,9 @@ class Pipeline:
 
         # --- Fader offsets ---
         self._compute_fader_offsets(session)
+
+        # Store configured processor instances on the session for render-time access
+        session.processors = list(self.audio_processors)
 
         return session
 

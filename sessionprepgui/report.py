@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import math
-
-from .theme import COLORS, FILE_COLOR_TRANSIENT, FILE_COLOR_SUSTAINED, FILE_COLOR_SILENT
+from .theme import COLORS, FILE_COLOR_TRANSIENT, FILE_COLOR_SUSTAINED
 from .helpers import esc
 
 
@@ -165,142 +163,19 @@ def render_fader_table_html(session) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Normalization analysis table (used by per-track detail)
-# ---------------------------------------------------------------------------
-
-def _render_norm_table(pr, db_offset: float) -> str:
-    """Render the Normalization Analysis as summary line + comparison table."""
-    d = pr.data
-    cls_text = pr.classification or "Unknown"
-
-    # Classification color
-    if "Transient" in cls_text:
-        type_color = FILE_COLOR_TRANSIENT.name()
-    elif "Sustained" in cls_text:
-        type_color = FILE_COLOR_SUSTAINED.name()
-    elif cls_text == "Skip":
-        type_color = FILE_COLOR_SILENT.name()
-    else:
-        type_color = COLORS["dim"]
-
-    # Skip / Silent / Unknown: single-line, no breakdown
-    if cls_text in ("Skip", "Silent", "Unknown"):
-        return (
-            f'<div style="margin-left:8px;">'
-            f'Classification: <span style="color:{type_color}; font-weight:bold;">'
-            f'{esc(cls_text)}</span> &mdash; no normalization</div>'
-        )
-
-    # --- Summary line ---
-    summary = (
-        f'<div style="margin-left:8px; margin-top:4px;">'
-        f'<span style="color:{type_color}; font-weight:bold;">{esc(cls_text)}</span>'
-        f' &nbsp;&middot;&nbsp; {esc(pr.method)}'
-        f' &nbsp;&middot;&nbsp; <b>{pr.gain_db:+.1f} dB</b>'
-        f'</div>'
-    )
-
-    # --- Comparison table ---
-    def fmt_abs(val):
-        """Format absolute dB value with display offset."""
-        if not math.isfinite(val):
-            return "&minus;&infin;"
-        return f"{val + db_offset:.1f}"
-
-    def fmt_rel(val):
-        """Format relative dB value (no offset)."""
-        if not math.isfinite(val):
-            return "&minus;&infin;"
-        return f"{val:+.1f}"
-
-    det_peak = d.get("detected_peak_db", float("-inf"))
-    det_rms = d.get("detected_rms_db", float("-inf"))
-    tgt_peak = d.get("target_peak", -6.0)
-    tgt_rms = d.get("target_rms", -18.0)
-    anchor_label = d.get("rms_anchor_label", "")
-    gain_for_peak = d.get("gain_for_peak", 0.0)
-    gain_for_rms = d.get("gain_for_rms", 0.0)
-
-    rms_metric = f"RMS ({anchor_label})" if anchor_label else "RMS"
-    is_transient = "Transient" in cls_text
-    is_peak_limited = pr.method == "Peak Limited"
-
-    # Determine which row is the active (chosen) gain path
-    peak_active = is_transient or is_peak_limited
-    rms_active = not is_transient and not is_peak_limited
-
-    # Styles
-    hdr = (f'color:{COLORS["heading"]}; font-weight:bold; font-size:9pt;'
-           f' padding:3px 16px 3px 0; border-bottom:1px solid {COLORS["accent"]};')
-    cell = 'padding:3px 16px 3px 0; white-space:nowrap;'
-    dim = COLORS["dim"]
-    active_color = COLORS["clean"]
-    inactive_color = COLORS["text"]
-
-    def row_style(active):
-        c = active_color if active else inactive_color
-        w = "font-weight:bold;" if active else ""
-        return c, w
-
-    # Peak row
-    pk_c, pk_w = row_style(peak_active)
-    pk_note = ""
-    if is_peak_limited:
-        pk_note = f'<span style="color:{dim}; font-size:9pt;"> (chosen, limiting)</span>'
-    elif is_transient:
-        pk_note = f'<span style="color:{dim}; font-size:9pt;"> (chosen)</span>'
-
-    # RMS row
-    rms_c, rms_w = row_style(rms_active)
-    rms_note = ""
-    if is_peak_limited:
-        rms_note = f'<span style="color:{dim}; font-size:9pt;"> (would exceed peak)</span>'
-    elif rms_active:
-        rms_note = f'<span style="color:{dim}; font-size:9pt;"> (chosen)</span>'
-
-    table = (
-        f'<table cellpadding="0" cellspacing="0" '
-        f'style="margin-left:8px; margin-top:12px;">'
-        # Header
-        f'<tr>'
-        f'<td style="{hdr}"></td>'
-        f'<td style="{hdr}">Detected</td>'
-        f'<td style="{hdr}">Target</td>'
-        f'<td style="{hdr}">Gain</td>'
-        f'</tr>'
-        # Peak row
-        f'<tr>'
-        f'<td style="{cell} color:{dim};">Peak</td>'
-        f'<td style="{cell} color:{pk_c}; {pk_w}">{fmt_abs(det_peak)} dBFS</td>'
-        f'<td style="{cell} color:{pk_c}; {pk_w}">{tgt_peak:.1f} dBFS</td>'
-        f'<td style="{cell} color:{pk_c}; {pk_w}">{fmt_rel(gain_for_peak)} dB{pk_note}</td>'
-        f'</tr>'
-        # RMS row
-        f'<tr>'
-        f'<td style="{cell} color:{dim};">{rms_metric}</td>'
-        f'<td style="{cell} color:{rms_c}; {rms_w}">{fmt_abs(det_rms)} dBFS</td>'
-        f'<td style="{cell} color:{rms_c}; {rms_w}">{tgt_rms:.1f} dBFS</td>'
-        f'<td style="{cell} color:{rms_c}; {rms_w}">{fmt_rel(gain_for_rms)} dB{rms_note}</td>'
-        f'</tr>'
-        f'</table>'
-    )
-
-    return summary + table
-
-
-# ---------------------------------------------------------------------------
 # Per-track detail
 # ---------------------------------------------------------------------------
 
-def render_track_detail_html(track, db_offset: float = 0.0) -> str:
+def render_track_detail_html(track, session=None) -> str:
     """Render per-track detail as styled HTML.
 
     Parameters
     ----------
     track : TrackContext
-    db_offset : float
-        dBFS display offset (e.g. AES17 +3.01 dB). Applied to all
-        absolute dB values shown in the normalization analysis table.
+    session : SessionContext | None
+        If provided, configured detector/processor instances from the
+        session are used for self-rendering via their ``render_html()``
+        methods.
     """
     parts = []
     parts.append(f'<div style="color:{COLORS["heading"]}; font-size:13pt; font-weight:bold;">'
@@ -316,12 +191,24 @@ def render_track_detail_html(track, db_offset: float = 0.0) -> str:
         parts.append(f'<div style="color:{COLORS["dim"]}; margin-top:6px;">{fmt}</div>')
         parts.append(f'<div style="color:{COLORS["dim"]};">{dur}</div>')
 
-        # Processor result
-        pr = next(iter(track.processor_results.values()), None) if track.processor_results else None
-        if pr:
+        # Build lookup maps from session instances
+        proc_map = {p.id: p for p in (session.processors if session else [])}
+        det_map = {d.id: d for d in (session.detectors if session else [])}
+
+        # Processor results
+        for proc_id, pr in (track.processor_results or {}).items():
             parts.append(f'<div style="margin-top:12px; color:{COLORS["heading"]}; '
-                         f'font-weight:bold;">Normalization Analysis</div>')
-            parts.append(_render_norm_table(pr, db_offset))
+                         f'font-weight:bold;">{esc(proc_map[proc_id].name if proc_id in proc_map else proc_id)}</div>')
+            proc_inst = proc_map.get(proc_id)
+            if proc_inst:
+                parts.append(proc_inst.render_html(pr))
+            else:
+                # Fallback: basic display
+                parts.append(
+                    f'<div style="margin-left:8px;">'
+                    f'{esc(pr.classification or "")} &middot; {esc(pr.method)} '
+                    f'&middot; {pr.gain_db:+.1f} dB</div>'
+                )
             if track.group:
                 parts.append(f'<div style="margin-left:8px; margin-top:4px;">'
                              f'Group: {esc(track.group)}</div>')
@@ -335,27 +222,30 @@ def render_track_detail_html(track, db_offset: float = 0.0) -> str:
                 'style="margin-left:8px; margin-top:4px;">'
             )
             for det_id, result in track.detector_results.items():
-                sev = result.severity.value if hasattr(result.severity, "value") else str(result.severity)
-                sev_color, sev_label = {
-                    "problem":     (COLORS["problems"],    "PROBLEM"),
-                    "attention":   (COLORS["attention"],   "ATTENTION"),
-                    "information": (COLORS["information"], "INFO"),
-                    "clean":       (COLORS["clean"],       "OK"),
-                }.get(sev, (COLORS["information"], "INFO"))
-
-                parts.append(
-                    f'<tr>'
-                    f'<td width="90" style="background-color:{sev_color}; color:#000;'
-                    f' font-weight:bold; font-size:8pt; text-align:center;'
-                    f' padding:2px 8px;">'
-                    f'{sev_label}</td>'
-                    f'<td style="padding-left:6px; white-space:nowrap;">'
-                    f'<a href="detector:{det_id}" style="color:{COLORS["text"]}; '
-                    f'text-decoration:none;"><b>{esc(det_id)}</b></a></td>'
-                    f'<td style="padding-left:6px; color:{COLORS["dim"]};">'
-                    f'{esc(result.summary)}</td>'
-                    f'</tr>'
-                )
+                det_inst = det_map.get(det_id)
+                if det_inst:
+                    parts.append(det_inst.render_html(result))
+                else:
+                    # Fallback: generic row
+                    sev = result.severity.value if hasattr(result.severity, "value") else str(result.severity)
+                    sev_color, sev_label = {
+                        "problem":     (COLORS["problems"],    "PROBLEM"),
+                        "attention":   (COLORS["attention"],   "ATTENTION"),
+                        "information": (COLORS["information"], "INFO"),
+                        "clean":       (COLORS["clean"],       "OK"),
+                    }.get(sev, (COLORS["information"], "INFO"))
+                    parts.append(
+                        f'<tr>'
+                        f'<td width="90" style="background-color:{sev_color}; color:#000;'
+                        f' font-weight:bold; font-size:8pt; text-align:center;'
+                        f' padding:2px 8px;">'
+                        f'{sev_label}</td>'
+                        f'<td style="padding-left:6px; white-space:nowrap;">'
+                        f'<b>{esc(det_id)}</b></td>'
+                        f'<td style="padding-left:6px; color:{COLORS["dim"]};">'
+                        f'{esc(result.summary)}</td>'
+                        f'</tr>'
+                    )
             parts.append('</table>')
 
     return "\n".join(parts)
