@@ -158,6 +158,7 @@ class SessionPrepWindow(QMainWindow):
         main_splitter.addWidget(self._build_right_panel())
         main_splitter.setStretchFactor(0, 2)
         main_splitter.setStretchFactor(1, 3)
+        main_splitter.setSizes([420, 580])
         self.setCentralWidget(main_splitter)
 
         self._status_bar = QStatusBar()

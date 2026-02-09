@@ -269,7 +269,8 @@ class WaveformWidget(QWidget):
             border = self._SEVERITY_BORDER.get(sev_val, QColor(255, 255, 255, 60))
 
             ix1 = x0 + self._sample_to_x(issue.sample_start, draw_w)
-            ix2 = (x0 + self._sample_to_x(issue.sample_end, draw_w)
+            # sample_end is inclusive — map end+1 to get the right edge
+            ix2 = (x0 + self._sample_to_x(issue.sample_end + 1, draw_w)
                    if issue.sample_end is not None else ix1)
             rx = ix1
             rw = max(ix2 - ix1, 2)  # min 2px wide so point issues are visible
