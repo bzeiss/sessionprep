@@ -51,11 +51,15 @@ class WaveformWidget(QWidget):
         self._vscale: float = 1.0
         # RMS overlay
         self._rms_window_samples: int = 0
-        self._show_rms: bool = False
+        self._show_rms_lr: bool = False
+        self._show_rms_avg: bool = False
         self._rms_envelope: list[list[float]] = []
         self._rms_combined: list[float] = []
         self._rms_cache_key: tuple[int, int, int] = (0, 0, 0)
+        # Overlay filtering
+        self._enabled_overlays: set[str] = set()
         # Markers
+        self._show_markers: bool = True
         self._peak_sample: int = -1
         self._peak_channel: int = -1
         self._peak_db: float = float('-inf')
@@ -210,7 +214,7 @@ class WaveformWidget(QWidget):
 
         x0, draw_w = self._draw_area()
         self._build_peaks(draw_w)
-        if self._show_rms:
+        if self._show_rms_lr or self._show_rms_avg:
             self._build_rms_envelope(draw_w)
 
         nch = self._num_channels
@@ -221,6 +225,8 @@ class WaveformWidget(QWidget):
 
         # --- Draw issue overlays (behind waveform) ---
         for issue in self._issues:
+            if issue.label not in self._enabled_overlays:
+                continue
             sev_val = issue.severity.value if hasattr(issue.severity, "value") else str(issue.severity)
             fill = self._SEVERITY_OVERLAY.get(sev_val, QColor(255, 255, 255, 30))
             border = self._SEVERITY_BORDER.get(sev_val, QColor(255, 255, 255, 60))
@@ -316,7 +322,7 @@ class WaveformWidget(QWidget):
                 painter.drawLine(0, sep_y, w, sep_y)
 
         # --- RMS overlay (on top of waveform, below cursor) ---
-        if self._show_rms and self._rms_envelope:
+        if (self._show_rms_lr or self._show_rms_avg) and self._rms_envelope:
             ch_pen = QPen(QColor(255, 220, 60, 200), 1.0)     # yellow – per-channel
             comb_pen = QPen(QColor(255, 100, 40, 220), 1.5)   # orange – combined
             for ch in range(nch):
@@ -330,16 +336,17 @@ class WaveformWidget(QWidget):
                 painter.setBrush(Qt.NoBrush)
 
                 # Per-channel RMS
-                ch_env = self._rms_envelope[ch]
-                ch_path = QPainterPath()
-                ch_path.moveTo(x0, mid_y - ch_env[0] * scale)
-                for x in range(1, len(ch_env)):
-                    ch_path.lineTo(x0 + x, mid_y - ch_env[x] * scale)
-                painter.setPen(ch_pen)
-                painter.drawPath(ch_path)
+                if self._show_rms_lr:
+                    ch_env = self._rms_envelope[ch]
+                    ch_path = QPainterPath()
+                    ch_path.moveTo(x0, mid_y - ch_env[0] * scale)
+                    for x in range(1, len(ch_env)):
+                        ch_path.lineTo(x0 + x, mid_y - ch_env[x] * scale)
+                    painter.setPen(ch_pen)
+                    painter.drawPath(ch_path)
 
                 # Combined RMS
-                if self._rms_combined:
+                if self._show_rms_avg and self._rms_combined:
                     comb_path = QPainterPath()
                     comb_path.moveTo(x0, mid_y - self._rms_combined[0] * scale)
                     for x in range(1, len(self._rms_combined)):
@@ -350,7 +357,8 @@ class WaveformWidget(QWidget):
                 painter.setClipping(False)
 
         # --- Peak and RMS max markers ---
-        self._draw_markers(painter, x0, draw_w, h, nch, lane_h)
+        if self._show_markers:
+            self._draw_markers(painter, x0, draw_w, h, nch, lane_h)
 
         # Playback cursor (spans all channels)
         if self._total_samples > 0:
@@ -704,9 +712,24 @@ class WaveformWidget(QWidget):
         self._compute_rms_max_sample()
         self.update()
 
-    def toggle_rms(self, on: bool):
-        """Enable or disable the RMS overlay."""
-        self._show_rms = on
+    def toggle_markers(self, on: bool):
+        """Enable or disable the peak and RMS max markers."""
+        self._show_markers = on
+        self.update()
+
+    def toggle_rms_lr(self, on: bool):
+        """Enable or disable the per-channel RMS overlay."""
+        self._show_rms_lr = on
+        self.update()
+
+    def toggle_rms_avg(self, on: bool):
+        """Enable or disable the combined (average) RMS overlay."""
+        self._show_rms_avg = on
+        self.update()
+
+    def set_enabled_overlays(self, labels: set[str]):
+        """Set which detector issue overlays are visible by label."""
+        self._enabled_overlays = set(labels)
         self.update()
 
     def _compute_rms_max_sample(self):

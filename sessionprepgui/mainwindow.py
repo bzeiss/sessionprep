@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -324,15 +325,59 @@ class SessionPrepWindow(QMainWindow):
         wf_toolbar = QHBoxLayout()
         wf_toolbar.setContentsMargins(4, 2, 4, 2)
 
-        self._rms_toggle = QToolButton()
-        self._rms_toggle.setText("RMS")
-        self._rms_toggle.setToolTip("Toggle RMS overlay")
-        self._rms_toggle.setCheckable(True)
-        self._rms_toggle.setAutoRaise(True)
-        self._rms_toggle.setStyleSheet(
+        toggle_style = (
             "QToolButton:checked { background-color: #2a6db5; color: #ffffff; }")
-        self._rms_toggle.toggled.connect(self._waveform.toggle_rms)
-        wf_toolbar.addWidget(self._rms_toggle)
+
+        # Overlay dropdown (populated per-track)
+        self._overlay_btn = QToolButton()
+        self._overlay_btn.setText("Detector Overlays")
+        self._overlay_btn.setToolTip("Select detector overlays to display on the waveform")
+        self._overlay_btn.setPopupMode(QToolButton.InstantPopup)
+        self._overlay_btn.setAutoRaise(True)
+        self._overlay_btn.setStyleSheet(
+            "QToolButton { padding-right: 30px; }"
+            "QToolButton::menu-indicator { subcontrol-position: right center;"
+            " subcontrol-origin: padding; right: 5px; }")
+        self._overlay_menu = QMenu(self._overlay_btn)
+        self._overlay_btn.setMenu(self._overlay_menu)
+        wf_toolbar.addWidget(self._overlay_btn)
+
+        wf_toolbar.addSpacing(8)
+
+        # Markers toggle
+        self._markers_toggle = QToolButton()
+        self._markers_toggle.setText("Peak / RMS Max")
+        self._markers_toggle.setToolTip("Toggle peak and maximum RMS markers on the waveform")
+        self._markers_toggle.setCheckable(True)
+        self._markers_toggle.setChecked(True)
+        self._markers_toggle.setAutoRaise(True)
+        self._markers_toggle.setStyleSheet(toggle_style)
+        self._markers_toggle.toggled.connect(self._waveform.toggle_markers)
+        wf_toolbar.addWidget(self._markers_toggle)
+
+        wf_toolbar.addSpacing(8)
+
+        # RMS L/R toggle
+        self._rms_lr_toggle = QToolButton()
+        self._rms_lr_toggle.setText("RMS L/R")
+        self._rms_lr_toggle.setToolTip("Toggle per-channel RMS envelope overlay")
+        self._rms_lr_toggle.setCheckable(True)
+        self._rms_lr_toggle.setAutoRaise(True)
+        self._rms_lr_toggle.setStyleSheet(toggle_style)
+        self._rms_lr_toggle.toggled.connect(self._waveform.toggle_rms_lr)
+        wf_toolbar.addWidget(self._rms_lr_toggle)
+
+        wf_toolbar.addSpacing(4)
+
+        # RMS AVG toggle
+        self._rms_avg_toggle = QToolButton()
+        self._rms_avg_toggle.setText("RMS AVG")
+        self._rms_avg_toggle.setToolTip("Toggle combined (average) RMS envelope overlay")
+        self._rms_avg_toggle.setCheckable(True)
+        self._rms_avg_toggle.setAutoRaise(True)
+        self._rms_avg_toggle.setStyleSheet(toggle_style)
+        self._rms_avg_toggle.toggled.connect(self._waveform.toggle_rms_avg)
+        wf_toolbar.addWidget(self._rms_avg_toggle)
 
         wf_toolbar.addStretch()  # push buttons to the right
 
@@ -562,6 +607,7 @@ class SessionPrepWindow(QMainWindow):
             for result in track.detector_results.values():
                 all_issues.extend(getattr(result, "issues", []))
             self._waveform.set_issues(all_issues)
+            self._update_overlay_menu(all_issues)
             # RMS overlay: pass window size so per-channel RMS is computed on demand
             flat_cfg = flatten_structured_config(self._config)
             win_ms = flat_cfg.get("window", 400)
@@ -573,6 +619,7 @@ class SessionPrepWindow(QMainWindow):
         else:
             self._waveform.set_audio(None, 44100)
             self._waveform.set_rms_data(0)
+            self._update_overlay_menu([])
             self._waveform.setVisible(False)
             self._play_btn.setEnabled(False)
             self._update_time_label(0)
@@ -585,6 +632,51 @@ class SessionPrepWindow(QMainWindow):
         # Enable and switch to File tab
         self._detail_tabs.setTabEnabled(_TAB_FILE, True)
         self._detail_tabs.setCurrentIndex(_TAB_FILE)
+
+    # ── Overlay dropdown ────────────────────────────────────────────────
+
+    def _update_overlay_menu(self, issues: list):
+        """Rebuild the overlay dropdown menu based on current track issues."""
+        self._overlay_menu.clear()
+        self._waveform.set_enabled_overlays(set())
+
+        if not issues:
+            self._overlay_btn.setText("Detector Overlays")
+            return
+
+        # Build {label: count} from issue list
+        label_counts: dict[str, int] = {}
+        for issue in issues:
+            label_counts[issue.label] = label_counts.get(issue.label, 0) + 1
+
+        # Build detector name map from session
+        det_names: dict[str, str] = {}
+        if self._session and hasattr(self._session, "detectors"):
+            for d in self._session.detectors:
+                det_names[d.id] = d.name
+
+        # Add a checkable action per detector that has issues
+        for label in sorted(label_counts, key=lambda lb: det_names.get(lb, lb).lower()):
+            name = det_names.get(label, label)
+            count = label_counts[label]
+            action = self._overlay_menu.addAction(f"{name} ({count})")
+            action.setCheckable(True)
+            action.setChecked(False)
+            action.setData(label)
+            action.toggled.connect(self._on_overlay_toggled)
+
+        self._overlay_btn.setText("Detector Overlays")
+
+    @Slot()
+    def _on_overlay_toggled(self):
+        """Collect checked overlay labels and update the waveform."""
+        checked = set()
+        for action in self._overlay_menu.actions():
+            if action.isChecked():
+                checked.add(action.data())
+        self._waveform.set_enabled_overlays(checked)
+        n = len(checked)
+        self._overlay_btn.setText(f"Detector Overlays ({n})" if n else "Detector Overlays")
 
     def _populate_table(self, session):
         """Update the track table with analysis results."""
