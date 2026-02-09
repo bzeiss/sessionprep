@@ -347,3 +347,112 @@ def subsonic_ratio_db(
         return float(-np.inf)
 
     return float(10.0 * np.log10(band / total))
+
+
+def subsonic_ratio_db_1d(
+    signal: np.ndarray,
+    samplerate: int,
+    cutoff_hz: float,
+    max_samples: int = 200000,
+) -> float:
+    """FFT-based subsonic energy ratio for a **1-D** signal (single channel).
+
+    Identical algorithm to :func:`subsonic_ratio_db` but requires a 1-D input
+    (no mono-down-mix step).
+    """
+    if signal.ndim != 1 or signal.size == 0 or samplerate <= 0:
+        return float(-np.inf)
+
+    x = signal.astype(np.float64)
+    step = max(1, int(x.size // max_samples))
+    x = x[::step]
+    if x.size < 8:
+        return float(-np.inf)
+
+    x = x - float(np.mean(x))
+    w = np.hanning(x.size)
+    X = np.fft.rfft(x * w)
+    p = np.abs(X) ** 2
+    freqs = np.fft.rfftfreq(x.size, d=float(step) / float(samplerate))
+
+    non_dc = freqs > 0.0
+    total = float(np.sum(p[non_dc]))
+    if total <= 0.0:
+        return float(-np.inf)
+
+    band = float(np.sum(p[(freqs > 0.0) & (freqs <= float(cutoff_hz))]))
+    if band <= 0.0:
+        return float(-np.inf)
+
+    return float(10.0 * np.log10(band / total))
+
+
+def subsonic_windowed_ratios(
+    signal: np.ndarray,
+    samplerate: int,
+    cutoff_hz: float,
+    window_ms: int = 500,
+    hop_ms: int | None = None,
+) -> list[tuple[int, int, float]]:
+    """Compute per-window subsonic energy ratios on a **1-D** signal.
+
+    Returns a list of ``(sample_start, sample_end, ratio_db)`` tuples, one per
+    analysis window.  Windows that contain too little data or where the total
+    power is negligible are assigned ``-inf``.
+
+    Parameters
+    ----------
+    signal : 1-D ndarray
+    samplerate : int
+    cutoff_hz : float
+    window_ms : int
+        Window length in milliseconds.  Must be large enough for reasonable
+        frequency resolution at *cutoff_hz*.
+    hop_ms : int or None
+        Hop between windows in milliseconds.  Defaults to *window_ms* (no
+        overlap).
+    """
+    if signal.ndim != 1 or signal.size == 0 or samplerate <= 0:
+        return []
+
+    win_samples = max(8, int(samplerate * window_ms / 1000))
+    hop_samples = int(samplerate * (hop_ms or window_ms) / 1000)
+    hop_samples = max(1, hop_samples)
+
+    results: list[tuple[int, int, float]] = []
+    pos = 0
+    n = signal.size
+    while pos < n:
+        end = min(pos + win_samples, n)
+        chunk = signal[pos:end].astype(np.float64)
+        if chunk.size < 8:
+            results.append((pos, end - 1, float(-np.inf)))
+            pos += hop_samples
+            continue
+
+        # Skip near-silent windows — their ratio is meaningless (noise floor)
+        rms = float(np.sqrt(np.mean(chunk ** 2)))
+        if rms < 1e-4:  # ≈ −80 dBFS
+            results.append((pos, end - 1, float(-np.inf)))
+            pos += hop_samples
+            continue
+
+        chunk = chunk - float(np.mean(chunk))
+        w = np.hanning(chunk.size)
+        X = np.fft.rfft(chunk * w)
+        p = np.abs(X) ** 2
+        freqs = np.fft.rfftfreq(chunk.size, d=1.0 / float(samplerate))
+
+        non_dc = freqs > 0.0
+        total = float(np.sum(p[non_dc]))
+        if total <= 0.0:
+            results.append((pos, end - 1, float(-np.inf)))
+            pos += hop_samples
+            continue
+
+        band = float(np.sum(p[(freqs > 0.0) & (freqs <= float(cutoff_hz))]))
+        ratio = float(10.0 * np.log10(band / total)) if band > 0.0 else float(-np.inf)
+        results.append((pos, end - 1, ratio))
+        pos += hop_samples
+
+    return results

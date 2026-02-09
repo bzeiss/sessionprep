@@ -232,23 +232,28 @@
     - Missing expected low end (e.g., "Bass" track with nothing below 100Hz)
   - Categorization: ATTENTION
 
-- [ ] **Subsonic detection: per-channel analysis** (Status: ❌) `NEW`
-  - Why: Current implementation sums to mono before FFT analysis. Subsonic content isolated to one channel (e.g., bad cable, ground loop on one side) could be diluted or missed.
-  - Current code:
-    ```python
-    mono = np.mean(data.astype(np.float64), axis=1)  # averages L/R
-    ```
-  - Fix: Analyze L and R independently for stereo files; report per-channel if only one side has subsonic issues.
-  - Categorization: Improves existing ATTENTION detector
+- [x] **Subsonic detection: per-channel analysis** (Status: ✅ Done)
+  - Each channel is analyzed independently for stereo/multi-channel files.
+  - If only one channel triggers, the issue is reported per-channel with the
+    specific channel index. Both channels triggering → whole-file issue.
+  - Per-channel ratios stored in `data["per_channel"]`.
+  - `subsonic_ratio_db_1d()` added to `audio.py` for single-channel analysis.
 
-- [ ] **Subsonic detection: windowed analysis option** (Status: ❌) `NEW`
-  - Why: Current implementation does a single whole-file FFT (downsampled to ~200k samples). Subsonic rumble isolated to specific sections (bass drops, HVAC bleed in quiet parts) may not trigger the threshold.
-  - Options:
-    1. Windowed analysis with percentile reporting (like RMS anchor)
-    2. Report time ranges where subsonic content exceeds threshold
-    3. Keep whole-file as default, add `--subsonic_windowed` for detailed analysis
-  - Documentation: At minimum, document current behavior (whole-file average, not sectional)
-  - Categorization: Enhancement to existing detector
+- [x] **Subsonic detection: windowed analysis option** (Status: ✅ Done)
+  - Default on via `subsonic_windowed` config (default: `true`).
+  - Splits each channel into windows (`subsonic_window_ms`, default 500 ms).
+  - Contiguous exceeding windows merged into regions with precise sample ranges.
+  - Regions reported as `IssueLocation` objects (visible on waveform overlays).
+  - Capped by `subsonic_max_regions` (default 20).
+  - `subsonic_windowed_ratios()` added to `audio.py`.
+  - Whole-file analysis always runs regardless of windowed setting.
+  - Three safeguards for accurate windowed results:
+    1. Silent-window gating (RMS < −80 dBFS → skip, prevents false positives
+       from floating-point noise in near-silent gaps).
+    2. Threshold relaxation (windowed threshold = configured − 6 dB, compensates
+       for reduced frequency resolution in short windows).
+    3. Whole-file fallback (if no windowed regions found but whole-file analysis
+       triggers ATTENTION, a full-file overlay is shown).
 
 - [ ] **Reverb/bleed estimation** (Status: ❌) `NEW`
   - Why: A "dry" vocal with 2 seconds of reverb tail affects processing decisions. A "kick" track with hi-hat bleed means I can't gate it cleanly.

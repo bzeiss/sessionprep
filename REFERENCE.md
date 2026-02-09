@@ -118,12 +118,59 @@ A detector earns its place if it meets at least one of these criteria:
 
 ### 2.10 Subsonic content
 
-- **What it means:** the file has significant energy below a cutoff frequency (default `30 Hz`).
-- **Why it matters:** subsonic rumble can eat headroom, trigger compressors/limiters, and cause translation issues.
-- **Controls:** `--subsonic_hz`, `--subsonic_warn_ratio_db`
+- **What it means:** the file has significant energy below a cutoff frequency
+  (default `30 Hz`).
+- **Why it matters:** subsonic rumble can eat headroom, trigger
+  compressors/limiters, and cause translation issues on smaller speakers.
+- **Controls:** `--subsonic_hz`, `--subsonic_warn_ratio_db`,
+  `subsonic_windowed`, `subsonic_window_ms`, `subsonic_max_regions`
 - **Categorization:**
   - CLEAN: `No significant subsonic content detected`.
   - ATTENTION: `Subsonic content` with per-file details (consider an HPF).
+
+**How detection works:**
+
+The detector computes an FFT-based energy ratio: `power below cutoff / total
+power` (excluding DC), expressed in dB. A ratio of −20 dB means 1 % of the
+signal's energy is subsonic. The configured threshold (default `−20 dB`)
+determines when this becomes an ATTENTION.
+
+**Per-channel analysis (always active for stereo+):**
+
+For multi-channel files, each channel is analyzed independently in addition to
+the combined (mono-downmixed) whole-file ratio. This catches subsonic issues
+isolated to one channel (bad cable, ground loop on one side) that a mono
+downmix would dilute. If only one channel exceeds the threshold, the issue is
+reported for that specific channel; if all channels exceed it, a whole-file
+issue is reported.
+
+**Windowed analysis (default: on):**
+
+When `subsonic_windowed` is enabled, the detector also splits each channel into
+short windows (default 500 ms via `subsonic_window_ms`) and computes the
+subsonic ratio per window. Contiguous windows exceeding the threshold are
+merged into regions with precise sample ranges, visible as waveform overlays.
+
+This serves two purposes:
+  1. **Localization** — shows *where* subsonic content is concentrated (bass
+     drops, HVAC bleed in quiet sections) instead of painting the entire file.
+  2. **Silent-window gating** — windows with RMS below −80 dBFS are
+     automatically skipped, preventing false positives from near-silent gaps
+     between notes where floating-point noise can produce misleading ratios.
+
+**Threshold relaxation for windowed analysis:**
+
+Individual 500 ms windows have less frequency resolution than the whole-file
+FFT (~22k samples vs ~200k). When the whole-file ratio is borderline (e.g.
+−18 dB vs −20 dB threshold), no single window may cross the same threshold
+even though the aggregate clearly does. To handle this, the windowed analysis
+uses a relaxed threshold (6 dB below the configured threshold). This ensures
+that windows where subsonic energy is concentrated still produce visible
+regions.
+
+If even the relaxed threshold produces no regions (very diffuse subsonic
+content), a whole-file overlay is shown as fallback — an ATTENTION result
+always has at least one visible issue.
 
 ### 2.11 Tail regions exceeded anchor
 
@@ -179,19 +226,78 @@ sparse events.
 ### 3.3 Anchor selection (percentile vs. max)
 
 **What it is:**
-  - The analysis chooses one representative RMS value ("anchor") from the window
-    distribution.
-  - Default is a percentile anchor (P95 via `--rms_percentile 95`), which tends
-    to represent loud sections while ignoring rare spikes.
-  - `--rms_anchor max` anchors to the single loudest window.
 
-**Why it matters:**
-  - This anchor becomes the reference level used in downstream reporting (and in
-    execute mode, gain decisions).
+The RMS analysis produces many short-time RMS values — one per window (default
+400 ms). After relative gating removes near-silent windows (see §3.4), we have
+a distribution of momentary RMS levels representing the "active" parts of the
+track. The **anchor** is the single representative value chosen from this
+distribution, used as the reference level for gain decisions and tail
+exceedance reporting.
+
+Two strategies are available:
+
+  - **`percentile`** (default, `--rms_anchor percentile`):
+    Takes the Nth percentile of the gated window distribution
+    (default P95 via `--rms_percentile 95`). This means 95 % of the active
+    windows are at or below the anchor — in practice, the anchor represents
+    "what the loud sections of this track typically sound like."
+
+  - **`max`**:
+    Takes the single loudest gated window. The anchor is the absolute peak of
+    the RMS distribution.
+
+**Why percentile is usually better than max:**
+
+Consider a vocal track with a consistent verse at −20 dBFS RMS, a loud chorus
+at −16 dBFS, and one isolated shout that hits −12 dBFS for a single 400 ms
+window:
+
+  - **Max anchor** = −12 dBFS. Gain is computed against that one shout, which
+    means the verse and chorus are treated as "quieter than the track's level."
+    The tail exceedance report is clean (nothing exceeds the max), but the gain
+    decision is driven by a moment that may not represent the working level of
+    the track at all.
+
+  - **P95 anchor** ≈ −16 dBFS (roughly the chorus level). Gain is computed
+    against the chorus — the part that matters most when feeding insert
+    processing. The shout shows up as a tail exceedance, flagging it for
+    manual clip-gain attention.
+
+In general, **max** is fragile because a single anomalous window (a breath
+pop, a drum bleed spike, a momentary feedback ring) can pull the anchor away
+from the track's true working level. **Percentile** is robust to these
+outliers while still tracking the loud sections faithfully.
+
+**When max is useful:**
+
+  - Very short, punchy files (a single hit, a sound effect) where there is no
+    meaningful "distribution" — every window matters equally.
+  - When you explicitly want the gain decision anchored to the absolute loudest
+    moment in the file.
+
+**How P95 works step by step:**
+
+  1. Compute momentary RMS for each 400 ms window across the file.
+  2. Gate: discard windows more than `--gate_relative_db` (default 40 dB) below
+     the loudest window. This removes silence and very quiet sections.
+  3. Sort the remaining "active" windows by RMS value.
+  4. Pick the value at the 95th percentile of that sorted list.
+  5. Convert to dBFS → this is `rms_anchor_db`.
+
+The anchor is then used to:
+  - Compute sustained-material gain: `gain = target_rms − anchor`
+    (capped by `target_peak − peak`).
+  - Identify tail exceedances: windows that exceed the anchor by more than
+    `--tail_min_exceed_db` are reported as regions needing manual attention.
 
 **Relevance for mix engineers:**
-  - Percentile anchoring usually reflects "the part of the track that matters"
-    instead of a momentary transient.
+  - Percentile anchoring reflects "the part of the track that matters" — the
+    loud sections that will drive your insert processing — rather than a
+    momentary spike that may not represent the track's working level.
+  - If you find that gain decisions are too conservative (track ends up quieter
+    than expected), lower the percentile (e.g., `--rms_percentile 90`).
+  - If gain decisions are too aggressive (track ends up too hot), raise the
+    percentile or switch to `--rms_anchor max`.
 
 ### 3.4 Relative gating for sparse tracks
 

@@ -348,15 +348,39 @@ You can control overlap behavior with `--group_overlap`:
 
 ### Windowing and anchor strategy
 
-The goal is a robust anchor that represents loud sections without being dominated
-by rare outliers. Percentile-based momentary RMS is the default; strict max-window
-anchoring is available via `--rms_anchor max`. Sustained gain decisions still
-respect the peak ceiling via `--target_peak`.
+Sustained-material gain is computed against a single representative RMS value
+called the **anchor**. Finding this anchor is a multi-step process:
 
-Relative gating (`--gate_relative_db`) is applied before computing the momentary
-anchor and tail report. This helps sparse tracks (FX hits, vocal doubles, breakdown
-elements) where most windows are near-silent; without gating, percentile anchors
-can be dominated by silence and produce extreme (and meaningless) tail exceedances.
+1. **Window**: Slice the track into overlapping short-time RMS windows (default
+   400 ms). Each window produces one momentary RMS value. Together they form a
+   distribution of momentary loudness across the file.
+
+2. **Gate**: Discard windows that are far below the loudest window
+   (`--gate_relative_db`, default 40 dB). This removes silence and very quiet
+   passages, leaving only "active" content. Critical for sparse tracks (FX
+   hits, vocal doubles, breakdown elements) where most windows are near-silent.
+
+3. **Select anchor**:
+   - **`percentile`** (default): Take the Nth percentile of the gated
+     distribution (default P95). This represents "what the loud sections
+     typically sound like" while ignoring rare spikes — a single anomalous
+     window (breath pop, drum bleed, feedback ring) cannot pull the anchor
+     away from the track's true working level.
+   - **`max`**: Take the single loudest gated window. Useful for very short
+     files (single hits, sound effects) but fragile for longer material.
+
+4. **Use**: The anchor drives the sustained gain calculation
+   (`gain = target_rms − anchor`, capped by `target_peak − peak`) and defines
+   the baseline for tail exceedance reporting.
+
+Why P95 is the default: most real-world tracks have occasional moments louder
+than their "working level" (a vocalist leaning in, a dynamic fill, an
+arrangement accent). Max anchoring treats those moments as the reference,
+under-gaining the rest of the file. Percentile anchoring tracks the chorus-
+level loudness that will actually drive your insert processing, and flags the
+louder moments as tail exceedances for manual clip-gain attention.
+
+See [REFERENCE.md §3.3](REFERENCE.md) for a detailed walkthrough with examples.
 
 ### Tail (significant exceedances)
 

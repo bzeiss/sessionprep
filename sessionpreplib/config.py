@@ -178,18 +178,40 @@ ANALYSIS_PARAMS: list[ParamSpec] = [
         key="rms_anchor", type=str, default="percentile",
         choices=["percentile", "max"],
         label="RMS anchor strategy",
-        description="Which statistic to use as the representative RMS level.",
+        description=(
+            "How to pick the representative RMS level from the distribution of "
+            "momentary RMS windows. 'percentile' (default) takes the Nth "
+            "percentile of gated windows — robust to outliers like breath pops "
+            "or bleed spikes, tracks the chorus-level loudness that drives your "
+            "insert processing. 'max' takes the single loudest window — useful "
+            "for very short files (single hits) but fragile for longer material "
+            "where one anomalous moment can skew the gain decision."
+        ),
     ),
     ParamSpec(
         key="rms_percentile", type=(int, float), default=95.0,
         min=0.0, max=100.0, min_exclusive=True, max_exclusive=True,
         label="RMS percentile",
-        description="Percentile of active RMS windows (used when anchor = percentile).",
+        description=(
+            "Which percentile of the gated RMS window distribution to use as "
+            "the anchor (only applies when anchor = percentile). P95 means "
+            "95% of active windows are at or below the anchor — in practice, "
+            "this represents 'what the loud sections typically sound like'. "
+            "Lower values (e.g. 90) produce a lower anchor and more aggressive "
+            "gain. Higher values approach the max window."
+        ),
     ),
     ParamSpec(
         key="gate_relative_db", type=(int, float), default=40.0, min=0.0,
         label="Relative gate (dB)",
-        description="RMS windows quieter than (peak − gate) are excluded.",
+        description=(
+            "RMS windows more than this many dB below the loudest window are "
+            "excluded before computing the anchor and tail statistics. This is "
+            "relative to the loudest window, not an absolute dBFS value. "
+            "Critical for sparse tracks (FX hits, vocal doubles) where most "
+            "windows are near-silent — without gating, the percentile anchor "
+            "would be dominated by silence."
+        ),
     ),
     ParamSpec(
         key="dbfs_convention", type=str, default="standard",

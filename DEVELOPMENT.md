@@ -530,7 +530,9 @@ Contains audio I/O, cached DSP helpers, and stateless DSP functions.
 **Stateless DSP functions:**
 
 - `detect_clipping_ranges(data, threshold_count, max_ranges) -> (int, list[tuple[int, int, int|None]])` — ranges are `(start, end, channel)`
-- `subsonic_ratio_db(data, samplerate, cutoff_hz, max_samples) -> float`
+- `subsonic_ratio_db(data, samplerate, cutoff_hz, max_samples) -> float` — multi-channel input (auto mono-downmix)
+- `subsonic_ratio_db_1d(signal, samplerate, cutoff_hz, max_samples) -> float` — single-channel (1-D) input
+- `subsonic_windowed_ratios(signal, samplerate, cutoff_hz, window_ms, hop_ms) -> list[tuple[int, int, float]]` — per-window subsonic ratios on 1-D signal
 - `linear_to_db(linear) -> float`
 - `db_to_linear(db) -> float`
 - `format_duration(samples, samplerate) -> str`
@@ -645,10 +647,15 @@ cycles.
 #### 6.3.8 SubsonicDetector (`subsonic.py`)
 
 - **ID:** `subsonic` | **Depends on:** `["silence"]`
-- **Config:** `subsonic_hz`, `subsonic_warn_ratio_db`
-- **Data:** `{"subsonic_ratio_db": float, "subsonic_warn": bool}`
-- **Issues:** Whole-file `IssueLocation` (all channels) when subsonic content detected
-- **Severity:** `ATTENTION` if exceeds threshold, `CLEAN` otherwise
+- **Config:** `subsonic_hz`, `subsonic_warn_ratio_db`, `subsonic_windowed` (default `True`), `subsonic_window_ms`, `subsonic_max_regions`
+- **Data:** `{"subsonic_ratio_db": float, "subsonic_warn": bool, "per_channel": {ch: {"ratio_db", "warn"}}, "windowed_regions"?: list[dict]}`
+- **Per-channel analysis** (always active for stereo+): Each channel is analyzed independently via `subsonic_ratio_db_1d`. If only one channel triggers the warning, the issue is reported per-channel with `channel` set to the offending channel index; if all channels trigger, a whole-file issue is reported.
+- **Windowed analysis** (default on via `subsonic_windowed`): Splits each channel into windows (`subsonic_window_ms`, default 500 ms), computes per-window subsonic ratios, and merges contiguous exceeding windows into regions. Regions are reported as `IssueLocation` objects with precise `sample_start`/`sample_end`. Capped by `subsonic_max_regions`. Three safeguards:
+  1. **Silent-window gating:** Windows with RMS below −80 dBFS are skipped (prevents false positives from floating-point noise in near-silent gaps).
+  2. **Threshold relaxation:** The windowed threshold is relaxed by 6 dB below the configured threshold. Short windows have less frequency resolution than the whole-file FFT, so borderline subsonic content that triggers the whole-file check may not reach the same threshold per-window.
+  3. **Whole-file fallback:** If windowed analysis produces no regions but the whole-file ratio still exceeds the threshold, a whole-file `IssueLocation` is emitted so ATTENTION always has at least one visible overlay.
+- **Issues:** Per-region `IssueLocation` in windowed mode; falls back to per-channel or whole-file span when no windowed regions are found
+- **Severity:** `ATTENTION` if exceeds threshold (whole-file or any channel), `CLEAN` otherwise
 - **Hint:** `"consider HPF ~{cutoff_hz} Hz"`
 
 #### 6.3.9 AudioClassifierDetector (`audio_classifier.py`)
