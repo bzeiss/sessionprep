@@ -18,16 +18,29 @@ SEVERITY_LABELS = {
 }
 
 
-def track_analysis_label(track) -> tuple[str, str]:
+def track_analysis_label(track, detectors=None) -> tuple[str, str]:
     """Return (label, color_hex) for the worst detector severity.
 
     Labels: ``"PROBLEMS"`` (red), ``"ATTENTION"`` (yellow), ``"OK"`` (green).
+
+    Parameters
+    ----------
+    track : TrackContext
+    detectors : list | None
+        If provided, each detector's ``is_relevant()`` is checked and
+        irrelevant results are excluded from the worst-severity calculation.
+        Pass ``session.detectors`` after processors have run.
     """
     if track.status != "OK":
         return "Error", COLORS["problems"]
 
+    det_map = {d.id: d for d in detectors} if detectors else {}
+
     worst = "clean"
-    for result in track.detector_results.values():
+    for det_id, result in track.detector_results.items():
+        det_inst = det_map.get(det_id)
+        if det_inst and hasattr(det_inst, 'is_relevant') and not det_inst.is_relevant(result, track):
+            continue
         sev = result.severity.value if hasattr(result.severity, "value") else str(result.severity)
         if SEVERITY_RANK.get(sev, 99) < SEVERITY_RANK.get(worst, 99):
             worst = sev

@@ -558,6 +558,14 @@ class SessionPrepWindow(QMainWindow):
         row = self._find_table_row(filename)
         if row < 0:
             return
+
+        # Re-evaluate severity now that processor results inform is_relevant()
+        dets = self._session.detectors if self._session else None
+        label, color = track_analysis_label(track, dets)
+        analysis_item = _SortableItem(label, _SEVERITY_SORT.get(label, 9))
+        analysis_item.setForeground(QColor(color))
+        self._track_table.setItem(row, 1, analysis_item)
+
         # Remove previous cell widgets
         self._track_table.removeCellWidget(row, 2)
         self._track_table.removeCellWidget(row, 3)
@@ -815,8 +823,9 @@ class SessionPrepWindow(QMainWindow):
             if not track:
                 continue
 
-            # Column 1: worst severity
-            label, color = track_analysis_label(track)
+            # Column 1: worst severity (with is_relevant filtering)
+            dets = session.detectors if hasattr(session, 'detectors') else None
+            label, color = track_analysis_label(track, dets)
             analysis_item = _SortableItem(label, _SEVERITY_SORT.get(label, 9))
             analysis_item.setForeground(QColor(color))
             self._track_table.setItem(row, 1, analysis_item)
