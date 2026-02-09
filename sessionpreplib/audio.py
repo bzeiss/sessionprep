@@ -430,9 +430,9 @@ def subsonic_windowed_ratios(
             pos += hop_samples
             continue
 
-        # Skip near-silent windows — their ratio is meaningless (noise floor)
+        # Quick gate: skip true digital silence
         rms = float(np.sqrt(np.mean(chunk ** 2)))
-        if rms < 1e-4:  # ≈ −80 dBFS
+        if rms < 1e-7:  # effectively zero
             results.append((pos, end - 1, float(-np.inf)))
             pos += hop_samples
             continue
@@ -452,6 +452,18 @@ def subsonic_windowed_ratios(
 
         band = float(np.sum(p[(freqs > 0.0) & (freqs <= float(cutoff_hz))]))
         ratio = float(10.0 * np.log10(band / total)) if band > 0.0 else float(-np.inf)
+
+        # Absolute subsonic power gate: even if the *ratio* is high, the
+        # subsonic energy must be loud enough to actually matter.  Amp hum
+        # and noise in quiet gaps can dominate the spectrum but their
+        # absolute level is too low to waste headroom.
+        # subsonic_abs_db = window_rms_db + ratio_db
+        if np.isfinite(ratio) and rms > 0:
+            rms_db = float(20.0 * np.log10(rms))
+            subsonic_abs_db = rms_db + ratio
+            if subsonic_abs_db < -40.0:  # subsonic power below −40 dBFS
+                ratio = float(-np.inf)
+
         results.append((pos, end - 1, ratio))
         pos += hop_samples
 

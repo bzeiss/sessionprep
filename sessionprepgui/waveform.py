@@ -67,8 +67,9 @@ class WaveformWidget(QWidget):
         self._rms_max_sample: int = -1
         self._rms_max_db: float = float('-inf')
         self._rms_max_amplitude: float = 0.0  # linear RMS at max window
-        # Mouse guide
-        self._mouse_y: int = -1  # -1 = not hovering
+        # Mouse guide (crosshair)
+        self._mouse_x: int = -1  # -1 = not hovering
+        self._mouse_y: int = -1
         self.setMinimumHeight(80)
         self.setMouseTracking(True)
 
@@ -367,8 +368,9 @@ class WaveformWidget(QWidget):
                 painter.setPen(QPen(QColor("#ffffff"), 1))
                 painter.drawLine(cursor_x, 0, cursor_x, h)
 
-        # --- Horizontal mouse guide with dBFS readout ---
+        # --- Crosshair mouse guide with dBFS readout ---
         if self._mouse_y >= 0 and nch > 0:
+            mx = self._mouse_x
             my = self._mouse_y
             mouse_ch = int(my / lane_h) if lane_h > 0 else 0
             mouse_ch = max(0, min(mouse_ch, nch - 1))
@@ -376,10 +378,14 @@ class WaveformWidget(QWidget):
             ch_mid_y = ch_y_off + lane_h / 2.0
             ch_scale = (lane_h / 2.0) * 0.85 * self._vscale
 
-            # Draw guide line across full width
+            # Draw horizontal guide line across full width
             guide_color = QColor(200, 200, 200, 60)
             painter.setPen(QPen(guide_color, 1, Qt.DashLine))
             painter.drawLine(0, my, w, my)
+
+            # Draw vertical guide line across full height
+            if mx >= 0:
+                painter.drawLine(mx, 0, mx, h)
 
             # Compute dBFS from mouse y position
             if ch_scale > 0:
@@ -572,8 +578,9 @@ class WaveformWidget(QWidget):
 
     def mouseMoveEvent(self, event):
         """Show tooltip when hovering over an issue region or marker."""
+        self._mouse_x = int(event.position().x())
         self._mouse_y = int(event.position().y())
-        self.update()  # repaint for horizontal guide
+        self.update()  # repaint for crosshair guide
 
         if self._total_samples <= 0:
             QToolTip.hideText()
@@ -632,9 +639,56 @@ class WaveformWidget(QWidget):
             QToolTip.hideText()
 
     def leaveEvent(self, event):
+        self._mouse_x = -1
         self._mouse_y = -1
         self.update()
         super().leaveEvent(event)
+
+    def wheelEvent(self, event):
+        """Mouse-wheel zoom: up = zoom in, down = zoom out, centered on pointer."""
+        if self._total_samples <= 0:
+            event.ignore()
+            return
+
+        delta = event.angleDelta().y()
+        if delta == 0:
+            event.ignore()
+            return
+
+        x0, draw_w = self._draw_area()
+        mx = event.position().x()
+        # Fraction of draw area where the mouse is (0.0 = left, 1.0 = right)
+        frac = max(0.0, min((mx - x0) / max(draw_w, 1), 1.0))
+        # Sample under the mouse pointer — must stay at this pixel after zoom
+        anchor_sample = self._x_to_sample(mx - x0, draw_w)
+        anchor_sample = max(self._view_start, min(anchor_sample, self._view_end))
+
+        view_len = self._view_end - self._view_start
+        if delta > 0:
+            # Zoom in
+            new_len = max(view_len * 2 // 3, 100)
+        else:
+            # Zoom out
+            new_len = min(view_len * 3 // 2, self._total_samples)
+
+        if new_len == view_len:
+            event.accept()
+            return
+
+        # Position the view so anchor_sample stays at the same pixel fraction
+        new_start = int(anchor_sample - frac * new_len)
+        new_end = new_start + new_len
+        if new_start < 0:
+            new_start = 0
+            new_end = min(new_len, self._total_samples)
+        if new_end > self._total_samples:
+            new_end = self._total_samples
+            new_start = max(0, new_end - new_len)
+        self._view_start = new_start
+        self._view_end = new_end
+        self._invalidate_peaks()
+        self.update()
+        event.accept()
 
     # ── Zoom / vertical-scale public API ──────────────────────────────────
 

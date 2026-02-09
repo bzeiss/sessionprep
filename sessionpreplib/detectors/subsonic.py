@@ -244,11 +244,16 @@ class SubsonicDetector(TrackDetector):
         contiguous regions.  Appends to *issues* and *detail_lines* in-place.
         Returns a list of region dicts for the result data.
 
-        The windowed threshold is relaxed by 6 dB compared to the whole-file
-        threshold.  Individual short windows have less frequency resolution
-        than the whole-file FFT, so borderline subsonic content that triggers
-        the whole-file check may not reach the same threshold per-window.
-        The relaxation ensures that localized regions are still reported.
+        Two-tier approach:
+        1. Try to find windows where the subsonic ratio exceeds a relaxed
+           threshold (6 dB below configured).  These are concentrated subsonic
+           problems.
+        2. If no ratio-based regions are found, fall back to marking all
+           windows that have *any* measurable signal (finite ratio — i.e. they
+           passed the absolute subsonic power gate in the DSP function).
+           Since the whole-file analysis already confirmed subsonic content,
+           these active-signal windows are where that content lives.  This
+           avoids painting silent gaps between notes.
         """
         _WINDOWED_RELAX_DB = 6.0
         windowed_threshold = threshold - _WINDOWED_RELAX_DB
@@ -257,6 +262,7 @@ class SubsonicDetector(TrackDetector):
         nch = track.channels
         max_reg = int(self.max_regions)
         all_regions: list[dict] = []
+        all_ratios: list[tuple[int | None, list[tuple[int, int, float]]]] = []
 
         # Analyze each channel (or mono)
         channels_to_analyze: list[tuple[int | None, np.ndarray]] = []
@@ -271,11 +277,25 @@ class SubsonicDetector(TrackDetector):
                 signal, track.samplerate, cutoff,
                 window_ms=int(self.window_ms),
             )
+            all_ratios.append((ch, ratios))
             # Merge contiguous exceeding windows into regions
             regions = self._merge_regions(ratios, windowed_threshold)
             for reg in regions:
                 reg["channel"] = ch
             all_regions.extend(regions)
+
+        # Fallback: if no ratio-based regions found, mark active-signal
+        # windows using an RMS envelope gate.  The whole-file analysis already
+        # confirmed subsonic content; the active regions are where it lives.
+        # This reliably separates musical content from amp noise/silence.
+        if not all_regions:
+            for ch, signal in channels_to_analyze:
+                regions = self._find_active_regions(
+                    signal, track.samplerate, int(self.window_ms),
+                )
+                for reg in regions:
+                    reg["channel"] = ch
+                all_regions.extend(regions)
 
         # Sort by worst ratio (descending) and cap
         all_regions.sort(key=lambda r: -r["max_ratio_db"])
@@ -327,6 +347,66 @@ class SubsonicDetector(TrackDetector):
                 else:
                     current["sample_end"] = s_end
                     current["max_ratio_db"] = max(current["max_ratio_db"], ratio)
+            else:
+                if current is not None:
+                    regions.append(current)
+                    current = None
+        if current is not None:
+            regions.append(current)
+        return regions
+
+    @staticmethod
+    def _find_active_regions(
+        signal: np.ndarray,
+        samplerate: int,
+        window_ms: int,
+        gate_db: float = 20.0,
+    ) -> list[dict]:
+        """Find contiguous regions where the signal is active (not noise/silence).
+
+        Computes per-window RMS, finds the loudest window, and marks windows
+        within *gate_db* of the loudest as active.  Returns merged regions in
+        the same dict format as :meth:`_merge_regions`.
+
+        This is the same relative-gating concept used by the RMS anchor
+        analysis — it reliably separates musical content from amp noise.
+        """
+        if signal.ndim != 1 or signal.size == 0:
+            return []
+
+        win_samples = max(8, int(samplerate * window_ms / 1000))
+        # Compute per-window RMS
+        windows: list[tuple[int, int, float]] = []
+        pos = 0
+        n = signal.size
+        while pos < n:
+            end = min(pos + win_samples, n)
+            chunk = signal[pos:end].astype(np.float64)
+            rms = float(np.sqrt(np.mean(chunk ** 2))) if chunk.size > 0 else 0.0
+            rms_db = float(20.0 * np.log10(rms)) if rms > 1e-10 else -200.0
+            windows.append((pos, end - 1, rms_db))
+            pos += win_samples
+
+        if not windows:
+            return []
+
+        max_rms_db = max(w[2] for w in windows)
+        gate_threshold = max_rms_db - gate_db
+
+        # Merge contiguous active windows
+        regions: list[dict] = []
+        current: dict | None = None
+        for s_start, s_end, rms_db in windows:
+            if rms_db >= gate_threshold:
+                if current is None:
+                    current = {
+                        "sample_start": s_start,
+                        "sample_end": s_end,
+                        "max_ratio_db": rms_db,  # store RMS as proxy
+                    }
+                else:
+                    current["sample_end"] = s_end
+                    current["max_ratio_db"] = max(current["max_ratio_db"], rms_db)
             else:
                 if current is not None:
                     regions.append(current)
