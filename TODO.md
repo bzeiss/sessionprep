@@ -400,3 +400,6 @@
 | ~~Default project directory pref~~ | — | ✅ Resolved (directory picker in General prefs, Open Folder starts there) |
 | ~~Real progress bar~~ | — | ✅ Resolved (determinate bar from EventBus events, async table row updates) |
 | ~~Tail exceedance relevance~~ | — | ✅ Resolved (is_relevant on TrackDetector, suppressed for peak/peak-limited methods) |
+| ~~Severity label vs is_relevant mismatch~~ | — | ✅ Resolved (track_analysis_label now accepts detectors list, checks is_relevant; re-evaluated in _on_track_planned) |
+| ~~Waveform keyboard shortcuts~~ | — | ✅ Resolved (Ctrl+wheel h-zoom, Ctrl+Shift+wheel v-zoom, Shift+wheel scroll, R/T zoom at guide position) |
+| ~~Vectorised waveform downsampling~~ | — | ✅ Resolved (_build_peaks and _build_rms_envelope use NumPy reshape + vectorised min/max/sqrt) |

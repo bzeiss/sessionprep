@@ -43,7 +43,7 @@ class WaveformWidget(QWidget):
         self._samplerate: int = 44100
         self._total_samples: int = 0
         self._cursor_sample: int = 0
-        self._peaks_cache: list[list[tuple[float, float]]] = []  # per channel
+        self._peaks_cache: list[tuple[np.ndarray, np.ndarray]] = []  # (mins, maxs) per channel
         self._cached_view: tuple[int, int, int] = (0, 0, 0)  # (width, view_start, view_end)
         self._issues: list = []  # list of IssueLocation objects
         self._view_start: int = 0
@@ -155,7 +155,12 @@ class WaveformWidget(QWidget):
         return self._MARGIN_LEFT, draw_w
 
     def _build_peaks(self, width: int):
-        """Downsample audio to peak envelope for the given pixel width, per channel."""
+        """Downsample audio to peak envelope for the given pixel width, per channel.
+
+        Stores ``(mins, maxs)`` NumPy arrays per channel.  The main path
+        uses ``reshape`` + vectorised ``min``/``max`` (two NumPy calls per
+        channel instead of *width* Python-level calls).
+        """
         if not self._channels or width <= 0:
             self._peaks_cache = []
             return
@@ -173,16 +178,46 @@ class WaveformWidget(QWidget):
         for ch_data in self._channels:
             view_data = ch_data[vs:ve]
             n = len(view_data)
-            peaks: list[tuple[float, float]] = []
-            for i in range(width):
-                start = i * n // width
-                end = min((i + 1) * n // width, n)
-                if start >= end:
-                    peaks.append((0.0, 0.0))
-                else:
-                    chunk = view_data[start:end]
-                    peaks.append((float(chunk.min()), float(chunk.max())))
-            self._peaks_cache.append(peaks)
+
+            if n == 0:
+                self._peaks_cache.append(
+                    (np.zeros(width), np.zeros(width)))
+                continue
+
+            if n >= width:
+                # Fast path: reshape → vectorised min/max
+                spb = n // width                    # samples per bin
+                n_use = spb * width
+                reshaped = view_data[:n_use].reshape(width, spb)
+                mins = reshaped.min(axis=1).astype(np.float64)
+                maxs = reshaped.max(axis=1).astype(np.float64)
+                # Fold leftover samples into the last bin
+                if n_use < n:
+                    tail = view_data[n_use:]
+                    mins[-1] = min(float(mins[-1]), float(tail.min()))
+                    maxs[-1] = max(float(maxs[-1]), float(tail.max()))
+            else:
+                # Extreme zoom: more pixels than samples
+                mins = np.zeros(width, dtype=np.float64)
+                maxs = np.zeros(width, dtype=np.float64)
+                starts = np.arange(width) * n // width
+                ends = np.minimum(
+                    (np.arange(width) + 1) * n // width, n)
+                valid = ends > starts
+                if valid.any():
+                    # Single-sample bins (the common sub-case)
+                    single = valid & ((ends - starts) == 1)
+                    if single.any():
+                        mins[single] = view_data[starts[single]]
+                        maxs[single] = view_data[starts[single]]
+                    # Rare multi-sample bins (near n ≈ width)
+                    multi = valid & ((ends - starts) > 1)
+                    for i in np.nonzero(multi)[0]:
+                        chunk = view_data[starts[i]:ends[i]]
+                        mins[i] = chunk.min()
+                        maxs[i] = chunk.max()
+
+            self._peaks_cache.append((mins, maxs))
         self._cached_view = cache_key
 
     def _sample_to_x(self, sample: int, w: int) -> int:
@@ -267,17 +302,16 @@ class WaveformWidget(QWidget):
             painter.setClipRect(x0, lane_top, draw_w, lane_bot - lane_top)
 
             color = QColor(self._CHANNEL_COLORS[ch % len(self._CHANNEL_COLORS)])
-            peaks = self._peaks_cache[ch]
+            mins, maxs = self._peaks_cache[ch]
 
             # Build closed envelope path: top edge L→R, bottom edge R→L
             top_path = QPainterPath()
             bot_path = QPainterPath()
-            top_path.moveTo(x0, mid_y - peaks[0][1] * scale)
-            bot_path.moveTo(x0, mid_y - peaks[0][0] * scale)
-            for x in range(1, len(peaks)):
-                lo, hi = peaks[x]
-                top_path.lineTo(x0 + x, mid_y - hi * scale)
-                bot_path.lineTo(x0 + x, mid_y - lo * scale)
+            top_path.moveTo(x0, mid_y - maxs[0] * scale)
+            bot_path.moveTo(x0, mid_y - mins[0] * scale)
+            for x in range(1, len(mins)):
+                top_path.lineTo(x0 + x, mid_y - maxs[x] * scale)
+                bot_path.lineTo(x0 + x, mid_y - mins[x] * scale)
 
             # Combine into a single closed shape
             envelope = QPainterPath(top_path)
@@ -918,8 +952,8 @@ class WaveformWidget(QWidget):
         then picks the max-RMS within each pixel's sample range.
 
         Results:
-            ``_rms_envelope``  – list (per channel) of list[float]
-            ``_rms_combined``  – list[float] (avg across channels)
+            ``_rms_envelope``  – list (per channel) of np.ndarray
+            ``_rms_combined``  – np.ndarray (avg across channels)
         """
         win = self._rms_window_samples
         if not self._channels or width <= 0 or win <= 0:
@@ -957,19 +991,37 @@ class WaveformWidget(QWidget):
             np.column_stack([wm[:min_len] for wm in ch_wms]), axis=1
         )
 
-        def _downsample(wm: np.ndarray) -> list[float]:
+        def _downsample(wm: np.ndarray) -> np.ndarray:
             n_means = len(wm)
-            env: list[float] = []
-            for i in range(width):
-                s_start = vs + i * view_len // width
-                s_end = vs + (i + 1) * view_len // width
-                idx_start = max(0, s_start - half_win)
-                idx_end = min(n_means, max(s_end - half_win, idx_start + 1))
-                if idx_start >= idx_end:
-                    env.append(0.0)
-                else:
-                    env.append(float(np.sqrt(np.max(wm[idx_start:idx_end]))))
-            return env
+            if n_means == 0:
+                return np.zeros(width)
+
+            # Map pixel bins into wm index space
+            pixel_edges = np.arange(width + 1)
+            s_edges = vs + pixel_edges * view_len // width
+            wm_edges = np.clip(s_edges - half_win, 0, n_means)
+            first = int(wm_edges[0])
+            last = int(wm_edges[-1])
+            last = max(last, first + 1)
+            last = min(last, n_means)
+            wm_slice = wm[first:last]
+            n_slice = len(wm_slice)
+
+            if n_slice >= width:
+                # Fast path: reshape → vectorised max
+                spb = n_slice // width
+                n_use = spb * width
+                reshaped = wm_slice[:n_use].reshape(width, spb)
+                result = np.sqrt(np.maximum(reshaped.max(axis=1), 0.0))
+                # Fold leftover into last bin
+                if n_use < n_slice:
+                    tail_max = float(wm_slice[n_use:].max())
+                    result[-1] = np.sqrt(max(float(result[-1]) ** 2, tail_max))
+                return result
+            else:
+                # More pixels than wm samples — map to nearest
+                local = np.clip(wm_edges[:-1] - first, 0, n_slice - 1).astype(np.intp)
+                return np.sqrt(np.maximum(wm_slice[local], 0.0))
 
         self._rms_envelope = [_downsample(wm) for wm in ch_wms]
         self._rms_combined = _downsample(combined_wm)

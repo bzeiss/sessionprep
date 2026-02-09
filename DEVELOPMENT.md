@@ -305,7 +305,7 @@ sessionprepgui/                  # GUI package (PySide6)
     helpers.py                   # esc(), track_analysis_label(), fmt_time(), severity maps
     worker.py                    # AnalyzeWorker (QThread)
     report.py                    # HTML report rendering (summary, fader table, track detail)
-    waveform.py                  # WaveformWidget (per-channel waveform, dB scale, markers, mouse guide)
+    waveform.py                  # WaveformWidget (per-channel waveform, dB scale, markers, mouse guide, keyboard shortcuts)
     playback.py                  # PlaybackController (sounddevice lifecycle + signals)
     preferences.py               # PreferencesDialog (tree nav + per-param pages, reset-to-default)
     mainwindow.py                # SessionPrepWindow (QMainWindow) + main()
@@ -1122,10 +1122,10 @@ group).
 | `__init__.py` | Exports `main()` |
 | `settings.py` | `load_config()`, `save_config()`, `config_path()` — persistent GUI preferences |
 | `theme.py` | `COLORS` dict, `FILE_COLOR_*` constants, dark palette + stylesheet |
-| `helpers.py` | `esc()`, `track_analysis_label()`, `fmt_time()`, severity maps |
+| `helpers.py` | `esc()`, `track_analysis_label(track, detectors=None)` (filters via `is_relevant()`), `fmt_time()`, severity maps |
 | `worker.py` | `AnalyzeWorker` (QThread) — runs pipeline in background thread, thread-safe progress counting (`threading.Lock`), emits real progress (`progress_value`), per-track completion signals (`track_analyzed`, `track_planned`) for incremental table updates |
 | `report.py` | HTML rendering: `render_summary_html()`, `render_fader_table_html()`, `render_track_detail_html()` |
-| `waveform.py` | `WaveformWidget` — per-channel waveform painting, dB measurement scale, peak/RMS markers (toggleable), crosshair mouse guide (horizontal + vertical), mouse-wheel zoom (centered on pointer), detector issue overlays (filtered by label), RMS L/R and RMS AVG envelopes (separate toggles), playback cursor, tooltips |
+| `waveform.py` | `WaveformWidget` — per-channel waveform painting (vectorised NumPy peak/RMS downsampling), dB measurement scale, peak/RMS markers (toggleable), crosshair mouse guide (horizontal + vertical), mouse-wheel zoom (Ctrl+wheel horizontal, Ctrl+Shift+wheel vertical, Shift+wheel scroll), keyboard shortcuts (R zoom in, T zoom out at guide position), detector issue overlays (filtered by label), RMS L/R and RMS AVG envelopes (separate toggles), playback cursor, tooltips |
 | `playback.py` | `PlaybackController` — sounddevice OutputStream lifecycle, QTimer cursor updates, signal-based API |
 | `preferences.py` | `PreferencesDialog` — tree-navigated settings dialog, ParamSpec-driven widgets, reset-to-default, HiDPI scaling |
 | `mainwindow.py` | `SessionPrepWindow` (QMainWindow) — orchestrator, UI layout, slot handlers |
