@@ -378,12 +378,22 @@ class PreferencesDialog(QDialog):
         parent_item = QTreeWidgetItem(self._tree, ["Detectors"])
         parent_item.setFont(0, QFont("", -1, QFont.Bold))
 
-        # Parent page: just a label
-        parent_page = QWidget()
-        pl = QVBoxLayout(parent_page)
-        pl.setContentsMargins(12, 12, 12, 12)
-        pl.addWidget(QLabel("Select a detector from the tree to configure it."))
-        pl.addStretch()
+        # Parent page: general detector display settings
+        det_gui_params = [
+            ParamSpec(
+                key="show_clean_detectors", type=bool, default=True,
+                label="Show clean detector results",
+                description=(
+                    "When enabled, detectors that found no issues (OK) are "
+                    "shown in the file detail view and summary. Disable to "
+                    "reduce clutter and focus on problems, warnings, and "
+                    "informational findings only."
+                ),
+            ),
+        ]
+        gui_values = self._config.get("gui", {})
+        parent_page, det_gui_widgets = _build_param_page(det_gui_params, gui_values)
+        self._widgets["_det_gui"] = det_gui_widgets
         self._add_page(parent_item, parent_page)
 
         det_sections = self._config.get("detectors", {})
@@ -427,6 +437,9 @@ class PreferencesDialog(QDialog):
         # General
         gui = self._config.setdefault("gui", {})
         for key, widget in self._general_widgets:
+            gui[key] = _read_widget(widget)
+        # Detector display settings (stored in gui section)
+        for key, widget in self._widgets.get("_det_gui", []):
             gui[key] = _read_widget(widget)
 
         # Analysis

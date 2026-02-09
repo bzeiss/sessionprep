@@ -535,12 +535,17 @@ class SessionPrepWindow(QMainWindow):
 
     # ── Report rendering ──────────────────────────────────────────────────
 
+    @property
+    def _show_clean(self) -> bool:
+        return self._config.get("gui", {}).get("show_clean_detectors", True)
+
     def _render_summary(self):
         """Render the diagnostic summary into the Summary tab."""
         if not self._summary or not self._session:
             return
         html = render_summary_html(
-            self._summary, show_hints=False, show_faders=False
+            self._summary, show_hints=False, show_faders=False,
+            show_clean=self._show_clean,
         )
         self._summary_view.setHtml(self._wrap_html(html))
 
@@ -573,7 +578,8 @@ class SessionPrepWindow(QMainWindow):
             self._update_time_label(0)
 
         # Detail HTML
-        html = render_track_detail_html(track, self._session)
+        html = render_track_detail_html(track, self._session,
+                                        show_clean=self._show_clean)
         self._file_report.setHtml(self._wrap_html(html))
 
         # Enable and switch to File tab
@@ -746,7 +752,8 @@ class SessionPrepWindow(QMainWindow):
 
         # Refresh File tab if this track is currently displayed
         if self._current_track and self._current_track.filename == fname:
-            html = render_track_detail_html(track, self._session)
+            html = render_track_detail_html(track, self._session,
+                                            show_clean=self._show_clean)
             self._file_report.setHtml(self._wrap_html(html))
 
     @Slot(float)
@@ -781,7 +788,8 @@ class SessionPrepWindow(QMainWindow):
 
         # Refresh File tab if this track is currently displayed
         if self._current_track and self._current_track.filename == fname:
-            html = render_track_detail_html(track, self._session)
+            html = render_track_detail_html(track, self._session,
+                                            show_clean=self._show_clean)
             self._file_report.setHtml(self._wrap_html(html))
 
     def _recalculate_processor(self, track):

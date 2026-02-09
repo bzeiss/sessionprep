@@ -15,6 +15,7 @@ def render_summary_html(
     *,
     show_hints: bool = True,
     show_faders: bool = True,
+    show_clean: bool = True,
 ) -> str:
     """Render a diagnostic summary dict as styled HTML."""
     problems = summary.get("problems") or []
@@ -78,9 +79,10 @@ def render_summary_html(
     parts.append(render_groups(information, COLORS["information"]))
 
     # Clean
-    parts.append(f'<div style="color:{COLORS["clean"]}; font-size:12pt; font-weight:bold; {section_spacing}">'
-                 f'\U0001f7e2 CLEAN</div>')
-    parts.append(render_groups(clean, COLORS["clean"]))
+    if show_clean:
+        parts.append(f'<div style="color:{COLORS["clean"]}; font-size:12pt; font-weight:bold; {section_spacing}">'
+                     f'\U0001f7e2 CLEAN</div>')
+        parts.append(render_groups(clean, COLORS["clean"]))
 
     # Normalization hints (optional)
     if show_hints:
@@ -166,7 +168,7 @@ def render_fader_table_html(session) -> str:
 # Per-track detail
 # ---------------------------------------------------------------------------
 
-def render_track_detail_html(track, session=None) -> str:
+def render_track_detail_html(track, session=None, *, show_clean: bool = True) -> str:
     """Render per-track detail as styled HTML.
 
     Parameters
@@ -176,6 +178,8 @@ def render_track_detail_html(track, session=None) -> str:
         If provided, configured detector/processor instances from the
         session are used for self-rendering via their ``render_html()``
         methods.
+    show_clean : bool
+        If False, detectors with severity ``clean`` are hidden.
     """
     parts = []
     parts.append(f'<div style="color:{COLORS["heading"]}; font-size:13pt; font-weight:bold;">'
@@ -221,7 +225,16 @@ def render_track_detail_html(track, session=None) -> str:
                 '<table cellpadding="3" cellspacing="2" '
                 'style="margin-left:8px; margin-top:4px;">'
             )
-            for det_id, result in track.detector_results.items():
+            _SEV_ORDER = {"problem": 0, "attention": 1, "information": 2, "info": 2, "clean": 3}
+            def _det_sort_key(item):
+                det_id, result = item
+                sev = result.severity.value if hasattr(result.severity, "value") else str(result.severity)
+                name = det_map[det_id].name if det_id in det_map else det_id
+                return (_SEV_ORDER.get(sev, 99), name.lower())
+            for det_id, result in sorted(track.detector_results.items(), key=_det_sort_key):
+                sev = result.severity.value if hasattr(result.severity, "value") else str(result.severity)
+                if not show_clean and sev == "clean":
+                    continue
                 det_inst = det_map.get(det_id)
                 if det_inst:
                     parts.append(det_inst.render_html(result))
