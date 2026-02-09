@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QSpinBox,
     QStackedWidget,
+    QStyle,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -358,6 +360,60 @@ class PreferencesDialog(QDialog):
         ]
         values = self._config.get("gui", {})
         page, widgets = _build_param_page(gui_params, values)
+
+        # --- Default project directory (custom row with browse button) ---
+        dir_spec = ParamSpec(
+            key="default_project_dir", type=str, default="",
+            label="Default project directory",
+            description=(
+                "When set, the Open Folder dialog starts in this directory. "
+                "Leave empty to use the system default."
+            ),
+        )
+        cur_dir = values.get("default_project_dir", "")
+        dir_edit = QLineEdit()
+        dir_edit.setText(str(cur_dir) if cur_dir else "")
+        dir_edit.setPlaceholderText("(system default)")
+        dir_edit._param_spec = dir_spec
+        dir_edit.setToolTip(_build_tooltip(dir_spec))
+
+        browse_btn = QPushButton("Browse\u2026")
+        browse_btn.setFixedWidth(80)
+        browse_btn.clicked.connect(
+            lambda: self._browse_project_dir(dir_edit))
+
+        clear_btn = QPushButton()
+        clear_btn.setIcon(page.style().standardIcon(
+            QStyle.StandardPixmap.SP_DialogCloseButton))
+        clear_btn.setFixedSize(26, 26)
+        clear_btn.setToolTip("Clear (use system default)")
+        clear_btn.clicked.connect(lambda: dir_edit.setText(""))
+
+        dir_row = QHBoxLayout()
+        dir_row.setContentsMargins(0, 0, 0, 0)
+        dir_row.setSpacing(8)
+        dir_name_label = QLabel(f"<b>{dir_spec.label}</b>")
+        dir_name_label.setToolTip(_build_tooltip(dir_spec))
+        dir_row.addWidget(dir_name_label, 0)
+        dir_row.addWidget(dir_edit, 1)
+        dir_row.addWidget(browse_btn, 0)
+        dir_row.addWidget(clear_btn, 0)
+
+        dir_box = QVBoxLayout()
+        dir_box.setContentsMargins(0, 0, 0, 0)
+        dir_box.setSpacing(2)
+        dir_box.addLayout(dir_row)
+        dir_sub = QLabel(_build_subtext(dir_spec))
+        dir_sub.setWordWrap(True)
+        dir_sub.setStyleSheet("color: #888; font-size: 9pt;")
+        dir_sub.setToolTip(_build_tooltip(dir_spec))
+        dir_box.addWidget(dir_sub)
+
+        # Insert before the stretch at the end of the page layout
+        outer = page.layout()
+        outer.insertLayout(outer.count() - 1, dir_box)
+
+        widgets.append(("default_project_dir", dir_edit))
         self._general_widgets = widgets
         self._add_page(item, page)
 
@@ -430,6 +486,18 @@ class PreferencesDialog(QDialog):
             page, widgets = _build_param_page(params, values)
             self._widgets[f"processors.{proc.id}"] = widgets
             self._add_page(child, page)
+
+    # ── Helpers ────────────────────────────────────────────────────────
+
+    def _browse_project_dir(self, line_edit: QLineEdit):
+        """Open a directory picker and set the result into *line_edit*."""
+        start = line_edit.text().strip() or ""
+        path = QFileDialog.getExistingDirectory(
+            self, "Select Default Project Directory", start,
+            QFileDialog.ShowDirsOnly,
+        )
+        if path:
+            line_edit.setText(path)
 
     # ── Save ──────────────────────────────────────────────────────────
 

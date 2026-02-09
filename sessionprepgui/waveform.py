@@ -599,19 +599,21 @@ class WaveformWidget(QWidget):
 
         tips: list[str] = []
 
-        # Marker tooltips (check pixel proximity)
+        # Marker tooltips (only when markers are visible)
         _MARKER_PX_TOL = 6
-        if self._peak_sample >= 0:
+        if self._show_markers and self._peak_sample >= 0:
             peak_px = x0 + self._sample_to_x(self._peak_sample, draw_w)
             if abs(mx - peak_px) <= _MARKER_PX_TOL:
                 tips.append(f"Peak: {self._peak_db:.1f} dBFS")
-        if self._rms_max_sample >= 0:
+        if self._show_markers and self._rms_max_sample >= 0:
             rms_px = x0 + self._sample_to_x(self._rms_max_sample, draw_w)
             if abs(mx - rms_px) <= _MARKER_PX_TOL:
                 tips.append(f"Max RMS: {self._rms_max_db:.1f} dBFS")
 
-        # Issue tooltips
+        # Issue tooltips (only for enabled overlays)
         for issue in self._issues:
+            if issue.label not in self._enabled_overlays:
+                continue
             s_start = issue.sample_start
             s_end = issue.sample_end if issue.sample_end is not None else s_start
             # Expand narrow regions by tolerance for easier hit-testing

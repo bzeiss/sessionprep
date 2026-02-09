@@ -439,8 +439,9 @@ class SessionPrepWindow(QMainWindow):
 
     @Slot()
     def _on_open_path(self):
+        start_dir = self._config.get("gui", {}).get("default_project_dir", "") or ""
         path = QFileDialog.getExistingDirectory(
-            self, "Select Session Directory", "",
+            self, "Select Session Directory", start_dir,
             QFileDialog.ShowDirsOnly,
         )
         if not path:
@@ -644,16 +645,33 @@ class SessionPrepWindow(QMainWindow):
             self._overlay_btn.setText("Detector Overlays")
             return
 
-        # Build {label: count} from issue list
-        label_counts: dict[str, int] = {}
-        for issue in issues:
-            label_counts[issue.label] = label_counts.get(issue.label, 0) + 1
-
-        # Build detector name map from session
+        # Build detector instance map from session
+        det_map: dict[str, object] = {}
         det_names: dict[str, str] = {}
         if self._session and hasattr(self._session, "detectors"):
             for d in self._session.detectors:
+                det_map[d.id] = d
                 det_names[d.id] = d.name
+
+        # Filter out issues from detectors that suppress themselves
+        track = self._current_track
+        filtered_issues = []
+        for issue in issues:
+            det = det_map.get(issue.label)
+            if det and track:
+                result = track.detector_results.get(issue.label)
+                if result and not det.is_relevant(result, track):
+                    continue
+            filtered_issues.append(issue)
+
+        if not filtered_issues:
+            self._overlay_btn.setText("Detector Overlays")
+            return
+
+        # Build {label: count} from filtered issue list
+        label_counts: dict[str, int] = {}
+        for issue in filtered_issues:
+            label_counts[issue.label] = label_counts.get(issue.label, 0) + 1
 
         # Add a checkable action per detector that has issues
         for label in sorted(label_counts, key=lambda lb: det_names.get(lb, lb).lower()):

@@ -41,6 +41,7 @@ CONFIG_FILENAME = "sessionprep.config.json"
 _GUI_DEFAULTS: dict[str, Any] = {
     "scale_factor": 1.0,
     "show_clean_detectors": False,
+    "default_project_dir": "",
 }
 
 
