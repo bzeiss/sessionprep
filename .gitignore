@@ -8,8 +8,23 @@ __pycache__/
 # Build artifacts
 build/
 dist/
+dist_pyinstaller/
+dist_nuitka/
+*.build/
+*.dist/
+sessionprep.build/
+sessionprep.dist/
 *.spec
 *.egg-info/
 
+# SessionPrep outputs
+processed/
+_originals/
+sessionprep.txt
+sessionprep.json
+sessionprep.config.json
+
 # uv
 .python-version
+
+nuitka-crash-report.xml

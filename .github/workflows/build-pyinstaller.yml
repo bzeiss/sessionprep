@@ -1,0 +1,41 @@
+name: Build (PyInstaller)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-13]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: "pyproject.toml"
+
+      - name: Install Dependencies
+        run: uv sync --all-extras
+
+      - name: Build with PyInstaller
+        # Using --onefile to produce single binaries where possible (standard distribution format)
+        run: uv run python build_pyinstaller.py --onefile all
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sessionprep-pyinstaller-${{ matrix.os }}
+          path: |
+            dist_pyinstaller/*
+            !dist_pyinstaller/*.build
+            !dist_pyinstaller/*.spec
+          if-no-files-found: error

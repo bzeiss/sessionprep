@@ -134,83 +134,99 @@ uv python pin 3.12
 
 ## 2. Building & Distribution
 
-### 2.1 Standalone Executable (PyInstaller)
+SessionPrep supports two build engines for creating standalone executables:
+**PyInstaller** (fast, standard) and **Nuitka** (high-performance, compiled).
+Both engines share a centralized configuration in `build_conf.py`.
 
-The `build_script.py` automates PyInstaller builds. It bundles the CLI and/or
-GUI, the library, and all dependencies into standalone executables that require
-no Python installation.
+### 2.1 Centralized Metadata (`build_conf.py`)
+
+All build metadata—target entry points, asset paths, platform-specific names,
+and library exclusion rules—is defined in `build_conf.py`. This ensures that
+both build engines produce consistent results and maintain strict dependency
+hygiene (e.g., ensuring `rich` is never bundled with the GUI).
+
+### 2.2 PyInstaller Build (Standard)
+
+The `build_pyinstaller.py` script automates PyInstaller builds. It produces
+executables that are relatively quick to build but have slightly slower
+startup (~2-3s) because they unpack to a temporary directory.
 
 ```bash
 # Build both CLI and GUI (onedir, default)
-uv run python build_script.py
+uv run python build_pyinstaller.py
 
 # Build both as single executables
-uv run python build_script.py --onefile
+uv run python build_pyinstaller.py --onefile
 
 # Build CLI only
-uv run python build_script.py --target cli
+uv run python build_pyinstaller.py cli
 
 # Build GUI only
-uv run python build_script.py --target gui
+uv run python build_pyinstaller.py gui
 
 # Clean previous build artifacts first
-uv run python build_script.py --clean --onefile
-
-# Clean only (no build)
-uv run python build_script.py --clean-only
+uv run python build_pyinstaller.py --clean gui
 ```
 
-The `--target` flag accepts `cli`, `gui`, or `all` (default). Each executable
-name includes a platform and architecture suffix:
+Output goes to `dist_pyinstaller/`.
 
-| Platform        | CLI onefile output                             | GUI onefile output                                 |
-|-----------------|------------------------------------------------|----------------------------------------------------|
-| Windows x64     | `dist/sessionprep-win-x64.exe`                 | `dist/sessionprep-gui-win-x64.exe`                 |
-| macOS ARM       | `dist/sessionprep-macos-arm64`                 | `dist/sessionprep-gui-macos-arm64`                 |
-| macOS Intel     | `dist/sessionprep-macos-x64`                   | `dist/sessionprep-gui-macos-x64`                   |
-| Linux x64       | `dist/sessionprep-linux-x64`                   | `dist/sessionprep-gui-linux-x64`                   |
+### 2.3 Nuitka Build (High-Performance)
 
-Output goes to `dist/`:
-- `--onefile` → single executable (~24 MB per target)
-- default (onedir) → `dist/<name>/` folder
+The `build_nuitka.py` script uses Nuitka to transpile the Python code into C
+and compile it to a native machine-code binary. This results in faster startup
+times and better performance, at the cost of significantly longer compilation
+times.
 
-The onefile build is simpler to distribute but has slower startup (~2-3s)
-because it unpacks to a temp directory. The onedir build starts instantly but
-requires distributing the entire folder.
-
-**Note:** On macOS, GUI builds always use onedir mode (producing a `.app`
-bundle that is automatically zipped) because `--onefile` + `--windowed` is
-deprecated in PyInstaller.
-
-**Prerequisites for GUI builds:** The GUI optional dependencies must be
-installed before building:
 ```bash
-uv sync --extra gui
+# Build both CLI and GUI
+uv run python build_nuitka.py all
+
+# Build CLI only
+uv run python build_nuitka.py cli
+
+# Build GUI only
+uv run python build_nuitka.py gui
+
+# Clean cache before building
+uv run python build_nuitka.py --clean all
 ```
-The build script checks for required packages and will abort with a helpful
-message if any are missing. On macOS, `Pillow` (included in dev dependencies)
-is used by PyInstaller to convert the `.png` icon to `.icns` format
-automatically.
 
-### 2.2 Python Package (pip-installable)
+Output goes to `dist_nuitka/`.
 
-The project is also installable as a standard Python package:
+### 2.4 Platform Suffixes
+
+Each executable name includes a platform and architecture suffix generated
+automatically by `build_conf.py`:
+
+| Platform        | CLI output filename                             | GUI output filename                                 |
+|-----------------|-------------------------------------------------|-----------------------------------------------------|
+| Windows x64     | `sessionprep-win-x64.exe`                       | `sessionprep-gui-win-x64.exe`                       |
+| macOS ARM       | `sessionprep-macos-arm64`                       | `sessionprep-gui-macos-arm64`                       |
+| macOS Intel     | `sessionprep-macos-x64`                         | `sessionprep-gui-macos-x64`                         |
+| Linux x64       | `sessionprep-linux-x64`                         | `sessionprep-gui-linux-x64`                         |
+| Linux ARM64     | `sessionprep-linux-arm64`                       | `sessionprep-gui-linux-arm64`                       |
+
+**Note on macOS:** GUI builds always use `onedir` mode (producing a `.app`
+bundle) because `--onefile` + `--windowed` is deprecated in both engines for
+macOS GUI apps. The scripts automatically zip the `.app` bundle for
+distribution.
+
+**Prerequisites for GUI builds:** GUI dependencies must be installed:
+`uv sync --extra gui`.
+
+### 2.5 Python Package (pip-installable)
+
+The project remains installable as a standard Python package:
 
 ```bash
 # Install from local source
 pip install .
 
-# Install in editable mode (for development)
-pip install -e .
-
 # Build a wheel
 uv build
 ```
 
-After installation, the CLI is available as:
-```bash
-sessionprep <directory> [options]
-```
+After installation, the CLI is available as `sessionprep`.
 
 ### 2.3 Version Management
 
@@ -232,17 +248,35 @@ Everything else reads from this one source:
 
 To bump the version, edit only `sessionpreplib/_version.py`.
 
-### 2.4 Project Structure for Packaging
+### 2.6 Linux Build Requirements
+
+To build on Linux (especially with Nuitka), you need a few system libraries
+installed:
+
+```bash
+# Debian / Ubuntu
+sudo apt install gcc patchelf ccache libatomic1
+
+# Fedora
+sudo dnf install gcc patchelf ccache libatomic-static
+```
+
+- **`gcc`**: The C compiler.
+- **`patchelf`**: Required by Nuitka to modify RPATHs in standalone binaries.
+- **`ccache`**: (Optional) Speeds up recompilation significantly.
+- **`libatomic`**: Required for linking NumPy extensions statically on some architectures/compilers.
+
+### 2.7 Project Structure for Packaging
 
 | File | Purpose |
 |------|--------|
 | `pyproject.toml` | Package metadata, dependencies, build config, entry points |
 | `uv.lock` | Lockfile for reproducible dependency resolution |
-| `build_script.py` | PyInstaller automation (standalone exe builds for CLI + GUI) |
+| `build_conf.py` | Shared build metadata and isolation rules (Source of Truth) |
+| `build_pyinstaller.py`| PyInstaller automation (standard builds) |
+| `build_nuitka.py` | Nuitka automation (optimized builds) |
 | `sessionprep.py` | Thin CLI entry point |
-| `sessionprep-gui.py` | Thin GUI entry point (delegates to `sessionprepgui` package) |
-| `.gitignore` | Excludes `.venv/`, `build/`, `dist/`, `*.spec`, `__pycache__/` |
-
+| `sessionprep-gui.py` | Thin GUI entry point |
 ### 2.5 Dependencies
 
 | Package | Type | Used by |

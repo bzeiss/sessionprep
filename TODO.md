@@ -341,7 +341,13 @@
   - README.md — overview, installation, quick start, usage examples
   - TECHNICAL.md — audio engineering background, normalization theory, signal chain
   - REFERENCE.md — detector reference, analysis metrics, processing details
-  - DEVELOPMENT.md — development setup, building, library architecture
+  - DEVELOPMENT.md — development setup, building (PyInstaller + Nuitka), library architecture
+
+- [x] **Build System Harmonization** (Status: ✅ Done)
+  - Centralized `build_conf.py` for shared metadata.
+  - Symmetric `build_pyinstaller.py` and `build_nuitka.py`.
+  - Consistent `dist_*/` directory structure.
+  - GitHub Actions for automated artifacts.
 
 ---
 
