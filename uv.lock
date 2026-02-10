@@ -414,7 +414,7 @@ gui = [
 [package.dev-dependencies]
 dev = [
     { name = "nuitka" },
-    { name = "patchelf" },
+    { name = "patchelf", marker = "sys_platform != 'win32'" },
     { name = "pillow" },
     { name = "pyinstaller" },
     { name = "pytest" },
@@ -436,7 +436,7 @@ provides-extras = ["cli", "gui"]
 [package.metadata.requires-dev]
 dev = [
     { name = "nuitka", specifier = ">=4.0" },
-    { name = "patchelf", specifier = ">=0.17.2.4" },
+    { name = "patchelf", marker = "sys_platform != 'win32'", specifier = ">=0.17.2.4" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "pyinstaller", specifier = ">=6.0" },
     { name = "pytest", specifier = ">=8.0" },
