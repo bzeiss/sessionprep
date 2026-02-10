@@ -21,6 +21,7 @@ from sessionpreplib.config import default_config, merge_configs
 from sessionpreplib.rendering import build_diagnostic_summary, render_diagnostic_summary_text
 from sessionpreplib.reports import generate_report, save_json, build_warnings
 from sessionpreplib.utils import protools_sort_key
+from sessionpreplib.audio import AUDIO_EXTENSIONS
 from sessionpreplib.events import EventBus
 
 console = Console()
@@ -42,7 +43,7 @@ def parse_arguments():
                         version=f"sessionprep {__version__}")
     
     parser.add_argument("directory", type=str, 
-                        help="Source directory containing .wav tracks")
+                        help="Source directory containing audio tracks (.wav, .aif, .aiff)")
     
     # Targets
     parser.add_argument("--target_rms", type=float, default=-18.0, 
@@ -323,11 +324,11 @@ def process_files():
     ) as progress:
         # Count files first for the progress bar
         wav_files = sorted(
-            [f for f in os.listdir(source_dir) if f.lower().endswith('.wav')],
+            [f for f in os.listdir(source_dir) if f.lower().endswith(AUDIO_EXTENSIONS)],
             key=protools_sort_key,
         )
         if not wav_files:
-            console.print(f"[red]No .wav files found in {source_dir}[/]")
+            console.print(f"[red]No audio files found in {source_dir}[/]")
             return
 
         task_id = progress.add_task("[cyan]Loading & analyzing tracks...", total=len(wav_files))

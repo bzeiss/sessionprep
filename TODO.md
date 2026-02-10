@@ -408,3 +408,4 @@
 | ~~Severity label vs is_relevant mismatch~~ | — | ✅ Resolved (track_analysis_label now accepts detectors list, checks is_relevant; re-evaluated in _on_track_planned) |
 | ~~Waveform keyboard shortcuts~~ | — | ✅ Resolved (Ctrl+wheel h-zoom, Ctrl+Shift+wheel v-zoom, Shift+wheel scroll, R/T zoom at guide position) |
 | ~~Vectorised waveform downsampling~~ | — | ✅ Resolved (_build_peaks and _build_rms_envelope use NumPy reshape + vectorised min/max/sqrt) |
+| ~~AIFF/AIF file support~~ | — | ✅ Resolved (AUDIO_EXTENSIONS constant in audio.py; pipeline, GUI, CLI all scan .wav/.aif/.aiff) |

@@ -54,6 +54,7 @@ from .preferences import PreferencesDialog
 from .report import render_summary_html, render_track_detail_html
 from .worker import AnalyzeWorker
 from .waveform import WaveformWidget, WaveformLoadWorker
+from sessionpreplib.audio import AUDIO_EXTENSIONS
 from .playback import PlaybackController
 
 _TAB_SUMMARY = 0
@@ -164,7 +165,7 @@ class SessionPrepWindow(QMainWindow):
 
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
-        self._status_bar.showMessage("Open a directory containing .wav files to begin.")
+        self._status_bar.showMessage("Open a directory containing .wav / .aif files to begin.")
 
     def _init_menus(self):
         file_menu = self.menuBar().addMenu("&File")
@@ -467,11 +468,11 @@ class SessionPrepWindow(QMainWindow):
         self._right_stack.setCurrentIndex(_PAGE_TABS)
 
         wav_files = sorted(
-            f for f in os.listdir(path) if f.lower().endswith(".wav")
+            f for f in os.listdir(path) if f.lower().endswith(AUDIO_EXTENSIONS)
         )
 
         if not wav_files:
-            self._status_bar.showMessage(f"No .wav files found in {path}")
+            self._status_bar.showMessage(f"No audio files found in {path}")
             self._analyze_action.setEnabled(False)
             return
 

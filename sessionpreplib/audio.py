@@ -9,6 +9,10 @@ import soundfile as sf
 from .models import TrackContext
 
 
+# Supported audio file extensions (lowercase, with leading dot)
+AUDIO_EXTENSIONS = ('.wav', '.aif', '.aiff')
+
+
 # ---------------------------------------------------------------------------
 # Conversion helpers
 # ---------------------------------------------------------------------------
@@ -58,7 +62,7 @@ _SUBTYPE_MAP = {
 
 
 def load_track(filepath: str) -> TrackContext:
-    """Read a WAV file and return a fully populated TrackContext."""
+    """Read an audio file (WAV/AIFF) and return a fully populated TrackContext."""
     info = sf.info(filepath)
     data, samplerate = sf.read(filepath, dtype='float64')
     channels = 1 if data.ndim == 1 else data.shape[1]

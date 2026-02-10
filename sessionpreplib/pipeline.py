@@ -16,7 +16,7 @@ from .models import (
 from .detector import TrackDetector, SessionDetector
 from .processor import AudioProcessor
 from .events import EventBus
-from .audio import load_track, write_track, format_duration, linear_to_db
+from .audio import load_track, write_track, format_duration, linear_to_db, AUDIO_EXTENSIONS
 from .config import ConfigError, validate_config
 from .utils import (
     protools_sort_key,
@@ -408,7 +408,7 @@ def load_session(
     Handles group assignment.
     """
     files = sorted(
-        [f for f in os.listdir(source_dir) if f.lower().endswith('.wav')],
+        [f for f in os.listdir(source_dir) if f.lower().endswith(AUDIO_EXTENSIONS)],
         key=protools_sort_key,
     )
 
