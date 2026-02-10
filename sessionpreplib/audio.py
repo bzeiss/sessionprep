@@ -7,6 +7,7 @@ import numpy as np
 import soundfile as sf
 
 from .models import TrackContext
+from .chunks import chunk_ids as _chunk_ids
 
 
 # Supported audio file extensions (lowercase, with leading dot)
@@ -66,6 +67,10 @@ def load_track(filepath: str) -> TrackContext:
     info = sf.info(filepath)
     data, samplerate = sf.read(filepath, dtype='float64')
     channels = 1 if data.ndim == 1 else data.shape[1]
+    try:
+        cids = _chunk_ids(filepath)
+    except (ValueError, OSError):
+        cids = []
     return TrackContext(
         filename=os.path.basename(filepath),
         filepath=filepath,
@@ -76,6 +81,7 @@ def load_track(filepath: str) -> TrackContext:
         bitdepth=_SUBTYPE_MAP.get(info.subtype, info.subtype),
         subtype=info.subtype,
         duration_sec=info.duration,
+        chunk_ids=cids,
     )
 
 

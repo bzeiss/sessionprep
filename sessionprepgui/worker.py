@@ -36,7 +36,7 @@ class AnalyzeWorker(QThread):
             session = load_session(self.source_dir, self.config, event_bus=event_bus)
 
             if not session.tracks:
-                self.error.emit("No .wav files found in directory.")
+                self.error.emit("No audio files found in directory.")
                 return
 
             self.progress.emit("Building pipeline\u2026")

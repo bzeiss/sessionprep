@@ -409,3 +409,5 @@
 | ~~Waveform keyboard shortcuts~~ | — | ✅ Resolved (Ctrl+wheel h-zoom, Ctrl+Shift+wheel v-zoom, Shift+wheel scroll, R/T zoom at guide position) |
 | ~~Vectorised waveform downsampling~~ | — | ✅ Resolved (_build_peaks and _build_rms_envelope use NumPy reshape + vectorised min/max/sqrt) |
 | ~~AIFF/AIF file support~~ | — | ✅ Resolved (AUDIO_EXTENSIONS constant in audio.py; pipeline, GUI, CLI all scan .wav/.aif/.aiff) |
+| ~~Channel count column~~ | — | ✅ Resolved (Ch column in track table, populated from TrackContext.channels) |
+| ~~WAV/AIFF chunk I/O~~ | — | ✅ Resolved (chunks.py: read_chunks, write_chunks, remove_chunks, chunk_ids; chunk metadata in file detail report) |

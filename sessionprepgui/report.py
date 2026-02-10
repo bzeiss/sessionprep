@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .theme import COLORS, FILE_COLOR_TRANSIENT, FILE_COLOR_SUSTAINED
 from .helpers import esc
+from sessionpreplib.chunks import read_chunks, STANDARD_CHUNKS, detect_origin
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +195,34 @@ def render_track_detail_html(track, session=None, *, show_clean: bool = True) ->
         dur = f"{track.duration_sec:.2f}s ({track.total_samples} samples)"
         parts.append(f'<div style="color:{COLORS["dim"]}; margin-top:6px;">{fmt}</div>')
         parts.append(f'<div style="color:{COLORS["dim"]};">{dur}</div>')
+
+        # Chunk metadata + DAW origin (single line)
+        try:
+            _container, all_chunks = read_chunks(track.filepath)
+            notable = [ch for ch in all_chunks if ch.id not in STANDARD_CHUNKS]
+        except (ValueError, OSError):
+            notable = []
+        origin = detect_origin(track.chunk_ids, track.filepath)
+        meta_parts = []
+        if notable:
+            def _fmt_size(n: int) -> str:
+                if n < 1024:
+                    return f"{n} B"
+                elif n < 1024 * 1024:
+                    return f"{n / 1024:.1f} KB"
+                return f"{n / (1024 * 1024):.1f} MB"
+            chunk_parts = [
+                f'{esc(ch.id.strip())} ({_fmt_size(ch.size)})'
+                for ch in notable
+            ]
+            meta_parts.append(f'Chunks: {" &middot; ".join(chunk_parts)}')
+        if origin:
+            meta_parts.append(f'Origin: {esc(origin)}')
+        if meta_parts:
+            parts.append(
+                f'<div style="color:{COLORS["dim"]}; margin-top:4px;">'
+                f'{" / ".join(meta_parts)}</div>'
+            )
 
         # Build lookup maps from session instances
         proc_map = {p.id: p for p in (session.processors if session else [])}

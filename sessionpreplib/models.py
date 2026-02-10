@@ -98,6 +98,7 @@ class TrackContext:
     processor_results: dict[str, ProcessorResult] = field(default_factory=dict)
     group: str | None = None
     classification_override: str | None = None
+    chunk_ids: list[str] = field(default_factory=list)
     _cache: dict[str, Any] = field(default_factory=dict, repr=False)
 
 
