@@ -1,11 +1,17 @@
 import os
 import sys
 import argparse
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
-from rich import box
+
+try:
+    from rich.console import Console
+    from rich.table import Table
+    from rich.panel import Panel
+    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
+    from rich import box
+except ImportError:
+    print("Error: The 'rich' library is required for the CLI but not installed.", file=sys.stderr)
+    print("Please install it with: pip install sessionprep[cli] (or uv sync --extra cli)", file=sys.stderr)
+    sys.exit(1)
 
 from sessionpreplib import __version__
 from sessionpreplib.pipeline import Pipeline, load_session

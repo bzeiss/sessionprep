@@ -93,11 +93,10 @@
 
 ### P3: Make `rich` an Optional Dependency
 
-- [ ] **Move `rich` from core to optional/CLI dependency**
-  - `rich` is in `[project.dependencies]` because `sessionprep.py` imports it unconditionally
-  - The library (`sessionpreplib`) has no dependency on `rich`
-  - Anyone using only `sessionpreplib` (GUI, web frontend) pulls in `rich` unnecessarily
-  - Fix: move to `[project.optional-dependencies].cli` and guard imports in `sessionprep.py`
+- [x] **Move `rich` from core to optional/CLI dependency** (Status: ✅ Done)
+  - `rich` is now in `[project.optional-dependencies].cli`
+  - `sessionprep.py` guards imports with a helpful error message
+  - GUI builds (Nuitka) explicitly exclude `rich` to save space
 
 ### P3: Group Gain as Processor
 

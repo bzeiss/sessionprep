@@ -9,7 +9,6 @@ requires-python = ">=3.13,<3.14"
 dependencies = [
     "numpy>=1.26",
     "soundfile>=0.12",
-    "rich>=13.0",
 ]
 
 [project.scripts]
@@ -32,6 +31,7 @@ testpaths = ["tests"]
 pythonpath = ["."]
 
 [project.optional-dependencies]
+cli = ["rich>=13.0"]
 gui = ["PySide6>=6.6", "sounddevice>=0.4"]
 
 [dependency-groups]
@@ -43,4 +43,5 @@ dev = [
     "nuitka>=4.0",
     "zstandard>=0.25.0",
     "patchelf>=0.17.2.4",
+    "rich>=13.0",
 ]

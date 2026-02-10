@@ -88,7 +88,7 @@ If you prefer to run the Python scripts directly:
 ```bash
 git clone <repo-url>
 cd sessionprep
-uv sync                                     # installs all dependencies (core + GUI)
+uv sync --all-extras                        # installs core + CLI + GUI dependencies
 uv run python sessionprep-gui.py             # run the GUI
 uv run python sessionprep.py /path/to/tracks # run the CLI
 ```
@@ -96,7 +96,7 @@ uv run python sessionprep.py /path/to/tracks # run the CLI
 Or manually with pip (if you don't use [uv](https://docs.astral.sh/uv/)):
 
 ```bash
-pip install numpy soundfile rich PySide6 sounddevice
+pip install .[cli,gui]                      # install with optional dependencies
 python sessionprep-gui.py                   # GUI
 python sessionprep.py /path/to/tracks       # CLI
 ```
