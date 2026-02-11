@@ -169,7 +169,8 @@ def render_fader_table_html(session) -> str:
 # Per-track detail
 # ---------------------------------------------------------------------------
 
-def render_track_detail_html(track, session=None, *, show_clean: bool = True) -> str:
+def render_track_detail_html(track, session=None, *, show_clean: bool = True,
+                             verbose: bool = False) -> str:
     """Render per-track detail as styled HTML.
 
     Parameters
@@ -181,6 +182,8 @@ def render_track_detail_html(track, session=None, *, show_clean: bool = True) ->
         methods.
     show_clean : bool
         If False, detectors with severity ``clean`` are hidden.
+    verbose : bool
+        When True, processors may include additional analytical detail.
     """
     parts = []
     parts.append(f'<div style="color:{COLORS["heading"]}; font-size:13pt; font-weight:bold;">'
@@ -234,7 +237,7 @@ def render_track_detail_html(track, session=None, *, show_clean: bool = True) ->
                          f'font-weight:bold;">{esc(proc_map[proc_id].name if proc_id in proc_map else proc_id)}</div>')
             proc_inst = proc_map.get(proc_id)
             if proc_inst:
-                parts.append(proc_inst.render_html(pr, track))
+                parts.append(proc_inst.render_html(pr, track, verbose=verbose))
             else:
                 # Fallback: basic display
                 parts.append(

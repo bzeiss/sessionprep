@@ -119,7 +119,7 @@ class BimodalNormalizeProcessor(AudioProcessor):
             },
         )
 
-    def render_html(self, result: ProcessorResult, track=None) -> str:
+    def render_html(self, result: ProcessorResult, track=None, *, verbose: bool = False) -> str:
         """Render the normalization analysis as summary line + comparison table."""
         d = result.data
         cls_text = result.classification or "Unknown"
@@ -229,7 +229,25 @@ class BimodalNormalizeProcessor(AudioProcessor):
             f'</table>'
         )
 
-        return summary + table
+        html = summary + table
+
+        # Verbose: append classification analysis metrics
+        if verbose and track is not None:
+            cr = track.detector_results.get("audio_classifier")
+            if cr is not None:
+                crest = cr.data.get("crest", 0.0)
+                decay = cr.data.get("decay_db", 0.0)
+                density = cr.data.get("density", 0.0)
+                html += (
+                    f'<div style="margin-left:8px; margin-top:6px;'
+                    f' color:#888888; font-size:9pt;">'
+                    f'Analysis: Crest {crest:.1f} dB'
+                    f' &middot; Decay {decay:.1f} dB'
+                    f' &middot; Density {density:.0%}'
+                    f'</div>'
+                )
+
+        return html
 
     def apply(self, track: TrackContext, result: ProcessorResult) -> np.ndarray:
         if result.classification == "Silent" or result.gain_db == 0.0:

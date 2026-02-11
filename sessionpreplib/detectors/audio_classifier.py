@@ -73,8 +73,9 @@ class AudioClassifierDetector(TrackDetector):
             "with decay acting as tiebreaker."
             "<br/><br/>"
             "<b>Results</b><br/>"
-            "<b>INFO</b> – Always reported with the crest factor, decay "
-            "rate, density, and resulting classification."
+            "Classification metrics (crest, decay, density) are shown "
+            "under Bimodal Normalization when report verbosity is set "
+            "to verbose."
             "<br/><br/>"
             "<b>Interpretation</b><br/>"
             "Sparse track (density below threshold) → Transient.<br/>"
@@ -85,6 +86,9 @@ class AudioClassifierDetector(TrackDetector):
             "The classification determines which normalization "
             "strategy is applied during processing."
         )
+
+    def is_relevant(self, result: DetectorResult, track: TrackContext | None = None) -> bool:
+        return False
 
     def configure(self, config):
         self.window_ms = config.get("window", 400)

@@ -357,6 +357,16 @@ class PreferencesDialog(QDialog):
                 label="HiDPI scale factor",
                 description="Scale factor for the application UI. Requires a restart to take effect.",
             ),
+            ParamSpec(
+                key="report_verbosity", type=str, default="normal",
+                choices=["normal", "verbose"],
+                label="Report verbosity",
+                description=(
+                    "Controls the level of detail shown in track reports. "
+                    "Verbose mode includes additional analytical data such as "
+                    "classification metrics."
+                ),
+            ),
         ]
         values = self._config.get("gui", {})
         page, widgets = _build_param_page(gui_params, values)

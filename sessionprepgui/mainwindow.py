@@ -706,6 +706,10 @@ class SessionPrepWindow(QMainWindow):
     def _show_clean(self) -> bool:
         return self._config.get("gui", {}).get("show_clean_detectors", True)
 
+    @property
+    def _verbose(self) -> bool:
+        return self._config.get("gui", {}).get("report_verbosity", "normal") == "verbose"
+
     def _render_summary(self):
         """Render the diagnostic summary into the Summary tab."""
         if not self._summary or not self._session:
@@ -729,7 +733,8 @@ class SessionPrepWindow(QMainWindow):
 
         # Show HTML report immediately
         html = render_track_detail_html(track, self._session,
-                                        show_clean=self._show_clean)
+                                        show_clean=self._show_clean,
+                                        verbose=self._verbose)
         self._file_report.setHtml(self._wrap_html(html))
 
         # Enable and switch to File tab before heavy work
@@ -1027,7 +1032,8 @@ class SessionPrepWindow(QMainWindow):
         # Refresh File tab and overlay menu if this track is currently displayed
         if self._current_track and self._current_track.filename == fname:
             html = render_track_detail_html(track, self._session,
-                                            show_clean=self._show_clean)
+                                            show_clean=self._show_clean,
+                                            verbose=self._verbose)
             self._file_report.setHtml(self._wrap_html(html))
             # Rebuild overlay menu with updated is_relevant checks
             all_issues = []
@@ -1068,7 +1074,8 @@ class SessionPrepWindow(QMainWindow):
         # Refresh File tab if this track is currently displayed
         if self._current_track and self._current_track.filename == fname:
             html = render_track_detail_html(track, self._session,
-                                            show_clean=self._show_clean)
+                                            show_clean=self._show_clean,
+                                            verbose=self._verbose)
             self._file_report.setHtml(self._wrap_html(html))
 
     def _recalculate_processor(self, track):
