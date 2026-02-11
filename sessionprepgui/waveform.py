@@ -122,6 +122,7 @@ class WaveformWidget(QWidget):
     }
     _MARGIN_LEFT = 30
     _MARGIN_RIGHT = 30
+    _MARGIN_BOTTOM = 20
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -380,10 +381,11 @@ class WaveformWidget(QWidget):
             self._build_rms_envelope(draw_w)
 
         nch = self._num_channels
-        lane_h = h / nch
+        draw_h = h - self._MARGIN_BOTTOM
+        lane_h = draw_h / nch
 
         # --- dB scale and grid lines ---
-        self._draw_db_scale(painter, x0, draw_w, h, nch, lane_h)
+        self._draw_db_scale(painter, x0, draw_w, draw_h, nch, lane_h)
 
         # --- Draw issue overlays (behind waveform) ---
         for issue in self._issues:
@@ -403,7 +405,7 @@ class WaveformWidget(QWidget):
             if issue.channel is None:
                 # Spans all channels
                 ry = 0
-                rh = h
+                rh = int(draw_h)
             else:
                 ch = issue.channel
                 if ch < nch:
@@ -520,14 +522,17 @@ class WaveformWidget(QWidget):
 
         # --- Peak and RMS max markers ---
         if self._show_markers:
-            self._draw_markers(painter, x0, draw_w, h, nch, lane_h)
+            self._draw_markers(painter, x0, draw_w, draw_h, nch, lane_h)
+
+        # --- Time scale ---
+        self._draw_time_scale(painter, x0, draw_w, draw_h)
 
         # Playback cursor (spans all channels)
         if self._total_samples > 0:
             cursor_x = x0 + self._sample_to_x(self._cursor_sample, draw_w)
             if x0 <= cursor_x <= x0 + draw_w:
                 painter.setPen(QPen(QColor("#ffffff"), 1))
-                painter.drawLine(cursor_x, 0, cursor_x, h)
+                painter.drawLine(cursor_x, 0, cursor_x, int(draw_h))
 
         # --- Crosshair mouse guide with dBFS readout ---
         if self._mouse_y >= 0 and nch > 0:
@@ -544,9 +549,9 @@ class WaveformWidget(QWidget):
             painter.setPen(QPen(guide_color, 1, Qt.DashLine))
             painter.drawLine(0, my, w, my)
 
-            # Draw vertical guide line across full height
+            # Draw vertical guide line across waveform area
             if mx >= 0:
-                painter.drawLine(mx, 0, mx, h)
+                painter.drawLine(mx, 0, mx, int(draw_h))
 
             # Compute dBFS from mouse y position
             if ch_scale > 0:
@@ -670,6 +675,99 @@ class WaveformWidget(QWidget):
 
             painter.setClipping(False)
 
+    def _draw_time_scale(self, painter, x0, draw_w, draw_h):
+        """Draw horizontal time axis with adaptive tick labels below the waveform."""
+        if self._samplerate <= 0 or draw_w <= 0:
+            return
+
+        view_start_sec = self._view_start / self._samplerate
+        view_end_sec = self._view_end / self._samplerate
+        visible_dur = view_end_sec - view_start_sec
+        if visible_dur <= 0:
+            return
+
+        _NICE_INTERVALS = [
+            0.001, 0.002, 0.005,
+            0.01, 0.02, 0.05,
+            0.1, 0.2, 0.5,
+            1, 2, 5, 10, 15, 30,
+            60, 120, 300, 600, 1800, 3600,
+        ]
+        _MIN_TICK_PX = 60
+
+        # Pick smallest nice interval that keeps ticks ≥ _MIN_TICK_PX apart
+        interval = _NICE_INTERVALS[-1]
+        for ni in _NICE_INTERVALS:
+            px_per_tick = ni / visible_dur * draw_w
+            if px_per_tick >= _MIN_TICK_PX:
+                interval = ni
+                break
+
+        # Determine label format based on tick interval
+        if interval >= 1.0:
+            def _fmt(t):
+                m = int(t) // 60
+                s = int(t) % 60
+                return f"{m}:{s:02d}"
+        elif interval >= 0.1:
+            def _fmt(t):
+                m = int(t) // 60
+                s = t - m * 60
+                return f"{m}:{s:04.1f}"
+        elif interval >= 0.01:
+            def _fmt(t):
+                m = int(t) // 60
+                s = t - m * 60
+                return f"{m}:{s:05.2f}"
+        else:
+            def _fmt(t):
+                m = int(t) // 60
+                s = t - m * 60
+                return f"{m}:{s:06.3f}"
+
+        scale_font = QFont("Consolas", 7)
+        painter.setFont(scale_font)
+        fm = painter.fontMetrics()
+
+        label_color = QColor(COLORS["dim"])
+        tick_pen = QPen(label_color, 1)
+
+        grid_color = QColor(COLORS["accent"])
+        grid_color.setAlpha(25)
+        grid_pen = QPen(grid_color, 1, Qt.DotLine)
+
+        # First tick at or after view_start, aligned to interval
+        first_tick = (int(view_start_sec / interval) + 1) * interval
+        if abs(view_start_sec / interval - round(view_start_sec / interval)) < 1e-9:
+            first_tick = round(view_start_sec / interval) * interval
+
+        t = first_tick
+        bottom_y = int(draw_h)
+        while t <= view_end_sec + interval * 0.01:
+            frac = (t - view_start_sec) / visible_dur
+            px = x0 + int(frac * draw_w)
+
+            if px < x0 or px > x0 + draw_w:
+                t += interval
+                continue
+
+            # Vertical grid line through waveform area
+            painter.setPen(grid_pen)
+            painter.drawLine(px, 0, px, bottom_y)
+
+            # Tick mark
+            painter.setPen(tick_pen)
+            painter.drawLine(px, bottom_y, px, bottom_y + 4)
+
+            # Label
+            label = _fmt(t)
+            tw = fm.horizontalAdvance(label)
+            lx = px - tw // 2
+            ly = bottom_y + 4 + fm.ascent()
+            painter.drawText(int(lx), int(ly), label)
+
+            t += interval
+
     def _ensure_peak_computed(self):
         """Lazily compute peak sample position on first demand."""
         if not self._peak_dirty:
@@ -712,7 +810,7 @@ class WaveformWidget(QWidget):
         if self._peak_sample >= 0:
             px = x0 + self._sample_to_x(self._peak_sample, draw_w)
             if x0 <= px <= x0 + draw_w:
-                peak_color = QColor(180, 50, 220, 240)
+                peak_color = QColor(180, 50, 220, 250)
                 painter.setPen(QPen(peak_color, 1))
                 painter.drawLine(px, 0, px, h)
                 painter.setFont(marker_font)
@@ -735,7 +833,7 @@ class WaveformWidget(QWidget):
         if self._rms_max_sample >= 0:
             rx = x0 + self._sample_to_x(self._rms_max_sample, draw_w)
             if x0 <= rx <= x0 + draw_w:
-                rms_color = QColor(40, 160, 220, 240)
+                rms_color = QColor(40, 160, 220, 250)
                 painter.setPen(QPen(rms_color, 1))
                 painter.drawLine(rx, 0, rx, h)
                 painter.setFont(marker_font)
@@ -783,10 +881,11 @@ class WaveformWidget(QWidget):
 
         x0, draw_w = self._draw_area()
         h = self.height()
+        draw_h = h - self._MARGIN_BOTTOM
         mx = event.position().x()
         my = event.position().y()
         nch = self._num_channels
-        lane_h = h / nch if nch > 0 else h
+        lane_h = draw_h / nch if nch > 0 else draw_h
 
         # Convert mouse x to sample position
         sample = self._x_to_sample(mx - x0, draw_w)
