@@ -20,13 +20,29 @@ class SubsonicDetector(TrackDetector):
                 key="subsonic_hz", type=(int, float), default=30.0,
                 min=0.0, min_exclusive=True,
                 label="Subsonic cutoff frequency (Hz)",
-                description="Frequency below which energy is considered subsonic.",
+                description=(
+                    "Frequencies below this are checked for unwanted energy. "
+                    "30 Hz is a common high-pass filter point for most "
+                    "instruments and a standard cutoff for subsonic content."
+                ),
             ),
             ParamSpec(
                 key="subsonic_warn_ratio_db", type=(int, float), default=-20.0,
                 max=0.0,
-                label="Subsonic warning ratio (dB)",
-                description="Subsonic-to-total ratio above this triggers a warning.",
+                label="Subsonic sensitivity (dB)",
+                description=(
+                    "How much subsonic energy relative to the overall signal "
+                    "triggers a warning. Lower values are more sensitive. "
+                    "At the default (\u221220 dB), the detector flags tracks where "
+                    "subsonic content accounts for roughly 1% or more of "
+                    "total energy. On a single track this is barely "
+                    "noticeable, but when 8\u201312 tracks with correlated "
+                    "subsonic content (e.g. drum mics picking up room "
+                    "rumble) are summed, it can cause audible low-end "
+                    "buildup and wasted headroom on the mix bus. "
+                    "Use \u221225 for stricter checking, or \u221215 to only "
+                    "flag severe cases."
+                ),
             ),
             ParamSpec(
                 key="subsonic_windowed", type=bool, default=True,
@@ -59,9 +75,26 @@ class SubsonicDetector(TrackDetector):
     def html_help(cls) -> str:
         return (
             "<b>Description</b><br/>"
-            "Measures the energy ratio of sub-bass content below a configurable "
-            "cutoff frequency relative to the total signal energy."
+            "Checks for unwanted low-frequency energy below the cutoff "
+            "frequency. This energy is usually inaudible but wastes "
+            "headroom, can cause speaker excursion, and may introduce "
+            "rumble on full-range playback systems."
             "<br/><br/>"
+            "<b>Sensitivity guide</b><br/>"
+            "The sensitivity value controls how much subsonic energy "
+            "(relative to the overall signal) triggers a warning:<br/>"
+            "<table style='margin:4px 0; font-size:8pt;'>"
+            "<tr><td><b>\u221210 dB</b></td><td style='padding-left:8px;'>"
+            "Severe \u2014 ~10% of energy, audible rumble</td></tr>"
+            "<tr><td><b>\u221215 dB</b></td><td style='padding-left:8px;'>"
+            "Significant \u2014 ~3% of energy, clearly worth filtering</td></tr>"
+            "<tr><td><b>\u221220 dB</b></td><td style='padding-left:8px;'>"
+            "Default \u2014 ~1%, small per track but adds up when "
+            "summing many tracks</td></tr>"
+            "<tr><td><b>\u221225 dB</b></td><td style='padding-left:8px;'>"
+            "Strict \u2014 ~0.3%, for critical mastering work</td></tr>"
+            "</table>"
+            "<br/>"
             "<b>Per-channel analysis</b><br/>"
             "For stereo and multi-channel files, each channel is analyzed "
             "independently. If only one channel triggers the warning, the issue "
@@ -75,13 +108,13 @@ class SubsonicDetector(TrackDetector):
             "quiet sections) that a whole-file average might miss."
             "<br/><br/>"
             "<b>Results</b><br/>"
-            "<b>OK</b> – Subsonic energy is below the warning threshold.<br/>"
-            "<b>ATTENTION</b> – Significant subsonic energy detected (ratio in dB)."
+            "<b>OK</b> \u2013 Subsonic energy is below the sensitivity threshold.<br/>"
+            "<b>ATTENTION</b> \u2013 Significant subsonic energy detected."
             "<br/><br/>"
             "<b>Interpretation</b><br/>"
-            "Excessive subsonic energy wastes headroom and can cause speaker "
-            "excursion or rumble issues during playback. Consider applying a "
-            "high-pass filter at the cutoff frequency."
+            "Consider applying a high-pass filter at or near the cutoff "
+            "frequency. Common practice is to HPF most tracks at 30\u201340 Hz "
+            "to clean up the low end without affecting the audible bass."
         )
 
     def configure(self, config):
