@@ -15,7 +15,7 @@ class SubsonicDetector(TrackDetector):
 
     @classmethod
     def config_params(cls) -> list[ParamSpec]:
-        return [
+        return super().config_params() + [
             ParamSpec(
                 key="subsonic_hz", type=(int, float), default=30.0,
                 min=0.0, min_exclusive=True,
@@ -85,6 +85,7 @@ class SubsonicDetector(TrackDetector):
         )
 
     def configure(self, config):
+        super().configure(config)
         self.cutoff_hz = config.get("subsonic_hz", 30.0)
         self.warn_ratio_db = config.get("subsonic_warn_ratio_db", -20.0)
         self.windowed = config.get("subsonic_windowed", True)

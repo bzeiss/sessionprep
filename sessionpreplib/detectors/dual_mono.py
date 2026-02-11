@@ -15,7 +15,7 @@ class DualMonoDetector(TrackDetector):
 
     @classmethod
     def config_params(cls) -> list[ParamSpec]:
-        return [
+        return super().config_params() + [
             ParamSpec(
                 key="dual_mono_eps", type=(int, float), default=1e-5,
                 min=0.0, min_exclusive=True,
@@ -43,6 +43,7 @@ class DualMonoDetector(TrackDetector):
         )
 
     def configure(self, config):
+        super().configure(config)
         self.eps = config.get("dual_mono_eps", 1e-5)
 
     def analyze(self, track: TrackContext) -> DetectorResult:

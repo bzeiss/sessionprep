@@ -15,7 +15,7 @@ class OneSidedSilenceDetector(TrackDetector):
 
     @classmethod
     def config_params(cls) -> list[ParamSpec]:
-        return [
+        return super().config_params() + [
             ParamSpec(
                 key="one_sided_silence_db", type=(int, float), default=-80.0,
                 max=0.0,
@@ -43,6 +43,7 @@ class OneSidedSilenceDetector(TrackDetector):
         )
 
     def configure(self, config):
+        super().configure(config)
         self.threshold_db = config.get("one_sided_silence_db", -80.0)
         self._db_offset = dbfs_offset(config)
 

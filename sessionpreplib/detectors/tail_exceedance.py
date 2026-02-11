@@ -22,7 +22,7 @@ class TailExceedanceDetector(TrackDetector):
 
     @classmethod
     def config_params(cls) -> list[ParamSpec]:
-        return [
+        return super().config_params() + [
             ParamSpec(
                 key="tail_min_exceed_db", type=(int, float), default=3.0,
                 min=0.0, min_exclusive=True,
@@ -75,6 +75,7 @@ class TailExceedanceDetector(TrackDetector):
         return True
 
     def configure(self, config):
+        super().configure(config)
         self.window_ms = config.get("window", 400)
         self.stereo_mode = config.get("stereo_mode", "avg")
         self.rms_anchor_mode = config.get("rms_anchor", "percentile")

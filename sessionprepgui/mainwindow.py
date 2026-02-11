@@ -962,15 +962,18 @@ class SessionPrepWindow(QMainWindow):
                 det_map[d.id] = d
                 det_names[d.id] = d.name
 
-        # Filter out issues from detectors that suppress themselves
+        # Filter out issues from detectors that suppress themselves or are skipped
         track = self._current_track
         filtered_issues = []
         for issue in issues:
             det = det_map.get(issue.label)
             if det and track:
                 result = track.detector_results.get(issue.label)
-                if result and not det.is_relevant(result, track):
-                    continue
+                if result:
+                    if hasattr(det, 'effective_severity') and det.effective_severity(result) is None:
+                        continue
+                    if not det.is_relevant(result, track):
+                        continue
             filtered_issues.append(issue)
 
         if not filtered_issues:

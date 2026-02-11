@@ -41,7 +41,13 @@ def track_analysis_label(track, detectors=None) -> tuple[str, str]:
         det_inst = det_map.get(det_id)
         if det_inst and hasattr(det_inst, 'is_relevant') and not det_inst.is_relevant(result, track):
             continue
-        sev = result.severity.value if hasattr(result.severity, "value") else str(result.severity)
+        if det_inst and hasattr(det_inst, 'effective_severity'):
+            eff = det_inst.effective_severity(result)
+            if eff is None:
+                continue
+            sev = eff.value
+        else:
+            sev = result.severity.value if hasattr(result.severity, "value") else str(result.severity)
         if SEVERITY_RANK.get(sev, 99) < SEVERITY_RANK.get(worst, 99):
             worst = sev
 

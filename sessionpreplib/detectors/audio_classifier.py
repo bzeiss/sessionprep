@@ -21,7 +21,7 @@ class AudioClassifierDetector(TrackDetector):
 
     @classmethod
     def config_params(cls) -> list[ParamSpec]:
-        return [
+        return super().config_params() + [
             ParamSpec(
                 key="crest_threshold", type=(int, float), default=12.0,
                 min=0.0, min_exclusive=True,
@@ -91,6 +91,7 @@ class AudioClassifierDetector(TrackDetector):
         return False
 
     def configure(self, config):
+        super().configure(config)
         self.window_ms = config.get("window", 400)
         self.stereo_mode = config.get("stereo_mode", "avg")
         self.rms_anchor_mode = config.get("rms_anchor", "percentile")

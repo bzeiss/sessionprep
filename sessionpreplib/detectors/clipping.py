@@ -13,7 +13,7 @@ class ClippingDetector(TrackDetector):
 
     @classmethod
     def config_params(cls) -> list[ParamSpec]:
-        return [
+        return super().config_params() + [
             ParamSpec(
                 key="clip_consecutive", type=int, default=3, min=1,
                 label="Consecutive clipped samples",
@@ -45,6 +45,7 @@ class ClippingDetector(TrackDetector):
         )
 
     def configure(self, config):
+        super().configure(config)
         self.consecutive = config.get("clip_consecutive", 3)
         self.max_ranges = config.get("clip_report_max_ranges", 10)
 

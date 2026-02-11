@@ -15,7 +15,7 @@ class MonoFolddownDetector(TrackDetector):
 
     @classmethod
     def config_params(cls) -> list[ParamSpec]:
-        return [
+        return super().config_params() + [
             ParamSpec(
                 key="mono_loss_warn_db", type=(int, float), default=6.0,
                 min=0.0, min_exclusive=True,
@@ -43,6 +43,7 @@ class MonoFolddownDetector(TrackDetector):
         )
 
     def configure(self, config):
+        super().configure(config)
         self.mono_loss_warn_db = config.get("mono_loss_warn_db", 6.0)
 
     def analyze(self, track: TrackContext) -> DetectorResult:

@@ -15,7 +15,7 @@ class StereoCorrelationDetector(TrackDetector):
 
     @classmethod
     def config_params(cls) -> list[ParamSpec]:
-        return [
+        return super().config_params() + [
             ParamSpec(
                 key="corr_warn", type=(int, float), default=-0.3,
                 min=-1.0, max=1.0,
@@ -43,6 +43,7 @@ class StereoCorrelationDetector(TrackDetector):
         )
 
     def configure(self, config):
+        super().configure(config)
         self.corr_warn = config.get("corr_warn", -0.3)
 
     def analyze(self, track: TrackContext) -> DetectorResult:

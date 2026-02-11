@@ -15,7 +15,7 @@ class DCOffsetDetector(TrackDetector):
 
     @classmethod
     def config_params(cls) -> list[ParamSpec]:
-        return [
+        return super().config_params() + [
             ParamSpec(
                 key="dc_offset_warn_db", type=(int, float), default=-40.0, max=0.0,
                 label="DC offset warning threshold (dB)",
@@ -41,6 +41,7 @@ class DCOffsetDetector(TrackDetector):
         )
 
     def configure(self, config):
+        super().configure(config)
         self.warn_db = config.get("dc_offset_warn_db", -40.0)
         self._db_offset = dbfs_offset(config)
 

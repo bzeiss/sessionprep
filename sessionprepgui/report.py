@@ -256,15 +256,27 @@ def render_track_detail_html(track, session=None, *, show_clean: bool = True,
             _SEV_ORDER = {"problem": 0, "attention": 1, "information": 2, "info": 2, "clean": 3}
             def _det_sort_key(item):
                 det_id, result = item
-                sev = result.severity.value if hasattr(result.severity, "value") else str(result.severity)
+                det_inst = det_map.get(det_id)
+                if det_inst and hasattr(det_inst, 'effective_severity'):
+                    eff = det_inst.effective_severity(result)
+                    sev = eff.value if eff is not None else "zzz"
+                else:
+                    sev = result.severity.value if hasattr(result.severity, "value") else str(result.severity)
                 name = det_map[det_id].name if det_id in det_map else det_id
                 return (_SEV_ORDER.get(sev, 99), name.lower())
             det_rows = []
             for det_id, result in sorted(track.detector_results.items(), key=_det_sort_key):
-                sev = result.severity.value if hasattr(result.severity, "value") else str(result.severity)
+                det_inst = det_map.get(det_id)
+                # Determine effective severity (respects report_as override)
+                if det_inst and hasattr(det_inst, 'effective_severity'):
+                    eff = det_inst.effective_severity(result)
+                    if eff is None:
+                        continue
+                    sev = eff.value
+                else:
+                    sev = result.severity.value if hasattr(result.severity, "value") else str(result.severity)
                 if not show_clean and sev == "clean":
                     continue
-                det_inst = det_map.get(det_id)
                 if det_inst:
                     html_frag = det_inst.render_html(result, track)
                     if html_frag:
