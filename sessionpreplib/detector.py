@@ -23,6 +23,7 @@ def _report_as_param(det_id: str) -> ParamSpec:
             "'default' uses the detector's own severity. "
             "'skip' hides all results from reports and overlays."
         ),
+        presentation_only=True,
     )
 
 

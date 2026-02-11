@@ -53,6 +53,7 @@ class ParamSpec:
     choices: list | None = None      # allowed string values
     item_type: type | None = None    # element type for list fields
     nullable: bool = False           # True if None is valid
+    presentation_only: bool = False  # True → changing this key never requires re-analysis
 
 
 def default_config() -> dict[str, Any]:
@@ -416,6 +417,37 @@ def build_structured_defaults() -> dict[str, Any]:
             structured["processors"][proc.id] = {p.key: p.default for p in params}
 
     return structured
+
+
+def strip_presentation_keys(structured: dict[str, Any]) -> dict[str, Any]:
+    """Return a deep copy of *structured* with all ``presentation_only`` keys removed.
+
+    Used to compare configs for analysis-affecting changes only.
+    Presentation-only keys (e.g. ``report_as``) are tagged via
+    :attr:`ParamSpec.presentation_only`.
+    """
+    import copy
+    from .detectors import default_detectors
+    from .processors import default_processors
+
+    # Collect presentation-only keys per (section_type, component_id)
+    pres_keys: dict[tuple[str, str], set[str]] = {}
+    for det in default_detectors():
+        keys = {p.key for p in det.config_params() if p.presentation_only}
+        if keys:
+            pres_keys[("detectors", det.id)] = keys
+    for proc in default_processors():
+        keys = {p.key for p in proc.config_params() if p.presentation_only}
+        if keys:
+            pres_keys[("processors", proc.id)] = keys
+
+    stripped = copy.deepcopy(structured)
+    for (section_type, comp_id), keys in pres_keys.items():
+        section = stripped.get(section_type, {}).get(comp_id)
+        if isinstance(section, dict):
+            for k in keys:
+                section.pop(k, None)
+    return stripped
 
 
 def flatten_structured_config(structured: dict[str, Any]) -> dict[str, Any]:

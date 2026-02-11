@@ -1364,9 +1364,15 @@ class SessionPrepWindow(QMainWindow):
             self._status_bar.showMessage("Preferences saved.")
 
             if self._source_dir:
+                from sessionpreplib.config import strip_presentation_keys
                 new_pipeline = {k: self._config.get(k) for k in _PIPELINE_KEYS}
-                if new_pipeline != old_pipeline:
+                old_stripped = strip_presentation_keys(old_pipeline)
+                new_stripped = strip_presentation_keys(new_pipeline)
+                if new_stripped != old_stripped:
                     self._on_analyze()
+                elif new_pipeline != old_pipeline:
+                    # Only presentation keys changed — lightweight refresh
+                    self._refresh_presentation()
                 else:
                     # GUI-only change — just refresh reports and colormap
                     self._render_summary()
@@ -1388,6 +1394,72 @@ class SessionPrepWindow(QMainWindow):
                     f"HiDPI scale factor changed from {old_scale} to {new_scale}.\n"
                     "Please restart SessionPrep for the new scaling to take effect.",
                 )
+
+    def _refresh_presentation(self):
+        """Re-render all UI after presentation-only config changes (e.g. report_as).
+
+        Reconfigures detector instances in-place, rebuilds the diagnostic
+        summary, and refreshes all visible components — without re-reading
+        audio or re-running analysis.
+        """
+        if not self._session:
+            return
+
+        # 1. Reconfigure detector instances with updated flat config
+        flat = dict(default_config())
+        flat.update(flatten_structured_config(self._config))
+        for d in self._session.detectors:
+            d.configure(flat)
+
+        # 2. Rebuild diagnostic summary (bucketing depends on report_as)
+        from sessionpreplib.rendering import build_diagnostic_summary
+        self._summary = build_diagnostic_summary(self._session)
+
+        # 3. Re-render summary HTML
+        self._render_summary()
+
+        # 4. Refresh track table Analysis column
+        self._refresh_analysis_column()
+
+        # 5. Re-render current track detail
+        if self._current_track:
+            html = render_track_detail_html(
+                self._current_track, self._session,
+                show_clean=self._show_clean, verbose=self._verbose)
+            self._file_report.setHtml(self._wrap_html(html))
+
+        # 6. Refresh overlay menu (skipped detectors filtered out)
+        if self._current_track:
+            all_issues = []
+            for det_result in self._current_track.detector_results.values():
+                all_issues.extend(getattr(det_result, "issues", []))
+            self._update_overlay_menu(all_issues)
+
+        # 7. Apply any concurrent GUI-only changes
+        cmap = self._config.get("gui", {}).get("spectrogram_colormap", "magma")
+        self._waveform.set_colormap(cmap)
+
+        self._status_bar.showMessage("Preferences saved (display refreshed).")
+
+    def _refresh_analysis_column(self):
+        """Update the Analysis column for all rows using current detector config."""
+        if not self._session:
+            return
+        track_map = {t.filename: t for t in self._session.tracks}
+        dets = self._session.detectors if hasattr(self._session, 'detectors') else None
+        self._track_table.setSortingEnabled(False)
+        for row in range(self._track_table.rowCount()):
+            fname_item = self._track_table.item(row, 0)
+            if not fname_item:
+                continue
+            track = track_map.get(fname_item.text())
+            if not track:
+                continue
+            label, color = track_analysis_label(track, dets)
+            analysis_item = _SortableItem(label, _SEVERITY_SORT.get(label, 9))
+            analysis_item.setForeground(QColor(color))
+            self._track_table.setItem(row, 2, analysis_item)
+        self._track_table.setSortingEnabled(True)
 
     @Slot()
     def _on_about(self):
