@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sys
 
-from PySide6.QtCore import Qt, Slot, QSize, QEvent, QTimer
+from PySide6.QtCore import Qt, Slot, QSize, QEvent, QTimer, QUrl, QMimeData
 from PySide6.QtGui import QAction, QActionGroup, QFont, QColor, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -90,6 +90,40 @@ class _HelpBrowser(QTextBrowser):
             from PySide6.QtWidgets import QToolTip
             QToolTip.hideText()
         super().mouseMoveEvent(event)
+
+
+class _DraggableTrackTable(QTableWidget):
+    """QTableWidget that supports dragging files to external applications."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setDefaultDropAction(Qt.CopyAction)
+        self._source_dir: str | None = None
+
+    def set_source_dir(self, path: str | None):
+        self._source_dir = path
+
+    def mimeTypes(self):
+        return ["text/uri-list"]
+
+    def mimeData(self, items):
+        if not self._source_dir:
+            return super().mimeData(items)
+        filenames: set[str] = set()
+        for item in items:
+            if item.column() == 0 and item.text():
+                filenames.add(item.text())
+        if not filenames:
+            return super().mimeData(items)
+        urls = [QUrl.fromLocalFile(os.path.join(self._source_dir, f))
+                for f in filenames]
+        mime = QMimeData()
+        mime.setUrls(urls)
+        return mime
+
+    def supportedDragActions(self):
+        return Qt.CopyAction
 
 
 class _SortableItem(QTableWidgetItem):
@@ -219,7 +253,7 @@ class SessionPrepWindow(QMainWindow):
         layout.setSpacing(0)
 
         # Track table
-        self._track_table = QTableWidget()
+        self._track_table = _DraggableTrackTable()
         self._track_table.setColumnCount(5)
         self._track_table.setHorizontalHeaderLabels(
             ["File", "Ch", "Analysis", "Classification", "Gain"]
@@ -555,6 +589,7 @@ class SessionPrepWindow(QMainWindow):
 
         self._on_stop()
         self._source_dir = path
+        self._track_table.set_source_dir(path)
         self._session = None
         self._summary = None
         self._current_track = None
