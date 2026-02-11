@@ -551,6 +551,22 @@ class WaveformWidget(QWidget):
             if mx >= 0:
                 painter.drawLine(mx, 0, mx, int(draw_h))
 
+                # Time label at top of vertical guide
+                sample = self._x_to_sample(mx - x0, draw_w)
+                if self._samplerate > 0:
+                    secs = sample / self._samplerate
+                    m = int(secs) // 60
+                    s = secs - m * 60
+                    time_label = f"{m}:{s:05.2f} ({sample:,})"
+                    painter.setFont(QFont("Consolas", 7))
+                    time_color = QColor(200, 200, 200, 180)
+                    painter.setPen(time_color)
+                    tfm = painter.fontMetrics()
+                    ttw = tfm.horizontalAdvance(time_label)
+                    lx = mx - ttw // 2
+                    lx = max(x0, min(lx, x0 + draw_w - ttw))
+                    painter.drawText(int(lx), tfm.ascent() + 2, time_label)
+
             if self._display_mode == "spectrogram":
                 self._draw_freq_guide(painter, x0, draw_w, draw_h, my)
             else:
