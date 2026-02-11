@@ -802,7 +802,7 @@ class WaveformWidget(QWidget):
                     painter.setPen(ch_pen)
                     painter.drawPath(ch_path)
 
-                if self._show_rms_avg and self._rms_combined:
+                if self._show_rms_avg and len(self._rms_combined) > 0:
                     comb_path = QPainterPath()
                     comb_path.moveTo(x0, mid_y - self._rms_combined[0] * scale)
                     for x in range(1, len(self._rms_combined)):
