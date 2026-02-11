@@ -45,7 +45,7 @@ sessionprep-gui
 ```
 
 The GUI provides an interactive file table, per-track detail view, waveform
-display with issue overlays, and audio playback. On first launch it creates a
+and spectrogram display with issue overlays, and audio playback. On first launch it creates a
 `sessionprep.config.json` in your user preferences directory with all default
 thresholds.
 
@@ -103,8 +103,9 @@ python sessionprep.py /path/to/tracks       # CLI
 
 > **Note:** `uv sync` is the recommended setup — it handles the virtual
 > environment, Python version, and all dependencies automatically.
-> The GUI requires `PySide6` and `sounddevice`; the CLI requires only `numpy`,
-> `soundfile`, and `rich`.
+> Both CLI and GUI require `numpy`, `soundfile`, and `scipy`. The GUI
+> additionally requires `PySide6` and `sounddevice`; the CLI additionally
+> requires `rich`.
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for full development setup, building, and
 distribution instructions.

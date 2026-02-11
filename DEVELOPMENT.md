@@ -283,6 +283,7 @@ sudo dnf install gcc patchelf ccache libatomic-static
 |---------|------|--------|
 | `numpy` | Runtime | `sessionpreplib` (DSP, array ops) |
 | `soundfile` | Runtime | `sessionpreplib/audio.py` (WAV I/O, bundles libsndfile) |
+| `scipy` | Runtime | `sessionpreplib/audio.py` (subsonic STFT analysis), `sessionprepgui/waveform.py` (mel spectrogram) |
 | `rich` | Runtime | `sessionprep.py` (CLI rendering: tables, panels, progress) |
 | `PySide6` | Optional (gui) | `sessionprepgui` (Qt widgets, main window, waveform) |
 | `sounddevice` | Optional (gui) | `sessionprepgui/playback.py` (audio playback via PortAudio) |
@@ -291,9 +292,11 @@ sudo dnf install gcc patchelf ccache libatomic-static
 | `pyinstaller` | Dev | Standalone executable builds |
 | `Pillow` | Dev | Icon format conversion for PyInstaller (macOS .png → .icns) |
 
-GUI dependencies are declared as optional in `pyproject.toml` under
-`[project.optional-dependencies].gui`. Install with `pip install .[gui]` or
-`uv sync` (which installs all groups by default).
+Core runtime dependencies (`numpy`, `soundfile`, `scipy`) are declared in
+`[project].dependencies`. GUI-only dependencies (`PySide6`, `sounddevice`)
+are declared as optional under `[project.optional-dependencies].gui`.
+Install with `pip install .[gui]` or `uv sync` (which installs all groups
+by default).
 
 ---
 
@@ -306,6 +309,7 @@ sessionpreplib/
     models.py                    # All dataclasses + enums (incl. IssueLocation)
     config.py                    # Preset load/save/merge + config validation
     audio.py                     # Audio I/O + cached DSP utilities
+    chunks.py                    # WAV/AIFF chunk I/O (read, write, remove, identify)
     utils.py                     # Keyword matching, group assignment, sort key
     events.py                    # EventBus
     detector.py                  # TrackDetector / SessionDetector ABCs
@@ -339,7 +343,7 @@ sessionprepgui/                  # GUI package (PySide6)
     helpers.py                   # esc(), track_analysis_label(), fmt_time(), severity maps
     worker.py                    # AnalyzeWorker (QThread)
     report.py                    # HTML report rendering (summary, fader table, track detail)
-    waveform.py                  # WaveformWidget (per-channel waveform, dB scale, markers, mouse guide, keyboard shortcuts)
+    waveform.py                  # WaveformWidget (waveform + spectrogram display, dB/freq scales, markers, overlays, keyboard/mouse nav)
     playback.py                  # PlaybackController (sounddevice lifecycle + signals)
     preferences.py               # PreferencesDialog (tree nav + per-param pages, reset-to-default)
     mainwindow.py                # SessionPrepWindow (QMainWindow) + main()
@@ -382,7 +386,13 @@ class IssueLocation:
     severity: Severity
     label: str                   # Machine-readable tag, e.g. "clipping"
     description: str             # Human-readable text for tooltips / overlays
+    freq_min_hz: float | None = None  # Optional frequency lower bound (Hz)
+    freq_max_hz: float | None = None  # Optional frequency upper bound (Hz)
 ```
+
+When `freq_min_hz` and `freq_max_hz` are set, the GUI renders frequency-bounded
+rectangles in spectrogram mode (mapped via mel scale).  Without frequency bounds
+the overlay spans the full frequency range.
 
 ### 4.3 DetectorResult
 
@@ -497,6 +507,8 @@ class TrackContext:
     detector_results: dict[str, DetectorResult] = field(default_factory=dict)
     processor_results: dict[str, ProcessorResult] = field(default_factory=dict)
     group: str | None = None
+    classification_override: str | None = None
+    chunk_ids: list[str] = field(default_factory=list)
     _cache: dict[str, Any] = field(default_factory=dict, repr=False)
 ```
 
@@ -510,6 +522,8 @@ class SessionContext:
     groups: dict[str, str] = field(default_factory=dict)
     group_overlaps: list = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    detectors: list = field(default_factory=list)
+    processors: list = field(default_factory=list)
 ```
 
 ### 4.9 SessionResult / SessionJob / JobStatus
@@ -564,9 +578,7 @@ Contains audio I/O, cached DSP helpers, and stateless DSP functions.
 **Stateless DSP functions:**
 
 - `detect_clipping_ranges(data, threshold_count, max_ranges) -> (int, list[tuple[int, int, int|None]])` — ranges are `(start, end, channel)`
-- `subsonic_ratio_db(data, samplerate, cutoff_hz, max_samples) -> float` — multi-channel input (auto mono-downmix)
-- `subsonic_ratio_db_1d(signal, samplerate, cutoff_hz, max_samples) -> float` — single-channel (1-D) input
-- `subsonic_windowed_ratios(signal, samplerate, cutoff_hz, window_ms, hop_ms) -> list[tuple[int, int, float]]` — per-window subsonic ratios on 1-D signal
+- `subsonic_stft_analysis(signal, samplerate, cutoff_hz, *, window_ms, hop_ms, abs_gate_db, silence_rms) -> (float, list[tuple[int, int, float]])` — single-pass STFT subsonic analysis on a 1-D signal; returns `(whole_file_ratio_db, per_window_ratios)`. Uses `scipy.signal.stft` with Hann windowing, vectorised band/total power computation, and silence + absolute power gates.
 - `linear_to_db(linear) -> float`
 - `db_to_linear(db) -> float`
 - `format_duration(samples, samplerate) -> str`
@@ -683,13 +695,13 @@ cycles.
 - **ID:** `subsonic` | **Depends on:** `["silence"]`
 - **Config:** `subsonic_hz`, `subsonic_warn_ratio_db`, `subsonic_windowed` (default `True`), `subsonic_window_ms`, `subsonic_max_regions`
 - **Data:** `{"subsonic_ratio_db": float, "subsonic_warn": bool, "per_channel": {ch: {"ratio_db", "warn"}}, "windowed_regions"?: list[dict]}`
-- **Per-channel analysis** (always active for stereo+): Each channel is analyzed independently via `subsonic_ratio_db_1d`. If only one channel triggers the warning, the issue is reported per-channel with `channel` set to the offending channel index; if all channels trigger, a whole-file issue is reported.
-- **Windowed analysis** (default on via `subsonic_windowed`): Splits each channel into windows (`subsonic_window_ms`, default 500 ms), computes per-window subsonic ratios, and merges contiguous exceeding windows into regions. Regions are reported as `IssueLocation` objects with precise `sample_start`/`sample_end`. Capped by `subsonic_max_regions`. Safeguards:
+- **Per-channel analysis** (always active for stereo+): Each channel is analyzed independently via `subsonic_stft_analysis` (one `scipy.signal.stft` call per channel). The combined ratio is the **maximum** (worst) of all per-channel ratios — more conservative than the previous mono-downmix approach, which could mask subsonic content through phase cancellation. If only one channel triggers the warning, the issue is reported per-channel with `channel` set to the offending channel index; if all channels trigger, a whole-file issue is reported.
+- **Windowed analysis** (default on via `subsonic_windowed`): Per-window ratios are derived from the same STFT pass (vectorised, no Python loop). Contiguous exceeding windows are merged into regions reported as `IssueLocation` objects with precise `sample_start`/`sample_end` and frequency bounds (`freq_min_hz=0`, `freq_max_hz=cutoff`). Capped by `subsonic_max_regions`. Safeguards:
   1. **Absolute subsonic power gate:** Each window's absolute subsonic energy level is checked (`window_rms_db + ratio_db`). Windows where this is below −40 dBFS are suppressed — their subsonic content is too quiet to matter regardless of the ratio. Prevents amp hum/noise in quiet gaps from producing false positives.
-  2. **Threshold relaxation:** The windowed threshold is relaxed by 6 dB below the configured threshold. Short windows have less frequency resolution than the whole-file FFT, so borderline subsonic content that triggers the whole-file check may not reach the same threshold per-window.
-  3. **Active-signal fallback:** If no windows exceed the relaxed threshold, the detector falls back to marking windows that have significant signal (RMS within 20 dB of the loudest window). Since the whole-file analysis already confirmed subsonic content, the active-signal windows are where it lives.
+  2. **Threshold relaxation:** The windowed threshold is relaxed by 6 dB below the configured threshold. Short windows have less frequency resolution, so borderline subsonic content that triggers the whole-file check may not reach the same threshold per-window.
+  3. **Active-signal fallback:** If no windows exceed the relaxed threshold, the detector falls back to marking windows that have significant signal (RMS within 20 dB of the loudest window, vectorised via NumPy reshape + `np.diff` contiguous merging). Since the whole-file analysis already confirmed subsonic content, the active-signal windows are where it lives.
   4. **Whole-file fallback:** If even the active-signal approach produces no regions, a whole-file `IssueLocation` is emitted so ATTENTION always has at least one visible overlay.
-- **Issues:** Per-region `IssueLocation` in windowed mode; falls back to active-signal regions or whole-file span
+- **Issues:** Per-region `IssueLocation` (with frequency bounds) in windowed mode; falls back to active-signal regions or whole-file span
 - **Severity:** `ATTENTION` if exceeds threshold (whole-file or any channel), `CLEAN` otherwise
 - **Hint:** `"consider HPF ~{cutoff_hz} Hz"`
 
@@ -1159,7 +1171,7 @@ group).
 | `helpers.py` | `esc()`, `track_analysis_label(track, detectors=None)` (filters via `is_relevant()`), `fmt_time()`, severity maps |
 | `worker.py` | `AnalyzeWorker` (QThread) — runs pipeline in background thread, thread-safe progress counting (`threading.Lock`), emits real progress (`progress_value`), per-track completion signals (`track_analyzed`, `track_planned`) for incremental table updates |
 | `report.py` | HTML rendering: `render_summary_html()`, `render_fader_table_html()`, `render_track_detail_html()` |
-| `waveform.py` | `WaveformWidget` — per-channel waveform painting (vectorised NumPy peak/RMS downsampling), dB measurement scale, peak/RMS markers (toggleable), crosshair mouse guide (horizontal + vertical), mouse-wheel zoom (Ctrl+wheel horizontal, Ctrl+Shift+wheel vertical, Shift+wheel scroll), keyboard shortcuts (R zoom in, T zoom out at guide position), detector issue overlays (filtered by label), RMS L/R and RMS AVG envelopes (separate toggles), playback cursor, tooltips |
+| `waveform.py` | `WaveformWidget` — two display modes (waveform + spectrogram), vectorised NumPy peak/RMS downsampling, mel spectrogram (256 mel bins via `scipy.signal.stft`, configurable FFT/window/dB range/colormap), dB and frequency scales, peak/RMS markers, crosshair mouse guide (dBFS in waveform, Hz in spectrogram), mouse-wheel zoom/pan (Ctrl+wheel h-zoom, Ctrl+Shift+wheel v-zoom, Shift+Alt+wheel freq pan, Shift+wheel scroll), keyboard shortcuts (R/T zoom), detector issue overlays with optional frequency bounds, RMS L/R and RMS AVG envelopes, playback cursor, tooltips |
 | `playback.py` | `PlaybackController` — sounddevice OutputStream lifecycle, QTimer cursor updates, signal-based API |
 | `preferences.py` | `PreferencesDialog` — tree-navigated settings dialog, ParamSpec-driven widgets, reset-to-default, HiDPI scaling |
 | `mainwindow.py` | `SessionPrepWindow` (QMainWindow) — orchestrator, UI layout, slot handlers |
@@ -1185,25 +1197,44 @@ No circular imports. `settings`, `theme`, and `helpers` are pure leaves.
 - **PlaybackController** encapsulates all `sounddevice` state with a
   signal-based API (`cursor_updated`, `playback_finished`, `error`).
   `mainwindow.py` has zero direct `sd` usage.
-- **WaveformWidget** renders issue overlays from `IssueLocation` objects.
-  Per-channel regions are drawn in the corresponding channel lane; whole-file
-  issues span all channels. Tooltips use a 5-pixel hit tolerance for narrow
-  markers. Overlays and tooltips are filtered by `_enabled_overlays` — only
-  detectors checked in the Detector Overlays dropdown are painted/hoverable.
+- **WaveformWidget** supports two display modes: **waveform** (default) and
+  **spectrogram**. Issue overlays from `IssueLocation` objects are rendered in
+  both modes. Per-channel regions are drawn in the corresponding channel lane;
+  whole-file issues span all channels. Issues with `freq_min_hz`/`freq_max_hz`
+  render as frequency-bounded rectangles in spectrogram mode (mapped via mel
+  scale); without frequency bounds the overlay spans the full frequency range.
+  Tooltips use a 5-pixel hit tolerance for narrow markers. Overlays and tooltips
+  are filtered by `_enabled_overlays` — only detectors checked in the Detector
+  Overlays dropdown are painted/hoverable.
   Additional features:
   - **Waveform toolbar** — layout:
-    `[▾ Detector Overlays] [Peak / RMS Max] [RMS L/R] [RMS AVG]  ... [Fit] [+] [−] [↑] [↓]`
-    The Detector Overlays dropdown is a `QToolButton` with a `QMenu` of
-    checkable actions, one per detector that produced issues for the current
-    track. All unchecked by default. Detectors suppressed by `is_relevant()`
+    `[▾ Waveform/Spectrogram] [▾ Display] [▾ Detector Overlays] [Peak / RMS Max] [RMS L/R] [RMS AVG]  ... [Fit] [+] [−] [↑] [↓]`
+    The Display Mode dropdown (leftmost) uses a `QActionGroup` for mutual
+    exclusivity between waveform and spectrogram. The Display dropdown
+    contains spectrogram-specific settings (FFT Size, Window, Color Theme,
+    dB Floor with presets −120..−20, dB Ceiling with presets −30..0) and is
+    only visible in spectrogram mode. Waveform-only controls (Peak/RMS Max,
+    RMS L/R, RMS AVG) are hidden in spectrogram mode. The Detector Overlays
+    dropdown is a `QToolButton` with a `QMenu` of checkable actions, one per
+    detector that produced issues for the current track (visible in both
+    modes). All unchecked by default. Detectors suppressed by `is_relevant()`
     are excluded. The button label shows a count when items are checked
     (e.g. "Detector Overlays (2)"). Menu is rebuilt on track selection and
     on classification override changes.
-  - **dB measurement scale** — left/right margins (30 px) with dBFS tick
-    labels (0, −3, −6, −12, −18, −24, −36, −48, −60), tick marks, and
-    faint connector lines spanning the waveform area. Adaptive spacing
-    (min 18 px between ticks, lane-edge padding to prevent cross-channel
-    overlap). Scale adjusts dynamically with vertical resize and `_vscale`.
+  - **Spectrogram mode** — mel spectrogram (256 mel bins) computed via
+    `scipy.signal.stft` in a background thread (`WaveformLoadWorker`).
+    Configurable FFT size, window type, dB floor/ceiling, and colormap.
+    Colormap registry (`SPECTROGRAM_COLORMAPS`): magma, viridis, grayscale
+    (256-entry RGBA LUTs). Frequency axis with mel-spaced ticks at 50, 100,
+    200, 500, 1k, 2k, 5k, 10k, 20k Hz. Cached `QImage` keyed by view
+    params for efficient repainting.
+  - **Horizontal time scale** — time axis at the bottom of the waveform area.
+  - **dB measurement scale** (waveform mode) — left/right margins (30 px)
+    with dBFS tick labels (0, −3, −6, −12, −18, −24, −36, −48, −60), tick
+    marks, and faint connector lines spanning the waveform area. Adaptive
+    spacing (min 18 px between ticks, lane-edge padding to prevent
+    cross-channel overlap). Scale adjusts dynamically with vertical resize
+    and `_vscale`.
   - **Peak marker ("P")** — dark violet solid vertical line at the sample
     with the highest absolute amplitude across all channels. A small
     horizontal crosshair is drawn at the peak amplitude on the owning
@@ -1218,10 +1249,14 @@ No circular imports. `settings`, `theme`, and `helpers` are pure leaves.
     via the "RMS L/R" toolbar button.
   - **RMS AVG overlay** — combined (average) RMS envelope curve (orange),
     toggled via the "RMS AVG" toolbar button.
-  - **Mouse guide** — a thin grey dashed horizontal line follows the mouse
-    cursor across the full widget width. The corresponding dBFS value is
-    shown at the top of the current channel's scale margins (left and right).
+  - **Mouse guide** — a thin grey dashed crosshair follows the mouse cursor.
+    In waveform mode, the corresponding dBFS value is shown at the scale
+    margins. In spectrogram mode, the corresponding frequency (Hz) is shown.
     The guide disappears when the mouse leaves the widget.
+  - **Mouse navigation** — Ctrl+wheel for horizontal zoom, Ctrl+Shift+wheel
+    for vertical zoom (amplitude in waveform, frequency range in spectrogram),
+    Shift+Alt+wheel for frequency panning (spectrogram only), Shift+wheel
+    for horizontal scroll.
 - **report.py** contains pure HTML-building functions (no widget references),
   making them independently testable.
 - **PreferencesDialog** dynamically generates settings pages from each
@@ -1253,7 +1288,10 @@ file in the OS-specific user preferences directory:
     "gui": {
         "scale_factor": 1.0,
         "show_clean_detectors": false,
-        "default_project_dir": ""
+        "default_project_dir": "",
+        "output_folder": "",
+        "verbosity": "normal",
+        "spectrogram_colormap": "magma"
     },
     "analysis": {
         "window": 400,
@@ -1319,7 +1357,7 @@ The CLI is **not** affected by this file — it continues to use its own
 | `parse_arguments()` | `sessionprep.py` (CLI only) |
 | `analyze_audio()` | `audio.py` (DSP) + individual detectors |
 | `check_clipping()` / `detect_clipping_ranges()` | `audio.py` + `detectors/clipping.py` |
-| `subsonic_ratio_db()` | `audio.py` + `detectors/subsonic.py` |
+| `subsonic_ratio_db()` | `audio.py` (`subsonic_stft_analysis`) + `detectors/subsonic.py` |
 | `calculate_gain()` | `processors/bimodal_normalize.py` |
 | `matches_keywords()` | `utils.py` |
 | `parse_group_specs()` / `assign_groups_to_files*()` | `utils.py` |
@@ -1338,6 +1376,7 @@ The CLI is **not** affected by this file — it continues to use its own
 |---------|---------|
 | `numpy` | `sessionpreplib` (core dependency) |
 | `soundfile` | `sessionpreplib/audio.py` (audio I/O) |
+| `scipy` | `sessionpreplib/audio.py` (subsonic STFT), `sessionprepgui/waveform.py` (mel spectrogram) — core dependency |
 | `rich` | `sessionprep.py` only — **not** a library dependency |
 | `PySide6` | `sessionprepgui` only — optional GUI dependency |
 | `sounddevice` | `sessionprepgui/playback.py` only — optional GUI dependency |

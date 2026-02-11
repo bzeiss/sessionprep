@@ -130,19 +130,25 @@ A detector earns its place if it meets at least one of these criteria:
 
 **How detection works:**
 
-The detector computes an FFT-based energy ratio: `power below cutoff / total
-power` (excluding DC), expressed in dB. A ratio of −20 dB means 1 % of the
-signal's energy is subsonic. The configured threshold (default `−20 dB`)
-determines when this becomes an ATTENTION.
+The detector performs a single `scipy.signal.stft` call per channel with Hann
+windowing, then computes vectorised band/total power ratios: `power below
+cutoff / total power` (excluding DC), expressed in dB.  A ratio of −20 dB
+means 1 % of the signal's energy is subsonic.  The configured threshold
+(default `−20 dB`) determines when this becomes an ATTENTION.  Both the
+whole-file ratio and per-window ratios are derived from the same STFT pass
+— no redundant FFT calls.
 
 **Per-channel analysis (always active for stereo+):**
 
-For multi-channel files, each channel is analyzed independently in addition to
-the combined (mono-downmixed) whole-file ratio. This catches subsonic issues
-isolated to one channel (bad cable, ground loop on one side) that a mono
-downmix would dilute. If only one channel exceeds the threshold, the issue is
-reported for that specific channel; if all channels exceed it, a whole-file
-issue is reported.
+For multi-channel files, each channel is analyzed independently.  The combined
+ratio is the **maximum** (worst) of all per-channel ratios — more conservative
+than the previous mono-downmix approach, which could mask subsonic content in
+one channel through phase cancellation.  If only one channel exceeds the
+threshold, the issue is reported for that specific channel; if all channels
+exceed it, a whole-file issue is reported.
+
+Subsonic issues carry frequency bounds (`freq_min_hz=0`, `freq_max_hz=cutoff`)
+for frequency-bounded overlays in spectrogram mode.
 
 **Windowed analysis (default: on):**
 
@@ -162,13 +168,12 @@ This serves two purposes:
 
 **Threshold relaxation for windowed analysis:**
 
-Individual 500 ms windows have less frequency resolution than the whole-file
-FFT (~22k samples vs ~200k). When the whole-file ratio is borderline (e.g.
-−18 dB vs −20 dB threshold), no single window may cross the same threshold
-even though the aggregate clearly does. To handle this, the windowed analysis
-uses a relaxed threshold (6 dB below the configured threshold). This ensures
-that windows where subsonic energy is concentrated still produce visible
-regions.
+Individual 500 ms windows have less frequency resolution than a very long FFT.
+When the whole-file ratio is borderline (e.g. −18 dB vs −20 dB threshold), no
+single window may cross the same threshold even though the aggregate clearly
+does.  To handle this, the windowed analysis uses a relaxed threshold (6 dB
+below the configured threshold).  This ensures that windows where subsonic
+energy is concentrated still produce visible regions.
 
 **Fallback for diffuse subsonic content:**
 
@@ -449,9 +454,10 @@ to sanity-check the musical intent and optionally override:
 | Action | Effect |
 |--------|--------|
 | **Click** | Set playback cursor position |
-| **Hover** | Crosshair guide (horizontal + vertical) with dBFS readout |
+| **Hover** | Crosshair guide with dBFS readout (waveform) or frequency readout (spectrogram) |
 | **Ctrl + wheel** | Horizontal zoom (centered on pointer) |
-| **Ctrl + Shift + wheel** | Vertical zoom (amplitude scale) |
+| **Ctrl + Shift + wheel** | Vertical zoom (amplitude in waveform, frequency range in spectrogram) |
+| **Shift + Alt + wheel** | Scroll up / down (frequency pan, spectrogram mode) |
 | **Shift + wheel** | Scroll left / right |
 
 ### 7.2 Keyboard Shortcuts
@@ -468,12 +474,14 @@ to sanity-check the musical intent and optionally override:
 
 | Button | Effect |
 |--------|--------|
-| **Detector Overlays ▾** | Toggle visibility of individual detector overlays |
-| **Peak / RMS Max** | Toggle peak ("P") and max-RMS ("R") markers |
-| **RMS L/R** | Toggle per-channel RMS envelope (yellow) |
-| **RMS AVG** | Toggle combined RMS envelope (orange) |
+| **Waveform / Spectrogram ▾** | Switch between waveform and spectrogram display mode |
+| **Display ▾** | Spectrogram settings: FFT Size, Window, Color Theme, dB Floor, dB Ceiling (spectrogram mode only) |
+| **Detector Overlays ▾** | Toggle visibility of individual detector overlays (both modes) |
+| **Peak / RMS Max** | Toggle peak ("P") and max-RMS ("R") markers (waveform mode) |
+| **RMS L/R** | Toggle per-channel RMS envelope (yellow, waveform mode) |
+| **RMS AVG** | Toggle combined RMS envelope (orange, waveform mode) |
 | **Fit** | Reset zoom to show entire file |
 | **+** | Zoom in at cursor |
 | **−** | Zoom out at cursor |
-| **↑** | Scale up (vertical amplitude) |
-| **↓** | Scale down (vertical amplitude) |
+| **↑** | Scale up (amplitude in waveform, frequency range in spectrogram) |
+| **↓** | Scale down (amplitude in waveform, frequency range in spectrogram) |

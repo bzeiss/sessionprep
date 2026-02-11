@@ -230,13 +230,13 @@
     - Energy above Nyquist/2 (aliasing from bad SRC)
     - Missing expected low end (e.g., "Bass" track with nothing below 100Hz)
   - Categorization: ATTENTION
-
 - [x] **Subsonic detection: per-channel analysis** (Status: ✅ Done)
   - Each channel is analyzed independently for stereo/multi-channel files.
   - If only one channel triggers, the issue is reported per-channel with the
     specific channel index. Both channels triggering → whole-file issue.
+  - Combined ratio = max of per-channel ratios (no phase-cancellation masking).
   - Per-channel ratios stored in `data["per_channel"]`.
-  - `subsonic_ratio_db_1d()` added to `audio.py` for single-channel analysis.
+  - `subsonic_stft_analysis()` in `audio.py` (scipy STFT, replaces three old functions).
 
 - [x] **Subsonic detection: windowed analysis option** (Status: ✅ Done)
   - Default on via `subsonic_windowed` config (default: `true`).
@@ -244,13 +244,12 @@
   - Contiguous exceeding windows merged into regions with precise sample ranges.
   - Regions reported as `IssueLocation` objects (visible on waveform overlays).
   - Capped by `subsonic_max_regions` (default 20).
-  - `subsonic_windowed_ratios()` added to `audio.py`.
+  - Per-window ratios derived from single STFT pass (vectorised, no Python loop).
   - Whole-file analysis always runs regardless of windowed setting.
   - Four safeguards for accurate windowed results:
     1. Absolute subsonic power gate (window_rms_db + ratio_db < −40 dBFS → skip;
        prevents amp hum/noise in quiet gaps from false positives).
-    2. Threshold relaxation (windowed threshold = configured − 6 dB, compensates
-       for reduced frequency resolution in short windows).
+    2. Threshold relaxation (windowed threshold = configured − 6 dB, compensates for reduced frequency resolution in short windows).
     3. Active-signal fallback (if no ratio-based regions found, marks windows
        within 20 dB of the loudest window — matches where signal is active).
     4. Whole-file fallback (if even active-signal finds nothing, a full-file
@@ -303,14 +302,11 @@
 
 ### Documentation
 
-- [ ] **Document subsonic detection methodology** (Status: ❌) `NEW`
-  - Why: Current behavior is non-obvious and could mislead users.
-  - Document:
-    - Whole-file FFT (not windowed/sectional)
-    - Downsampled to ~200k samples for performance
-    - Sums to mono before analysis (L/R not independent)
-    - Ratio is power in band ≤ cutoff vs. total power (excluding DC)
-  - Location: Detector reference docs or inline in README
+- [x] **Document subsonic detection methodology** (Status: ✅ Done)
+  - Documented in REFERENCE.md §2.10: STFT-based per-channel analysis via
+    `scipy.signal.stft`, max-of-channels combined ratio, vectorised windowed
+    analysis, absolute power gate, threshold relaxation, active-signal and
+    whole-file fallbacks, frequency-bounded issue overlays.
 
 ---
 
@@ -359,7 +355,7 @@
 | **2** | Group intelligence | Multi-mic phase coherence |
 | **3** | Workflow polish | Click/pop detection |
 | **4** | Metering depth | LRA, LUFS (P2), True-peak/ISP (P2) |
-| **5** | Subsonic improvements | Per-channel analysis, Windowed option, Documentation |
+| ~~**5**~~ | ~~Subsonic improvements~~ | ~~Per-channel analysis, Windowed option, Documentation~~ → ✅ Done (STFT speedup, per-channel, windowed, docs) |
 | **6** | Auto-fix capabilities | DC removal, SRC |
 | ~~**7**~~ | ~~Classification v2~~ | ~~Crest improvements~~ → ✅ Done (audio classifier with decay metric) |
 | **8** | DAW scripting | DawProcessor ABC, backends, PTSL integration |
@@ -411,3 +407,11 @@
 | ~~AIFF/AIF file support~~ | — | ✅ Resolved (AUDIO_EXTENSIONS constant in audio.py; pipeline, GUI, CLI all scan .wav/.aif/.aiff) |
 | ~~Channel count column~~ | — | ✅ Resolved (Ch column in track table, populated from TrackContext.channels) |
 | ~~WAV/AIFF chunk I/O~~ | — | ✅ Resolved (chunks.py: read_chunks, write_chunks, remove_chunks, chunk_ids; chunk metadata in file detail report) |
+| ~~Spectrogram display mode~~ | — | ✅ Resolved (mel spectrogram via scipy STFT, magma/viridis/grayscale colormaps, frequency scale, configurable FFT/window/dB range) |
+| ~~Frequency-bounded detector overlays~~ | — | ✅ Resolved (IssueLocation.freq_min_hz/freq_max_hz, mel-mapped rectangles in spectrogram mode) |
+| ~~Spectrogram navigation~~ | — | ✅ Resolved (Ctrl+Shift+wheel freq zoom, Shift+Alt+wheel freq pan, dB floor/ceiling presets) |
+| ~~Horizontal time scale~~ | — | ✅ Resolved (time axis in waveform display) |
+| ~~Output folder preference~~ | — | ✅ Resolved (directory picker in General prefs) |
+| ~~Skip reanalysis on GUI-only changes~~ | — | ✅ Resolved (Preferences dialog detects gui-vs-analysis changes) |
+| ~~Subsonic STFT speedup~~ | — | ✅ Resolved (scipy.signal.stft replaces per-window Python FFT loop; scipy promoted to core dep) |
+| ~~Scipy as core dependency~~ | — | ✅ Resolved (scipy>=1.12 promoted from gui optional to core dependencies; used by subsonic STFT + spectrogram) |
