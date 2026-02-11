@@ -1461,6 +1461,7 @@ class WaveformWidget(QWidget):
 
         Ctrl + wheel            — horizontal zoom (centered on pointer)
         Ctrl + Shift + wheel    — vertical zoom
+        Shift + Alt + wheel     — scroll up / down (frequency pan, spectrogram)
         Shift + wheel           — scroll left / right
         """
         if self._total_samples <= 0:
@@ -1470,11 +1471,14 @@ class WaveformWidget(QWidget):
         mods = event.modifiers()
         delta = event.angleDelta().y()
         if delta == 0:
+            delta = event.angleDelta().x()
+        if delta == 0:
             event.ignore()
             return
 
         ctrl = bool(mods & Qt.ControlModifier)
         shift = bool(mods & Qt.ShiftModifier)
+        alt = bool(mods & Qt.AltModifier)
 
         if ctrl and shift:
             # ── Vertical zoom ─────────────────────────────────────────
@@ -1528,6 +1532,30 @@ class WaveformWidget(QWidget):
             self._view_end = new_end
             self._invalidate_peaks()
             self.update()
+            event.accept()
+
+        elif shift and alt:
+            # ── Scroll up / down (frequency pan, spectrogram only) ───
+            if self._display_mode == "spectrogram":
+                mel_range = self._mel_view_max - self._mel_view_min
+                mel_full_min = _hz_to_mel(_SPEC_F_MIN)
+                mel_full_max = _hz_to_mel(min(_SPEC_F_MAX, self._samplerate / 2.0))
+                scroll = mel_range / 8
+                if delta < 0:
+                    scroll = -scroll
+                new_min = self._mel_view_min + scroll
+                new_max = self._mel_view_max + scroll
+                if new_min < mel_full_min:
+                    new_min = mel_full_min
+                    new_max = new_min + mel_range
+                if new_max > mel_full_max:
+                    new_max = mel_full_max
+                    new_min = new_max - mel_range
+                self._mel_view_min = max(new_min, mel_full_min)
+                self._mel_view_max = min(new_max, mel_full_max)
+                self._spec_image = None
+                self._spec_cache_key = ()
+                self.update()
             event.accept()
 
         elif shift:

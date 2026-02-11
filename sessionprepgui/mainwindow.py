@@ -410,7 +410,7 @@ class SessionPrepWindow(QMainWindow):
         # -- dB Floor submenu --
         floor_menu = spec_menu.addMenu("dB Floor")
         self._floor_group = QActionGroup(self)
-        for val in (-120, -100, -80, -60, -40):
+        for val in (-120, -100, -80, -60, -50, -40, -30, -20):
             act = floor_menu.addAction(f"{val} dB")
             act.setCheckable(True)
             act.setData(val)
@@ -422,7 +422,7 @@ class SessionPrepWindow(QMainWindow):
         # -- dB Ceiling submenu --
         ceil_menu = spec_menu.addMenu("dB Ceiling")
         self._ceil_group = QActionGroup(self)
-        for val in (-20, -10, 0):
+        for val in (-30, -20, -10, -5, 0):
             act = ceil_menu.addAction(f"{val} dB")
             act.setCheckable(True)
             act.setData(val)
