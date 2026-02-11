@@ -5,12 +5,7 @@ import numpy as np
 from ..config import ParamSpec
 from ..detector import TrackDetector
 from ..models import DetectorResult, IssueLocation, Severity, TrackContext
-from ..audio import (
-    is_silent,
-    subsonic_ratio_db,
-    subsonic_ratio_db_1d,
-    subsonic_windowed_ratios,
-)
+from ..audio import is_silent, subsonic_stft_analysis
 
 
 class SubsonicDetector(TrackDetector):
@@ -111,23 +106,33 @@ class SubsonicDetector(TrackDetector):
         data = track.audio_data
         nch = track.channels
 
-        # --- Whole-file combined (mono) ratio (backward-compatible) ---
-        combined_ratio = subsonic_ratio_db(data, track.samplerate, cutoff)
-
-        # --- Per-channel analysis ---
-        ch_ratios: dict[int, float] = {}
-        ch_warn: dict[int, bool] = {}
+        # --- Single-pass STFT per channel ---
+        channels_to_analyze: list[tuple[int | None, np.ndarray]] = []
         if nch >= 2 and data.ndim == 2:
             for ch in range(nch):
-                r = subsonic_ratio_db_1d(data[:, ch], track.samplerate, cutoff)
-                ch_ratios[ch] = r
-                ch_warn[ch] = bool(np.isfinite(r) and r >= threshold)
-        elif data.ndim == 1:
-            ch_ratios[0] = combined_ratio
-            ch_warn[0] = bool(
-                np.isfinite(combined_ratio) and combined_ratio >= threshold
+                channels_to_analyze.append((ch, data[:, ch]))
+        else:
+            channels_to_analyze.append(
+                (None, data if data.ndim == 1 else data[:, 0])
             )
 
+        ch_ratios: dict[int, float] = {}
+        ch_warn: dict[int, bool] = {}
+        ch_win_ratios: dict[int | None, list[tuple[int, int, float]]] = {}
+
+        for ch, signal in channels_to_analyze:
+            whole_ratio, win_ratios = subsonic_stft_analysis(
+                signal, track.samplerate, cutoff,
+                window_ms=int(self.window_ms),
+            )
+            ch_key = ch if ch is not None else 0
+            ch_ratios[ch_key] = whole_ratio
+            ch_warn[ch_key] = bool(np.isfinite(whole_ratio) and whole_ratio >= threshold)
+            ch_win_ratios[ch] = win_ratios
+
+        # Combined ratio: worst (highest) per-channel ratio — more
+        # conservative than mono-downmix (no phase-cancellation masking).
+        combined_ratio = max(ch_ratios.values()) if ch_ratios else float(-np.inf)
         any_ch_warn = any(ch_warn.values())
         combined_warn = bool(
             np.isfinite(combined_ratio) and combined_ratio >= threshold
@@ -188,6 +193,7 @@ class SubsonicDetector(TrackDetector):
         if self.windowed:
             windowed_regions = self._windowed_analysis(
                 track, cutoff, threshold, issues, detail_lines,
+                ch_win_ratios, channels_to_analyze,
             )
             result_data["windowed_regions"] = windowed_regions
 
@@ -243,9 +249,11 @@ class SubsonicDetector(TrackDetector):
         threshold: float,
         issues: list[IssueLocation],
         detail_lines: list[str],
+        ch_win_ratios: dict[int | None, list[tuple[int, int, float]]],
+        channels_to_analyze: list[tuple[int | None, np.ndarray]],
     ) -> list[dict]:
-        """Run per-window subsonic analysis and merge exceeding windows into
-        contiguous regions.  Appends to *issues* and *detail_lines* in-place.
+        """Merge pre-computed per-window subsonic ratios into contiguous
+        regions.  Appends to *issues* and *detail_lines* in-place.
         Returns a list of region dicts for the result data.
 
         Two-tier approach:
@@ -262,27 +270,11 @@ class SubsonicDetector(TrackDetector):
         _WINDOWED_RELAX_DB = 6.0
         windowed_threshold = threshold - _WINDOWED_RELAX_DB
 
-        data = track.audio_data
-        nch = track.channels
         max_reg = int(self.max_regions)
         all_regions: list[dict] = []
-        all_ratios: list[tuple[int | None, list[tuple[int, int, float]]]] = []
 
-        # Analyze each channel (or mono)
-        channels_to_analyze: list[tuple[int | None, np.ndarray]] = []
-        if nch >= 2 and data.ndim == 2:
-            for ch in range(nch):
-                channels_to_analyze.append((ch, data[:, ch]))
-        else:
-            channels_to_analyze.append((None, data if data.ndim == 1 else data[:, 0]))
-
-        for ch, signal in channels_to_analyze:
-            ratios = subsonic_windowed_ratios(
-                signal, track.samplerate, cutoff,
-                window_ms=int(self.window_ms),
-            )
-            all_ratios.append((ch, ratios))
-            # Merge contiguous exceeding windows into regions
+        for ch, _signal in channels_to_analyze:
+            ratios = ch_win_ratios.get(ch, [])
             regions = self._merge_regions(ratios, windowed_threshold)
             for reg in regions:
                 reg["channel"] = ch
@@ -370,9 +362,10 @@ class SubsonicDetector(TrackDetector):
     ) -> list[dict]:
         """Find contiguous regions where the signal is active (not noise/silence).
 
-        Computes per-window RMS, finds the loudest window, and marks windows
-        within *gate_db* of the loudest as active.  Returns merged regions in
-        the same dict format as :meth:`_merge_regions`.
+        Computes per-window RMS via vectorised reshape, finds the loudest
+        window, and marks windows within *gate_db* of the loudest as active.
+        Returns merged regions in the same dict format as
+        :meth:`_merge_regions`.
 
         This is the same relative-gating concept used by the RMS anchor
         analysis — it reliably separates musical content from amp noise.
@@ -380,45 +373,37 @@ class SubsonicDetector(TrackDetector):
         if signal.ndim != 1 or signal.size == 0:
             return []
 
-        win_samples = max(8, int(samplerate * window_ms / 1000))
-        # Compute per-window RMS
-        windows: list[tuple[int, int, float]] = []
-        pos = 0
         n = signal.size
-        while pos < n:
-            end = min(pos + win_samples, n)
-            chunk = signal[pos:end].astype(np.float64)
-            rms = float(np.sqrt(np.mean(chunk ** 2))) if chunk.size > 0 else 0.0
-            rms_db = float(20.0 * np.log10(rms)) if rms > 1e-10 else -200.0
-            windows.append((pos, end - 1, rms_db))
-            pos += win_samples
+        win_samples = max(8, int(samplerate * window_ms / 1000))
+        n_win = (n + win_samples - 1) // win_samples
+        padded = np.pad(
+            signal.astype(np.float64), (0, n_win * win_samples - n),
+        )
+        frames = padded.reshape(n_win, win_samples)
+        rms = np.sqrt(np.mean(frames ** 2, axis=1))
 
-        if not windows:
-            return []
+        with np.errstate(divide='ignore'):
+            rms_db = np.where(rms > 1e-10, 20.0 * np.log10(rms), -200.0)
 
-        max_rms_db = max(w[2] for w in windows)
+        max_rms_db = float(np.max(rms_db))
         gate_threshold = max_rms_db - gate_db
+        active = rms_db >= gate_threshold
 
-        # Merge contiguous active windows
+        # Merge contiguous active windows via diff
+        changes = np.diff(active.astype(np.int8), prepend=0, append=0)
+        starts = np.where(changes == 1)[0]
+        ends = np.where(changes == -1)[0] - 1
+
         regions: list[dict] = []
-        current: dict | None = None
-        for s_start, s_end, rms_db in windows:
-            if rms_db >= gate_threshold:
-                if current is None:
-                    current = {
-                        "sample_start": s_start,
-                        "sample_end": s_end,
-                        "max_ratio_db": rms_db,  # store RMS as proxy
-                    }
-                else:
-                    current["sample_end"] = s_end
-                    current["max_ratio_db"] = max(current["max_ratio_db"], rms_db)
-            else:
-                if current is not None:
-                    regions.append(current)
-                    current = None
-        if current is not None:
-            regions.append(current)
+        for s_idx, e_idx in zip(starts, ends):
+            s_sample = int(s_idx * win_samples)
+            e_sample = min(int((e_idx + 1) * win_samples), n) - 1
+            max_r = float(np.max(rms_db[s_idx:e_idx + 1]))
+            regions.append({
+                "sample_start": s_sample,
+                "sample_end": e_sample,
+                "max_ratio_db": max_r,
+            })
         return regions
 
     def clean_message(self) -> str | None:

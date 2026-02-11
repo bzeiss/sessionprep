@@ -5,6 +5,7 @@ from typing import Any
 
 import numpy as np
 import soundfile as sf
+from scipy.signal import stft as scipy_stft
 
 from .models import TrackContext
 from .chunks import chunk_ids as _chunk_ids
@@ -318,163 +319,142 @@ def detect_clipping_ranges(
     return len(ranges), ranges[:int(max_ranges)]
 
 
-def subsonic_ratio_db(
-    data: np.ndarray,
-    samplerate: int,
-    cutoff_hz: float,
-    max_samples: int = 200000,
-) -> float:
-    """FFT-based subsonic energy ratio (dB relative to full-band power)."""
-    if data.size == 0 or samplerate <= 0:
-        return float(-np.inf)
-
-    if data.ndim > 1:
-        mono = np.mean(data.astype(np.float64), axis=1)
-    else:
-        mono = data.astype(np.float64)
-
-    if mono.size == 0:
-        return float(-np.inf)
-
-    step = max(1, int(mono.size // max_samples))
-    x = mono[::step]
-    if x.size < 8:
-        return float(-np.inf)
-
-    x = x - float(np.mean(x))
-    w = np.hanning(x.size)
-    X = np.fft.rfft(x * w)
-    p = np.abs(X) ** 2
-    freqs = np.fft.rfftfreq(x.size, d=float(step) / float(samplerate))
-
-    non_dc = freqs > 0.0
-    total = float(np.sum(p[non_dc]))
-    if total <= 0.0:
-        return float(-np.inf)
-
-    band = float(np.sum(p[(freqs > 0.0) & (freqs <= float(cutoff_hz))]))
-    if band <= 0.0:
-        return float(-np.inf)
-
-    return float(10.0 * np.log10(band / total))
-
-
-def subsonic_ratio_db_1d(
+def subsonic_stft_analysis(
     signal: np.ndarray,
     samplerate: int,
     cutoff_hz: float,
-    max_samples: int = 200000,
-) -> float:
-    """FFT-based subsonic energy ratio for a **1-D** signal (single channel).
-
-    Identical algorithm to :func:`subsonic_ratio_db` but requires a 1-D input
-    (no mono-down-mix step).
-    """
-    if signal.ndim != 1 or signal.size == 0 or samplerate <= 0:
-        return float(-np.inf)
-
-    x = signal.astype(np.float64)
-    step = max(1, int(x.size // max_samples))
-    x = x[::step]
-    if x.size < 8:
-        return float(-np.inf)
-
-    x = x - float(np.mean(x))
-    w = np.hanning(x.size)
-    X = np.fft.rfft(x * w)
-    p = np.abs(X) ** 2
-    freqs = np.fft.rfftfreq(x.size, d=float(step) / float(samplerate))
-
-    non_dc = freqs > 0.0
-    total = float(np.sum(p[non_dc]))
-    if total <= 0.0:
-        return float(-np.inf)
-
-    band = float(np.sum(p[(freqs > 0.0) & (freqs <= float(cutoff_hz))]))
-    if band <= 0.0:
-        return float(-np.inf)
-
-    return float(10.0 * np.log10(band / total))
-
-
-def subsonic_windowed_ratios(
-    signal: np.ndarray,
-    samplerate: int,
-    cutoff_hz: float,
+    *,
     window_ms: int = 500,
     hop_ms: int | None = None,
-) -> list[tuple[int, int, float]]:
-    """Compute per-window subsonic energy ratios on a **1-D** signal.
+    abs_gate_db: float = -40.0,
+    silence_rms: float = 1e-7,
+) -> tuple[float, list[tuple[int, int, float]]]:
+    """Single-pass STFT subsonic analysis on a 1-D signal.
 
-    Returns a list of ``(sample_start, sample_end, ratio_db)`` tuples, one per
-    analysis window.  Windows that contain too little data or where the total
-    power is negligible are assigned ``-inf``.
+    Uses :func:`scipy.signal.stft` to compute the short-time Fourier transform
+    in one vectorised call, then derives both per-window and whole-file
+    subsonic-to-total energy ratios from the resulting power spectrum.
 
     Parameters
     ----------
     signal : 1-D ndarray
+        Single-channel audio samples.
     samplerate : int
+        Sample rate in Hz.
     cutoff_hz : float
+        Frequency below which energy is considered subsonic.
     window_ms : int
-        Window length in milliseconds.  Must be large enough for reasonable
-        frequency resolution at *cutoff_hz*.
+        Analysis window length in milliseconds.
     hop_ms : int or None
         Hop between windows in milliseconds.  Defaults to *window_ms* (no
         overlap).
+    abs_gate_db : float
+        Absolute subsonic power gate.  Windows where the estimated subsonic
+        level (``rms_db + ratio_db``) is below this are set to ``-inf``.
+    silence_rms : float
+        RMS threshold below which a window is considered silent.
+
+    Returns
+    -------
+    whole_file_ratio_db : float
+        Subsonic-to-total energy ratio for the entire signal (dB).
+    per_window_ratios : list of (sample_start, sample_end, ratio_db)
+        Per-window subsonic ratios.  Silent or gated windows have ``-inf``.
     """
-    if signal.ndim != 1 or signal.size == 0 or samplerate <= 0:
-        return []
+    _NEG_INF = float(-np.inf)
 
-    win_samples = max(8, int(samplerate * window_ms / 1000))
-    hop_samples = int(samplerate * (hop_ms or window_ms) / 1000)
-    hop_samples = max(1, hop_samples)
+    if signal.ndim != 1 or signal.size < 8 or samplerate <= 0:
+        return _NEG_INF, []
 
+    original_size = signal.size
+    nperseg = max(8, int(samplerate * window_ms / 1000))
+    hop_samples = max(1, int(samplerate * ((hop_ms or window_ms)) / 1000))
+    noverlap = nperseg - hop_samples
+
+    # Pad signal so scipy.signal.stft (boundary=None) includes the tail.
+    # Without padding, partial last windows are dropped.
+    remainder = (original_size - nperseg) % hop_samples if original_size > nperseg else original_size
+    if remainder != 0:
+        pad_len = hop_samples - remainder
+        padded = np.pad(signal, (0, pad_len)).astype(np.float64)
+    else:
+        padded = signal.astype(np.float64)
+
+    # Power-of-2 FFT size for speed (does not change window shape or overlap)
+    nfft = 1 << (nperseg - 1).bit_length()
+
+    # --- Vectorised per-window RMS (for silence + absolute power gates) ---
+    # Compute RMS on hop-aligned non-overlapping chunks of the original signal
+    # to match the STFT frame positions.
+    n_frames = (padded.size - noverlap) // hop_samples
+    # Build RMS from hop-aligned windows (same start positions as STFT frames)
+    rms_arr = np.empty(n_frames, dtype=np.float64)
+    for i in range(n_frames):
+        s = i * hop_samples
+        e = min(s + nperseg, original_size)
+        if e <= s:
+            rms_arr[i] = 0.0
+        else:
+            chunk = padded[s:e]
+            rms_arr[i] = float(np.sqrt(np.mean(chunk ** 2)))
+
+    # --- STFT ---
+    _f, _t, Zxx = scipy_stft(
+        padded, fs=samplerate, nperseg=nperseg, nfft=nfft,
+        noverlap=noverlap, window='hann', boundary=None,
+    )
+    power = np.abs(Zxx) ** 2  # (n_freq_bins, n_frames)
+    actual_frames = power.shape[1]
+
+    # Trim RMS array if frame counts diverge (shouldn't happen, but be safe)
+    if rms_arr.size > actual_frames:
+        rms_arr = rms_arr[:actual_frames]
+    elif rms_arr.size < actual_frames:
+        rms_arr = np.pad(rms_arr, (0, actual_frames - rms_arr.size))
+
+    # --- Frequency bin indices (integer slicing, computed once) ---
+    dc_bin = 1  # skip DC at index 0
+    cutoff_bin = min(
+        int(np.floor(cutoff_hz * nfft / samplerate)) + 1,
+        power.shape[0],
+    )
+
+    # --- Vectorised band / total power ---
+    band = np.sum(power[dc_bin:cutoff_bin, :], axis=0)   # (n_frames,)
+    total = np.sum(power[dc_bin:, :], axis=0)             # (n_frames,)
+
+    # Per-window ratio
+    with np.errstate(divide='ignore', invalid='ignore'):
+        ratios = np.where(
+            (band > 0) & (total > 0),
+            10.0 * np.log10(band / total),
+            -np.inf,
+        )
+
+    # --- Vectorised gates ---
+    # Silence gate
+    ratios[rms_arr < silence_rms] = -np.inf
+
+    # Absolute power gate: subsonic_abs = rms_db + ratio
+    with np.errstate(divide='ignore', invalid='ignore'):
+        rms_db = np.where(rms_arr > 0, 20.0 * np.log10(rms_arr), -200.0)
+    abs_mask = np.isfinite(ratios) & ((rms_db + ratios) < abs_gate_db)
+    ratios[abs_mask] = -np.inf
+
+    # --- Whole-file ratio (aggregated from per-frame power) ---
+    valid = rms_arr >= silence_rms
+    total_band = float(np.sum(band[valid]))
+    total_all = float(np.sum(total[valid]))
+    if total_band > 0 and total_all > 0:
+        whole_ratio = float(10.0 * np.log10(total_band / total_all))
+    else:
+        whole_ratio = _NEG_INF
+
+    # --- Build result tuples ---
     results: list[tuple[int, int, float]] = []
-    pos = 0
-    n = signal.size
-    while pos < n:
-        end = min(pos + win_samples, n)
-        chunk = signal[pos:end].astype(np.float64)
-        if chunk.size < 8:
-            results.append((pos, end - 1, float(-np.inf)))
-            pos += hop_samples
-            continue
+    for i in range(actual_frames):
+        s = i * hop_samples
+        e = min(s + nperseg, original_size) - 1
+        results.append((s, e, float(ratios[i])))
 
-        # Quick gate: skip true digital silence
-        rms = float(np.sqrt(np.mean(chunk ** 2)))
-        if rms < 1e-7:  # effectively zero
-            results.append((pos, end - 1, float(-np.inf)))
-            pos += hop_samples
-            continue
-
-        chunk = chunk - float(np.mean(chunk))
-        w = np.hanning(chunk.size)
-        X = np.fft.rfft(chunk * w)
-        p = np.abs(X) ** 2
-        freqs = np.fft.rfftfreq(chunk.size, d=1.0 / float(samplerate))
-
-        non_dc = freqs > 0.0
-        total = float(np.sum(p[non_dc]))
-        if total <= 0.0:
-            results.append((pos, end - 1, float(-np.inf)))
-            pos += hop_samples
-            continue
-
-        band = float(np.sum(p[(freqs > 0.0) & (freqs <= float(cutoff_hz))]))
-        ratio = float(10.0 * np.log10(band / total)) if band > 0.0 else float(-np.inf)
-
-        # Absolute subsonic power gate: even if the *ratio* is high, the
-        # subsonic energy must be loud enough to actually matter.  Amp hum
-        # and noise in quiet gaps can dominate the spectrum but their
-        # absolute level is too low to waste headroom.
-        # subsonic_abs_db = window_rms_db + ratio_db
-        if np.isfinite(ratio) and rms > 0:
-            rms_db = float(20.0 * np.log10(rms))
-            subsonic_abs_db = rms_db + ratio
-            if subsonic_abs_db < -40.0:  # subsonic power below −40 dBFS
-                ratio = float(-np.inf)
-
-        results.append((pos, end - 1, ratio))
-        pos += hop_samples
-
-    return results
+    return whole_ratio, results

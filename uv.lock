@@ -430,6 +430,7 @@ name = "sessionprep"
 source = { editable = "." }
 dependencies = [
     { name = "numpy" },
+    { name = "scipy" },
     { name = "soundfile" },
 ]
 
@@ -439,7 +440,6 @@ cli = [
 ]
 gui = [
     { name = "pyside6" },
-    { name = "scipy" },
     { name = "sounddevice" },
 ]
 
@@ -460,7 +460,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "pyside6", marker = "extra == 'gui'", specifier = ">=6.6" },
     { name = "rich", marker = "extra == 'cli'", specifier = ">=13.0" },
-    { name = "scipy", marker = "extra == 'gui'", specifier = ">=1.12" },
+    { name = "scipy", specifier = ">=1.12" },
     { name = "sounddevice", marker = "extra == 'gui'", specifier = ">=0.4" },
     { name = "soundfile", specifier = ">=0.12" },
 ]
