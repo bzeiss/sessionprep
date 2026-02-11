@@ -354,6 +354,9 @@ class SessionPrepWindow(QMainWindow):
 
         self._waveform = WaveformWidget()
         self._waveform.position_clicked.connect(self._on_waveform_seek)
+        self._waveform.set_invert_scroll(
+            self._config.get("gui", {}).get("invert_scroll", "default"))
+
 
         # Waveform toolbar + widget container
         wf_container = QWidget()
@@ -1362,6 +1365,8 @@ class SessionPrepWindow(QMainWindow):
             self._config = dlg.result_config()
             save_config(self._config)
             self._status_bar.showMessage("Preferences saved.")
+            self._waveform.set_invert_scroll(
+                self._config.get("gui", {}).get("invert_scroll", "default"))
 
             if self._source_dir:
                 from sessionpreplib.config import strip_presentation_keys

@@ -347,6 +347,9 @@ class WaveformWidget(QWidget):
         self._spec_db_floor: float = _SPEC_DB_FLOOR
         self._spec_db_ceil: float = 0.0
         self._spec_recompute_worker: SpectrogramRecomputeWorker | None = None
+        # Scroll inversion
+        self._invert_h: bool = False
+        self._invert_v: bool = False
         self.setMinimumHeight(80)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
@@ -1543,6 +1546,8 @@ class WaveformWidget(QWidget):
                 scroll = mel_range / 8
                 if delta < 0:
                     scroll = -scroll
+                if self._invert_v:
+                    scroll = -scroll
                 new_min = self._mel_view_min + scroll
                 new_max = self._mel_view_max + scroll
                 if new_min < mel_full_min:
@@ -1562,8 +1567,10 @@ class WaveformWidget(QWidget):
             # ── Scroll left / right ───────────────────────────────────
             view_len = self._view_end - self._view_start
             scroll_amount = max(1, view_len // 8)
-            if delta > 0:
+            if delta < 0:
                 scroll_amount = -scroll_amount  # scroll left
+            if self._invert_h:
+                scroll_amount = -scroll_amount
             new_start = self._view_start + scroll_amount
             new_end = self._view_end + scroll_amount
             if new_start < 0:
@@ -1785,6 +1792,11 @@ class WaveformWidget(QWidget):
         self._spec_image = None
         self._spec_cache_key = ()
         self.update()
+
+    def set_invert_scroll(self, mode: str):
+        """Set scroll inversion mode: 'default', 'horizontal', 'vertical', 'both'."""
+        self._invert_h = mode in ("horizontal", "both")
+        self._invert_v = mode in ("vertical", "both")
 
     def set_colormap(self, name: str):
         """Set the spectrogram colormap by name."""

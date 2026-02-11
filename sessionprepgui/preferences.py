@@ -418,6 +418,17 @@ class PreferencesDialog(QDialog):
                 label="Spectrogram color theme",
                 description="Color palette used for the spectrogram display.",
             ),
+            ParamSpec(
+                key="invert_scroll", type=str, default="default",
+                choices=["default", "horizontal", "vertical", "both"],
+                label="Invert mouse-wheel scrolling",
+                description=(
+                    "Reverses the scroll direction in the waveform/spectrogram view. "
+                    "'horizontal' inverts Shift+wheel (timeline panning), "
+                    "'vertical' inverts Shift+Alt+wheel (frequency panning), "
+                    "'both' inverts both axes."
+                ),
+            ),
         ]
         values = self._config.get("gui", {})
         page, widgets = _build_param_page(gui_params, values)

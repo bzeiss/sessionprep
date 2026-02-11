@@ -45,6 +45,7 @@ _GUI_DEFAULTS: dict[str, Any] = {
     "output_folder": "processed",
     "spectrogram_colormap": "magma",
     "default_project_dir": "",
+    "invert_scroll": "default",
 }
 
 
