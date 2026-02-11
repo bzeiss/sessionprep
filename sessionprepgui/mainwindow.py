@@ -360,6 +360,83 @@ class SessionPrepWindow(QMainWindow):
 
         wf_toolbar.addSpacing(8)
 
+        # Spectrogram settings dropdown (visible only in spectrogram mode)
+        self._spec_settings_btn = QToolButton()
+        self._spec_settings_btn.setText("Spectrogram Settings")
+        self._spec_settings_btn.setToolTip("Configure spectrogram display parameters")
+        self._spec_settings_btn.setPopupMode(QToolButton.InstantPopup)
+        self._spec_settings_btn.setAutoRaise(True)
+        self._spec_settings_btn.setStyleSheet(dropdown_style)
+        spec_menu = QMenu(self._spec_settings_btn)
+
+        # -- FFT Size submenu --
+        fft_menu = spec_menu.addMenu("FFT Size")
+        self._fft_group = QActionGroup(self)
+        for sz in (512, 1024, 2048, 4096, 8192):
+            act = fft_menu.addAction(str(sz))
+            act.setCheckable(True)
+            act.setData(sz)
+            if sz == 2048:
+                act.setChecked(True)
+            self._fft_group.addAction(act)
+        self._fft_group.triggered.connect(self._on_spec_fft_changed)
+
+        # -- Window submenu --
+        win_menu = spec_menu.addMenu("Window")
+        self._win_group = QActionGroup(self)
+        _WINDOW_MAP = [("Hann", "hann"), ("Hamming", "hamming"),
+                       ("Blackman-Harris", "blackmanharris")]
+        for label, key in _WINDOW_MAP:
+            act = win_menu.addAction(label)
+            act.setCheckable(True)
+            act.setData(key)
+            if key == "hann":
+                act.setChecked(True)
+            self._win_group.addAction(act)
+        self._win_group.triggered.connect(self._on_spec_window_changed)
+
+        # -- Color Theme submenu --
+        cmap_menu = spec_menu.addMenu("Color Theme")
+        self._cmap_group = QActionGroup(self)
+        for name in ("Magma", "Viridis", "Grayscale"):
+            act = cmap_menu.addAction(name)
+            act.setCheckable(True)
+            act.setData(name.lower())
+            if name == "Magma":
+                act.setChecked(True)
+            self._cmap_group.addAction(act)
+        self._cmap_group.triggered.connect(self._on_spec_cmap_changed)
+
+        # -- dB Floor submenu --
+        floor_menu = spec_menu.addMenu("dB Floor")
+        self._floor_group = QActionGroup(self)
+        for val in (-120, -100, -80, -60, -40):
+            act = floor_menu.addAction(f"{val} dB")
+            act.setCheckable(True)
+            act.setData(val)
+            if val == -80:
+                act.setChecked(True)
+            self._floor_group.addAction(act)
+        self._floor_group.triggered.connect(self._on_spec_floor_changed)
+
+        # -- dB Ceiling submenu --
+        ceil_menu = spec_menu.addMenu("dB Ceiling")
+        self._ceil_group = QActionGroup(self)
+        for val in (-20, -10, 0):
+            act = ceil_menu.addAction(f"{val} dB")
+            act.setCheckable(True)
+            act.setData(val)
+            if val == 0:
+                act.setChecked(True)
+            self._ceil_group.addAction(act)
+        self._ceil_group.triggered.connect(self._on_spec_ceil_changed)
+
+        self._spec_settings_btn.setMenu(spec_menu)
+        self._spec_settings_btn.setVisible(False)
+        wf_toolbar.addWidget(self._spec_settings_btn)
+
+        wf_toolbar.addSpacing(8)
+
         # Overlay dropdown (populated per-track)
         self._overlay_btn = QToolButton()
         self._overlay_btn.setText("Detector Overlays")
@@ -791,7 +868,10 @@ class SessionPrepWindow(QMainWindow):
             ws = get_window_samples(track, win_ms)
 
             self._wf_worker = WaveformLoadWorker(
-                track.audio_data, track.samplerate, ws, parent=self)
+                track.audio_data, track.samplerate, ws,
+                spec_n_fft=self._waveform._spec_n_fft,
+                spec_window=self._waveform._spec_window,
+                parent=self)
             self._wf_worker.finished.connect(
                 lambda result, t=track: self._on_waveform_loaded(result, t))
             self._wf_worker.start()
@@ -814,6 +894,11 @@ class SessionPrepWindow(QMainWindow):
         self._waveform.set_precomputed(result)
         cmap = self._config.get("gui", {}).get("spectrogram_colormap", "magma")
         self._waveform.set_colormap(cmap)
+        # Sync colormap dropdown with preference
+        for act in self._cmap_group.actions():
+            if act.data() == cmap:
+                act.setChecked(True)
+                break
 
         all_issues = []
         for det_result in track.detector_results.values():
@@ -898,6 +983,28 @@ class SessionPrepWindow(QMainWindow):
         self._markers_toggle.setVisible(is_waveform)
         self._rms_lr_toggle.setVisible(is_waveform)
         self._rms_avg_toggle.setVisible(is_waveform)
+        # Show spectrogram-only controls
+        self._spec_settings_btn.setVisible(not is_waveform)
+
+    @Slot(QAction)
+    def _on_spec_fft_changed(self, action):
+        self._waveform.set_spec_fft(int(action.data()))
+
+    @Slot(QAction)
+    def _on_spec_window_changed(self, action):
+        self._waveform.set_spec_window(action.data())
+
+    @Slot(QAction)
+    def _on_spec_cmap_changed(self, action):
+        self._waveform.set_colormap(action.data())
+
+    @Slot(QAction)
+    def _on_spec_floor_changed(self, action):
+        self._waveform.set_spec_db_floor(float(action.data()))
+
+    @Slot(QAction)
+    def _on_spec_ceil_changed(self, action):
+        self._waveform.set_spec_db_ceil(float(action.data()))
 
     def _populate_table(self, session):
         """Update the track table with analysis results."""

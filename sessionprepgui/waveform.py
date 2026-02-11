@@ -108,7 +108,10 @@ _SPEC_F_MAX = 22050.0
 _SPEC_DB_FLOOR = -80.0  # dB floor for normalization
 
 
-def compute_mel_spectrogram(channels: list[np.ndarray], sr: int
+def compute_mel_spectrogram(channels: list[np.ndarray], sr: int, *,
+                            n_fft: int = _SPEC_N_FFT,
+                            hop: int | None = None,
+                            window: str = "hann",
                             ) -> np.ndarray | None:
     """Compute a full-file mel spectrogram from channel data.
 
@@ -117,6 +120,8 @@ def compute_mel_spectrogram(channels: list[np.ndarray], sr: int
     """
     if not channels:
         return None
+    if hop is None:
+        hop = n_fft // 4
     # Mix to mono
     if len(channels) == 1:
         mono = channels[0].astype(np.float64)
@@ -125,17 +130,17 @@ def compute_mel_spectrogram(channels: list[np.ndarray], sr: int
             np.column_stack([ch.astype(np.float64) for ch in channels]),
             axis=1,
         )
-    if len(mono) < _SPEC_N_FFT:
+    if len(mono) < n_fft:
         return None
     # STFT
     _f, _t, Zxx = scipy_stft(
-        mono, fs=sr, nperseg=_SPEC_N_FFT,
-        noverlap=_SPEC_N_FFT - _SPEC_HOP, boundary=None,
+        mono, fs=sr, nperseg=n_fft,
+        noverlap=n_fft - hop, window=window, boundary=None,
     )
     power = np.abs(Zxx) ** 2
     # Mel filterbank
     f_max = min(_SPEC_F_MAX, sr / 2.0)
-    fb = _mel_filterbank(sr, _SPEC_N_FFT, _SPEC_N_MELS, _SPEC_F_MIN, f_max)
+    fb = _mel_filterbank(sr, n_fft, _SPEC_N_MELS, _SPEC_F_MIN, f_max)
     mel_spec = fb @ power  # (n_mels, n_frames)
     # To dB
     mel_spec = 10.0 * np.log10(np.maximum(mel_spec, 1e-10))
@@ -152,11 +157,16 @@ class WaveformLoadWorker(QThread):
     finished = Signal(object)  # emits a dict with all computed results
 
     def __init__(self, audio_data: np.ndarray, samplerate: int,
-                 rms_window_samples: int, parent=None):
+                 rms_window_samples: int, *,
+                 spec_n_fft: int = _SPEC_N_FFT,
+                 spec_window: str = "hann",
+                 parent=None):
         super().__init__(parent)
         self._audio_data = audio_data
         self._samplerate = samplerate
         self._rms_win = rms_window_samples
+        self._spec_n_fft = spec_n_fft
+        self._spec_window = spec_window
 
     def run(self):
         data = self._audio_data
@@ -215,7 +225,10 @@ class WaveformLoadWorker(QThread):
                 rms_max_amplitude = rms_lin
 
         # --- Spectrogram ---
-        spec_db = compute_mel_spectrogram(channels, sr)
+        spec_db = compute_mel_spectrogram(
+            channels, sr,
+            n_fft=self._spec_n_fft, window=self._spec_window,
+        )
 
         self.finished.emit({
             "channels": channels,
@@ -231,6 +244,28 @@ class WaveformLoadWorker(QThread):
             "rms_max_amplitude": rms_max_amplitude,
             "spec_db": spec_db,
         })
+
+
+class SpectrogramRecomputeWorker(QThread):
+    """Lightweight background thread to recompute the mel spectrogram."""
+
+    finished = Signal(object)  # emits np.ndarray | None
+
+    def __init__(self, channels: list[np.ndarray], sr: int, *,
+                 n_fft: int = _SPEC_N_FFT, window: str = "hann",
+                 parent=None):
+        super().__init__(parent)
+        self._channels = channels
+        self._sr = sr
+        self._n_fft = n_fft
+        self._window = window
+
+    def run(self):
+        result = compute_mel_spectrogram(
+            self._channels, self._sr,
+            n_fft=self._n_fft, window=self._window,
+        )
+        self.finished.emit(result)
 
 
 class WaveformWidget(QWidget):
@@ -307,6 +342,11 @@ class WaveformWidget(QWidget):
         self._colormap: str = "magma"
         self._mel_view_min: float = _hz_to_mel(_SPEC_F_MIN)
         self._mel_view_max: float = _hz_to_mel(_SPEC_F_MAX)
+        self._spec_n_fft: int = _SPEC_N_FFT
+        self._spec_window: str = "hann"
+        self._spec_db_floor: float = _SPEC_DB_FLOOR
+        self._spec_db_ceil: float = 0.0
+        self._spec_recompute_worker: SpectrogramRecomputeWorker | None = None
         self.setMinimumHeight(80)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
@@ -810,7 +850,8 @@ class WaveformWidget(QWidget):
         # Build or reuse cached spectrogram image
         cache_key = (self._view_start, self._view_end, draw_w,
                      int(draw_h), self._colormap,
-                     self._mel_view_min, self._mel_view_max)
+                     self._mel_view_min, self._mel_view_max,
+                     self._spec_db_floor, self._spec_db_ceil)
         if self._spec_cache_key != cache_key or self._spec_image is None:
             self._build_spec_image(draw_w, int(draw_h))
             self._spec_cache_key = cache_key
@@ -852,10 +893,10 @@ class WaveformWidget(QWidget):
 
         view_spec = spec[row_lo:row_hi, frame_start:frame_end]
 
-        # Normalize to 0..1 (clamp to dB floor..0)
-        db_floor = _SPEC_DB_FLOOR
-        db_max = float(spec.max()) if spec.size > 0 else 0.0
-        norm = np.clip((view_spec - db_floor) / max(db_max - db_floor, 1.0),
+        # Normalize to 0..1 (clamp to dB floor..ceiling)
+        db_floor = self._spec_db_floor
+        db_ceil = self._spec_db_ceil
+        norm = np.clip((view_spec - db_floor) / max(db_ceil - db_floor, 1.0),
                        0.0, 1.0)
 
         # Flip vertically (low freq at bottom)
@@ -1681,6 +1722,63 @@ class WaveformWidget(QWidget):
         self._colormap = name
         self._spec_image = None
         self._spec_cache_key = ()
+        self.update()
+
+    def set_spec_fft(self, n_fft: int):
+        """Change the FFT size and recompute the spectrogram."""
+        if n_fft == self._spec_n_fft:
+            return
+        self._spec_n_fft = n_fft
+        self._recompute_spectrogram()
+
+    def set_spec_window(self, window: str):
+        """Change the FFT window function and recompute the spectrogram."""
+        if window == self._spec_window:
+            return
+        self._spec_window = window
+        self._recompute_spectrogram()
+
+    def set_spec_db_floor(self, val: float):
+        """Change the dB floor for spectrogram normalization."""
+        if val == self._spec_db_floor:
+            return
+        self._spec_db_floor = val
+        self._spec_image = None
+        self._spec_cache_key = ()
+        self.update()
+
+    def set_spec_db_ceil(self, val: float):
+        """Change the dB ceiling for spectrogram normalization."""
+        if val == self._spec_db_ceil:
+            return
+        self._spec_db_ceil = val
+        self._spec_image = None
+        self._spec_cache_key = ()
+        self.update()
+
+    def _recompute_spectrogram(self):
+        """Launch a background thread to recompute the mel spectrogram."""
+        if not self._channels:
+            return
+        self._spec_db = None
+        self._spec_image = None
+        self._spec_cache_key = ()
+        self.update()
+        worker = SpectrogramRecomputeWorker(
+            self._channels, self._samplerate,
+            n_fft=self._spec_n_fft, window=self._spec_window,
+            parent=self,
+        )
+        worker.finished.connect(self._on_spec_recomputed)
+        self._spec_recompute_worker = worker
+        worker.start()
+
+    def _on_spec_recomputed(self, spec_db):
+        """Slot called when the spectrogram recompute finishes."""
+        self._spec_db = spec_db
+        self._spec_image = None
+        self._spec_cache_key = ()
+        self._spec_recompute_worker = None
         self.update()
 
     def _compute_rms_max_sample(self):
