@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSplitter,
@@ -257,6 +258,41 @@ def _build_param_page(params: list[ParamSpec], values: dict[str, Any]) -> tuple[
 
 
 # ---------------------------------------------------------------------------
+# Output folder validation
+# ---------------------------------------------------------------------------
+
+_WINDOWS_RESERVED = frozenset(
+    ["CON", "PRN", "AUX", "NUL"]
+    + [f"COM{i}" for i in range(1, 10)]
+    + [f"LPT{i}" for i in range(1, 10)]
+)
+_ILLEGAL_CHARS = frozenset('<>:"|?*')
+
+
+def sanitize_output_folder(name: str) -> str | None:
+    """Validate and clean an output folder name.
+
+    Returns the stripped name on success, or ``None`` if the name is
+    invalid.  Rejects empty strings, path traversals, path separators,
+    illegal Windows characters, control characters, and reserved names.
+    """
+    name = name.strip()
+    if not name:
+        return None
+    if ".." in name:
+        return None
+    if "/" in name or "\\" in name:
+        return None
+    if any(c in _ILLEGAL_CHARS for c in name):
+        return None
+    if any(ord(c) < 32 for c in name):
+        return None
+    if name.upper() in _WINDOWS_RESERVED:
+        return None
+    return name
+
+
+# ---------------------------------------------------------------------------
 # Preferences Dialog
 # ---------------------------------------------------------------------------
 
@@ -365,6 +401,15 @@ class PreferencesDialog(QDialog):
                     "Controls the level of detail shown in track reports. "
                     "Verbose mode includes additional analytical data such as "
                     "classification metrics."
+                ),
+            ),
+            ParamSpec(
+                key="output_folder", type=str, default="processed",
+                label="Output folder name",
+                description=(
+                    "Name of the subfolder (relative to the project directory) "
+                    "where processed audio files are written. "
+                    "Must be a simple folder name without path separators."
                 ),
             ),
         ]
@@ -516,6 +561,20 @@ class PreferencesDialog(QDialog):
         gui = self._config.setdefault("gui", {})
         for key, widget in self._general_widgets:
             gui[key] = _read_widget(widget)
+
+        # Validate output folder name
+        raw_folder = gui.get("output_folder", "")
+        clean_folder = sanitize_output_folder(str(raw_folder))
+        if clean_folder is None:
+            QMessageBox.warning(
+                self, "Invalid output folder",
+                "The output folder name is invalid.\n\n"
+                "It must be a simple folder name without path separators, "
+                "special characters, or reserved names.",
+            )
+            return
+        gui["output_folder"] = clean_folder
+
         # Detector display settings (stored in gui section)
         for key, widget in self._widgets.get("_det_gui", []):
             gui[key] = _read_widget(widget)

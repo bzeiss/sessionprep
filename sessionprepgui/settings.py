@@ -42,6 +42,7 @@ _GUI_DEFAULTS: dict[str, Any] = {
     "scale_factor": 1.0,
     "show_clean_detectors": False,
     "report_verbosity": "normal",
+    "output_folder": "processed",
     "default_project_dir": "",
 }
 
@@ -131,6 +132,10 @@ def load_config() -> dict[str, Any]:
         defaults["gui"] = gui_section
         save_config(defaults)
         return copy.deepcopy(defaults)
+
+    # Persist if merge introduced new keys (e.g. new defaults)
+    if merged != data:
+        save_config(merged)
 
     return merged
 
