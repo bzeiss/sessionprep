@@ -265,6 +265,8 @@ class WaveformWidget(QWidget):
         self._samplerate: int = 44100
         self._total_samples: int = 0
         self._cursor_sample: int = 0
+        self._cursor_y_value: float | None = None  # amplitude (waveform) or mel (spectrogram)
+        self._cursor_y_channel: int = 0             # channel lane (waveform only)
         self._peaks_cache: list[tuple[np.ndarray, np.ndarray]] = []  # (mins, maxs) per channel
         self._cached_view: tuple[int, int, int] = (0, 0, 0)  # (width, view_start, view_end)
         self._issues: list = []  # list of IssueLocation objects
@@ -340,6 +342,7 @@ class WaveformWidget(QWidget):
         self._rms_max_dirty = False
         self._samplerate = samplerate
         self._cursor_sample = 0
+        self._cursor_y_value = None
         self._view_start = 0
         self._view_end = self._total_samples
         self._vscale = 1.0
@@ -385,6 +388,7 @@ class WaveformWidget(QWidget):
         self._rms_max_amplitude = result["rms_max_amplitude"]
         self._rms_max_dirty = False
         self._cursor_sample = 0
+        self._cursor_y_value = None
         self._view_start = 0
         self._view_end = self._total_samples
         self._vscale = 1.0
@@ -541,12 +545,59 @@ class WaveformWidget(QWidget):
         # --- Time scale (shared) ---
         self._draw_time_scale(painter, x0, draw_w, draw_h)
 
-        # Playback cursor (shared, spans all channels)
+        # Playback cursor — 2D crosshair (shared, spans all channels)
         if self._total_samples > 0:
             cursor_x = x0 + self._sample_to_x(self._cursor_sample, draw_w)
             if x0 <= cursor_x <= x0 + draw_w:
                 painter.setPen(QPen(QColor("#ffffff"), 1))
                 painter.drawLine(cursor_x, 0, cursor_x, int(draw_h))
+
+                # Horizontal crosshair line at stored y value
+                if self._cursor_y_value is not None:
+                    cursor_y = -1
+                    cursor_label = ""
+                    if self._display_mode == "spectrogram":
+                        mel_range = self._mel_view_max - self._mel_view_min
+                        if mel_range > 0 and draw_h > 0:
+                            frac = ((self._cursor_y_value - self._mel_view_min)
+                                    / mel_range)
+                            cursor_y = int(draw_h * (1.0 - frac))
+                            freq = _mel_to_hz(self._cursor_y_value)
+                            if freq >= 1000:
+                                cursor_label = f"{freq / 1000:.1f} kHz"
+                            else:
+                                cursor_label = f"{freq:.0f} Hz"
+                    else:
+                        nch = self._num_channels
+                        if nch > 0 and draw_h > 0:
+                            lane_h = draw_h / nch
+                            ch = min(self._cursor_y_channel, nch - 1)
+                            mid_y = ch * lane_h + lane_h / 2.0
+                            scale = (lane_h / 2.0) * 0.85 * self._vscale
+                            cursor_y = int(mid_y - self._cursor_y_value * scale)
+                            amp = abs(self._cursor_y_value)
+                            if amp > 0:
+                                cursor_label = f"{20.0 * np.log10(amp):.1f} dBFS"
+                            else:
+                                cursor_label = "-\u221e dBFS"
+
+                    if 0 <= cursor_y <= int(draw_h):
+                        h_pen = QPen(QColor(255, 255, 255, 80), 1, Qt.DotLine)
+                        painter.setPen(h_pen)
+                        painter.drawLine(x0, cursor_y, x0 + draw_w, cursor_y)
+
+                        if cursor_label:
+                            painter.setFont(QFont("Consolas", 7))
+                            painter.setPen(QColor(255, 255, 255, 180))
+                            cfm = painter.fontMetrics()
+                            clw = cfm.horizontalAdvance(cursor_label)
+                            lx = cursor_x + 6
+                            ly = cursor_y - 4
+                            if lx + clw > x0 + draw_w:
+                                lx = cursor_x - 6 - clw
+                            if ly - cfm.ascent() < 0:
+                                ly = cursor_y + cfm.ascent() + 4
+                            painter.drawText(int(lx), int(ly), cursor_label)
 
         # --- Crosshair mouse guide (shared vertical, mode-specific readout) ---
         if self._mouse_y >= 0:
@@ -1214,8 +1265,36 @@ class WaveformWidget(QWidget):
         self.setFocus()  # grab keyboard focus for R/T shortcuts
         if self._total_samples > 0 and event.button() == Qt.LeftButton:
             x0, draw_w = self._draw_area()
+            h = self.height()
+            draw_h = h - self._MARGIN_BOTTOM
+            my = event.position().y()
             sample = self._x_to_sample(event.position().x() - x0, draw_w)
             self._cursor_sample = sample
+
+            # Compute semantic y value
+            if self._display_mode == "spectrogram":
+                mel_range = self._mel_view_max - self._mel_view_min
+                if draw_h > 0 and mel_range > 0:
+                    frac = max(0.0, min(1.0 - my / draw_h, 1.0))
+                    self._cursor_y_value = self._mel_view_min + frac * mel_range
+                else:
+                    self._cursor_y_value = None
+            else:
+                nch = self._num_channels
+                if nch > 0 and draw_h > 0:
+                    lane_h = draw_h / nch
+                    ch = int(my / lane_h) if lane_h > 0 else 0
+                    ch = max(0, min(ch, nch - 1))
+                    mid_y = ch * lane_h + lane_h / 2.0
+                    scale = (lane_h / 2.0) * 0.85 * self._vscale
+                    if scale > 0:
+                        self._cursor_y_value = (mid_y - my) / scale
+                        self._cursor_y_channel = ch
+                    else:
+                        self._cursor_y_value = None
+                else:
+                    self._cursor_y_value = None
+
             self.update()
             self.position_clicked.emit(sample)
 
@@ -1317,34 +1396,15 @@ class WaveformWidget(QWidget):
             # ── Vertical zoom ─────────────────────────────────────────
             if self._display_mode == "spectrogram":
                 # Frequency zoom anchored at mouse cursor
-                x0, draw_w = self._draw_area()
                 draw_h = self.height() - self._MARGIN_BOTTOM
                 my = event.position().y()
                 mel_range = self._mel_view_max - self._mel_view_min
+                anchor_mel = None
                 if draw_h > 0 and mel_range > 0:
                     frac = max(0.0, min(1.0 - my / draw_h, 1.0))
                     anchor_mel = self._mel_view_min + frac * mel_range
-                    if delta > 0:
-                        new_range = mel_range * 2 / 3
-                    else:
-                        new_range = mel_range * 3 / 2
-                    mel_full_min = _hz_to_mel(_SPEC_F_MIN)
-                    mel_full_max = _hz_to_mel(
-                        min(_SPEC_F_MAX, self._samplerate / 2.0))
-                    new_range = max(new_range, 50.0)
-                    new_range = min(new_range, mel_full_max - mel_full_min)
-                    new_min = anchor_mel - frac * new_range
-                    new_max = anchor_mel + (1.0 - frac) * new_range
-                    if new_min < mel_full_min:
-                        new_min = mel_full_min
-                        new_max = new_min + new_range
-                    if new_max > mel_full_max:
-                        new_max = mel_full_max
-                        new_min = new_max - new_range
-                    self._mel_view_min = max(new_min, mel_full_min)
-                    self._mel_view_max = min(new_max, mel_full_max)
-                    self._spec_image = None
-                    self._spec_cache_key = ()
+                factor = 2 / 3 if delta > 0 else 3 / 2
+                self._freq_zoom(factor, anchor_mel)
             else:
                 if delta > 0:
                     self._vscale = min(self._vscale * 1.25, 20.0)
@@ -1524,7 +1584,8 @@ class WaveformWidget(QWidget):
     def scale_up(self):
         """Increase vertical amplitude scale / zoom freq in spectrogram."""
         if self._display_mode == "spectrogram":
-            self._freq_zoom_center(2 / 3)
+            anchor = self._cursor_y_value if self._cursor_y_value is not None else None
+            self._freq_zoom(2 / 3, anchor)
         else:
             self._vscale = min(self._vscale * 1.5, 20.0)
         self.update()
@@ -1532,22 +1593,32 @@ class WaveformWidget(QWidget):
     def scale_down(self):
         """Decrease vertical amplitude scale / zoom freq out spectrogram."""
         if self._display_mode == "spectrogram":
-            self._freq_zoom_center(3 / 2)
+            anchor = self._cursor_y_value if self._cursor_y_value is not None else None
+            self._freq_zoom(3 / 2, anchor)
         else:
             self._vscale = max(self._vscale / 1.5, 0.1)
         self.update()
 
-    def _freq_zoom_center(self, factor: float):
-        """Zoom the mel frequency range by *factor* around the view center."""
+    def _freq_zoom(self, factor: float, anchor_mel: float | None = None):
+        """Zoom the mel frequency range by *factor* around *anchor_mel*.
+
+        If anchor_mel is None, zoom around the view center.
+        """
         mel_range = self._mel_view_max - self._mel_view_min
         mel_full_min = _hz_to_mel(_SPEC_F_MIN)
         mel_full_max = _hz_to_mel(min(_SPEC_F_MAX, self._samplerate / 2.0))
-        center = (self._mel_view_min + self._mel_view_max) / 2.0
+        if anchor_mel is not None:
+            anchor = max(self._mel_view_min, min(anchor_mel, self._mel_view_max))
+            frac = ((anchor - self._mel_view_min) / mel_range
+                    if mel_range > 0 else 0.5)
+        else:
+            anchor = (self._mel_view_min + self._mel_view_max) / 2.0
+            frac = 0.5
         new_range = mel_range * factor
         new_range = max(new_range, 50.0)
         new_range = min(new_range, mel_full_max - mel_full_min)
-        new_min = center - new_range / 2.0
-        new_max = center + new_range / 2.0
+        new_min = anchor - frac * new_range
+        new_max = anchor + (1.0 - frac) * new_range
         if new_min < mel_full_min:
             new_min = mel_full_min
             new_max = new_min + new_range
