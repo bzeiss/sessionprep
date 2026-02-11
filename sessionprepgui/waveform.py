@@ -303,6 +303,8 @@ class WaveformWidget(QWidget):
         self._spec_image: QImage | None = None
         self._spec_cache_key: tuple = ()
         self._colormap: str = "magma"
+        self._mel_view_min: float = _hz_to_mel(_SPEC_F_MIN)
+        self._mel_view_max: float = _hz_to_mel(_SPEC_F_MAX)
         self.setMinimumHeight(80)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
@@ -351,6 +353,8 @@ class WaveformWidget(QWidget):
         self._spec_db = None
         self._spec_image = None
         self._spec_cache_key = ()
+        self._mel_view_min = _hz_to_mel(_SPEC_F_MIN)
+        self._mel_view_max = _hz_to_mel(min(_SPEC_F_MAX, samplerate / 2.0))
         self.update()
 
     def set_loading(self, loading: bool):
@@ -392,6 +396,9 @@ class WaveformWidget(QWidget):
         self._spec_db = result.get("spec_db")
         self._spec_image = None
         self._spec_cache_key = ()
+        self._mel_view_min = _hz_to_mel(_SPEC_F_MIN)
+        self._mel_view_max = _hz_to_mel(min(_SPEC_F_MAX,
+                                            self._samplerate / 2.0))
         self._loading = False
         self.update()
 
@@ -751,7 +758,8 @@ class WaveformWidget(QWidget):
 
         # Build or reuse cached spectrogram image
         cache_key = (self._view_start, self._view_end, draw_w,
-                     int(draw_h), self._colormap)
+                     int(draw_h), self._colormap,
+                     self._mel_view_min, self._mel_view_max)
         if self._spec_cache_key != cache_key or self._spec_image is None:
             self._build_spec_image(draw_w, int(draw_h))
             self._spec_cache_key = cache_key
@@ -777,7 +785,21 @@ class WaveformWidget(QWidget):
         if frame_end <= frame_start:
             frame_end = min(frame_start + 1, n_frames)
 
-        view_spec = spec[:, frame_start:frame_end]  # (n_mels, view_frames)
+        # Slice mel rows by frequency view range
+        mel_full_min = _hz_to_mel(_SPEC_F_MIN)
+        mel_full_max = _hz_to_mel(min(_SPEC_F_MAX, self._samplerate / 2.0))
+        mel_full_range = mel_full_max - mel_full_min
+        if mel_full_range <= 0:
+            self._spec_image = None
+            return
+        row_lo = int((self._mel_view_min - mel_full_min)
+                     / mel_full_range * (n_mels - 1))
+        row_hi = int(np.ceil((self._mel_view_max - mel_full_min)
+                             / mel_full_range * (n_mels - 1)))
+        row_lo = max(0, min(row_lo, n_mels - 1))
+        row_hi = max(row_lo + 1, min(row_hi + 1, n_mels))
+
+        view_spec = spec[row_lo:row_hi, frame_start:frame_end]
 
         # Normalize to 0..1 (clamp to dB floor..0)
         db_floor = _SPEC_DB_FLOOR
@@ -788,24 +810,23 @@ class WaveformWidget(QWidget):
         # Flip vertically (low freq at bottom)
         norm = norm[::-1, :]
 
-        # Scale to (height, width) using nearest-neighbor
-        row_idx = np.linspace(0, n_mels - 1, height).astype(np.intp)
-        col_idx = np.linspace(0, norm.shape[1] - 1, width).astype(np.intp)
-        scaled = norm[row_idx][:, col_idx]  # (height, width)
-
-        # Apply colormap
+        # Apply colormap at native spectrogram resolution
         lut = SPECTROGRAM_COLORMAPS.get(self._colormap)
         if lut is None:
             lut = SPECTROGRAM_COLORMAPS.get("magma", np.zeros((256, 4), np.uint8))
-        indices = (scaled * 255).astype(np.uint8)
-        rgba = lut[indices]  # (height, width, 4)
+        indices = (norm * 255).astype(np.uint8)
+        rgba = lut[indices]  # (n_mels, view_frames, 4)
 
-        # Create QImage
+        # Build QImage at native resolution, then smooth-scale to display size
+        nat_h, nat_w = rgba.shape[:2]
         rgba_c = np.ascontiguousarray(rgba)
         self._spec_image_data = rgba_c  # prevent garbage collection
-        self._spec_image = QImage(
-            rgba_c.data, width, height, width * 4,
+        native_img = QImage(
+            rgba_c.data, nat_w, nat_h, nat_w * 4,
             QImage.Format.Format_RGBA8888,
+        )
+        self._spec_image = native_img.scaled(
+            width, height, Qt.IgnoreAspectRatio, Qt.SmoothTransformation,
         )
 
     def _draw_freq_scale(self, painter, x0, draw_w, draw_h):
@@ -816,9 +837,8 @@ class WaveformWidget(QWidget):
         _FREQ_TICKS = [50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
         _MIN_TICK_SPACING = 20
 
-        f_max = min(_SPEC_F_MAX, self._samplerate / 2.0)
-        mel_min = _hz_to_mel(_SPEC_F_MIN)
-        mel_max = _hz_to_mel(f_max)
+        mel_min = self._mel_view_min
+        mel_max = self._mel_view_max
         mel_range = mel_max - mel_min
         if mel_range <= 0:
             return
@@ -837,9 +857,9 @@ class WaveformWidget(QWidget):
         text_h = fm.height()
         used_ys: list[int] = []
         for freq in _FREQ_TICKS:
-            if freq < _SPEC_F_MIN or freq > f_max:
-                continue
             mel = _hz_to_mel(freq)
+            if mel < mel_min or mel > mel_max:
+                continue
             frac = (mel - mel_min) / mel_range
             y = int(draw_h * (1.0 - frac))  # low freq at bottom
             if y < text_h or y > draw_h - text_h:
@@ -877,9 +897,8 @@ class WaveformWidget(QWidget):
         if self._spec_db is None or draw_h <= 0:
             return
 
-        f_max = min(_SPEC_F_MAX, self._samplerate / 2.0)
-        mel_min = _hz_to_mel(_SPEC_F_MIN)
-        mel_max = _hz_to_mel(f_max)
+        mel_min = self._mel_view_min
+        mel_max = self._mel_view_max
         mel_range = mel_max - mel_min
         if mel_range <= 0:
             return
@@ -1296,10 +1315,41 @@ class WaveformWidget(QWidget):
 
         if ctrl and shift:
             # ── Vertical zoom ─────────────────────────────────────────
-            if delta > 0:
-                self._vscale = min(self._vscale * 1.25, 20.0)
+            if self._display_mode == "spectrogram":
+                # Frequency zoom anchored at mouse cursor
+                x0, draw_w = self._draw_area()
+                draw_h = self.height() - self._MARGIN_BOTTOM
+                my = event.position().y()
+                mel_range = self._mel_view_max - self._mel_view_min
+                if draw_h > 0 and mel_range > 0:
+                    frac = max(0.0, min(1.0 - my / draw_h, 1.0))
+                    anchor_mel = self._mel_view_min + frac * mel_range
+                    if delta > 0:
+                        new_range = mel_range * 2 / 3
+                    else:
+                        new_range = mel_range * 3 / 2
+                    mel_full_min = _hz_to_mel(_SPEC_F_MIN)
+                    mel_full_max = _hz_to_mel(
+                        min(_SPEC_F_MAX, self._samplerate / 2.0))
+                    new_range = max(new_range, 50.0)
+                    new_range = min(new_range, mel_full_max - mel_full_min)
+                    new_min = anchor_mel - frac * new_range
+                    new_max = anchor_mel + (1.0 - frac) * new_range
+                    if new_min < mel_full_min:
+                        new_min = mel_full_min
+                        new_max = new_min + new_range
+                    if new_max > mel_full_max:
+                        new_max = mel_full_max
+                        new_min = new_max - new_range
+                    self._mel_view_min = max(new_min, mel_full_min)
+                    self._mel_view_max = min(new_max, mel_full_max)
+                    self._spec_image = None
+                    self._spec_cache_key = ()
             else:
-                self._vscale = max(self._vscale / 1.25, 0.1)
+                if delta > 0:
+                    self._vscale = min(self._vscale * 1.25, 20.0)
+                else:
+                    self._vscale = max(self._vscale / 1.25, 0.1)
             self.update()
             event.accept()
 
@@ -1425,6 +1475,9 @@ class WaveformWidget(QWidget):
         self._view_start = 0
         self._view_end = self._total_samples
         self._vscale = 1.0
+        self._mel_view_min = _hz_to_mel(_SPEC_F_MIN)
+        self._mel_view_max = _hz_to_mel(min(_SPEC_F_MAX,
+                                            self._samplerate / 2.0))
         self._invalidate_peaks()
         self.update()
 
@@ -1469,14 +1522,42 @@ class WaveformWidget(QWidget):
         self.update()
 
     def scale_up(self):
-        """Increase vertical amplitude scale."""
-        self._vscale = min(self._vscale * 1.5, 20.0)
+        """Increase vertical amplitude scale / zoom freq in spectrogram."""
+        if self._display_mode == "spectrogram":
+            self._freq_zoom_center(2 / 3)
+        else:
+            self._vscale = min(self._vscale * 1.5, 20.0)
         self.update()
 
     def scale_down(self):
-        """Decrease vertical amplitude scale."""
-        self._vscale = max(self._vscale / 1.5, 0.1)
+        """Decrease vertical amplitude scale / zoom freq out spectrogram."""
+        if self._display_mode == "spectrogram":
+            self._freq_zoom_center(3 / 2)
+        else:
+            self._vscale = max(self._vscale / 1.5, 0.1)
         self.update()
+
+    def _freq_zoom_center(self, factor: float):
+        """Zoom the mel frequency range by *factor* around the view center."""
+        mel_range = self._mel_view_max - self._mel_view_min
+        mel_full_min = _hz_to_mel(_SPEC_F_MIN)
+        mel_full_max = _hz_to_mel(min(_SPEC_F_MAX, self._samplerate / 2.0))
+        center = (self._mel_view_min + self._mel_view_max) / 2.0
+        new_range = mel_range * factor
+        new_range = max(new_range, 50.0)
+        new_range = min(new_range, mel_full_max - mel_full_min)
+        new_min = center - new_range / 2.0
+        new_max = center + new_range / 2.0
+        if new_min < mel_full_min:
+            new_min = mel_full_min
+            new_max = new_min + new_range
+        if new_max > mel_full_max:
+            new_max = mel_full_max
+            new_min = new_max - new_range
+        self._mel_view_min = max(new_min, mel_full_min)
+        self._mel_view_max = min(new_max, mel_full_max)
+        self._spec_image = None
+        self._spec_cache_key = ()
 
     # ── RMS overlay ───────────────────────────────────────────────────────
 
