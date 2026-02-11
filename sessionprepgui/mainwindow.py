@@ -1168,6 +1168,9 @@ class SessionPrepWindow(QMainWindow):
     @Slot()
     def _on_preferences(self):
         old_scale = self._config.get("gui", {}).get("scale_factor", 1.0)
+        _PIPELINE_KEYS = ("analysis", "detectors", "processors", "session")
+        old_pipeline = {k: self._config.get(k) for k in _PIPELINE_KEYS}
+
         dlg = PreferencesDialog(self._config, parent=self)
         dlg.exec()
         if dlg.saved:
@@ -1175,9 +1178,21 @@ class SessionPrepWindow(QMainWindow):
             self._config = dlg.result_config()
             save_config(self._config)
             self._status_bar.showMessage("Preferences saved.")
-            # Re-analyze if a session is loaded
+
             if self._source_dir:
-                self._on_analyze()
+                new_pipeline = {k: self._config.get(k) for k in _PIPELINE_KEYS}
+                if new_pipeline != old_pipeline:
+                    self._on_analyze()
+                else:
+                    # GUI-only change — just refresh reports
+                    self._render_summary()
+                    if self._current_track:
+                        html = render_track_detail_html(
+                            self._current_track, self._session,
+                            show_clean=self._show_clean,
+                            verbose=self._verbose)
+                        self._file_report.setHtml(self._wrap_html(html))
+
             # Prompt restart if scale factor changed
             new_scale = self._config.get("gui", {}).get("scale_factor", 1.0)
             if new_scale != old_scale:
