@@ -582,6 +582,9 @@ class WaveformWidget(QWidget):
         else:
             self._paint_waveform(painter, x0, draw_w, draw_h)
 
+        # --- Issue overlays (shared, drawn on top of waveform/spectrogram) ---
+        self._draw_issue_overlays(painter, x0, draw_w, draw_h)
+
         # --- Time scale (shared) ---
         self._draw_time_scale(painter, x0, draw_w, draw_h)
 
@@ -713,35 +716,6 @@ class WaveformWidget(QWidget):
 
         # --- dB scale and grid lines ---
         self._draw_db_scale(painter, x0, draw_w, draw_h, nch, lane_h)
-
-        # --- Draw issue overlays (behind waveform) ---
-        for issue in self._issues:
-            if issue.label not in self._enabled_overlays:
-                continue
-            sev_val = issue.severity.value if hasattr(issue.severity, "value") else str(issue.severity)
-            fill = self._SEVERITY_OVERLAY.get(sev_val, QColor(255, 255, 255, 30))
-            border = self._SEVERITY_BORDER.get(sev_val, QColor(255, 255, 255, 60))
-
-            ix1 = x0 + self._sample_to_x(issue.sample_start, draw_w)
-            ix2 = (x0 + self._sample_to_x(issue.sample_end + 1, draw_w)
-                   if issue.sample_end is not None else ix1)
-            rx = ix1
-            rw = max(ix2 - ix1, 2)
-
-            if issue.channel is None:
-                ry = 0
-                rh = int(draw_h)
-            else:
-                ch = issue.channel
-                if ch < nch:
-                    ry = int(ch * lane_h)
-                    rh = int(lane_h)
-                else:
-                    continue
-
-            painter.fillRect(rx, ry, rw, rh, fill)
-            painter.setPen(QPen(border, 1))
-            painter.drawRect(rx, ry, rw, rh)
 
         # --- Draw waveforms ---
         for ch in range(nch):
@@ -1115,6 +1089,78 @@ class WaveformWidget(QWidget):
 
             painter.setClipping(False)
 
+    def _draw_issue_overlays(self, painter, x0, draw_w, draw_h):
+        """Draw detector issue overlays. Works in both display modes.
+
+        In waveform mode, overlays span full height or per-channel lanes.
+        In spectrogram mode, overlays with frequency bounds are mapped to
+        the visible mel range; overlays without bounds span full height.
+        """
+        if not self._issues or not self._enabled_overlays:
+            return
+
+        nch = self._num_channels
+        lane_h = draw_h / max(nch, 1)
+        is_spec = self._display_mode == "spectrogram"
+
+        # Precompute mel range for spectrogram frequency mapping
+        if is_spec:
+            mel_range = self._mel_view_max - self._mel_view_min
+        else:
+            mel_range = 0.0
+
+        for issue in self._issues:
+            if issue.label not in self._enabled_overlays:
+                continue
+            sev_val = issue.severity.value if hasattr(issue.severity, "value") else str(issue.severity)
+            fill = self._SEVERITY_OVERLAY.get(sev_val, QColor(255, 255, 255, 30))
+            border = self._SEVERITY_BORDER.get(sev_val, QColor(255, 255, 255, 60))
+
+            # Horizontal bounds (time) — same in both modes
+            ix1 = x0 + self._sample_to_x(issue.sample_start, draw_w)
+            ix2 = (x0 + self._sample_to_x(issue.sample_end + 1, draw_w)
+                   if issue.sample_end is not None else ix1)
+            rx = ix1
+            rw = max(ix2 - ix1, 2)
+
+            # Vertical bounds
+            if is_spec and issue.freq_min_hz is not None and issue.freq_max_hz is not None and mel_range > 0:
+                # Map frequency bounds to pixel y via mel scale
+                mel_lo = _hz_to_mel(issue.freq_min_hz)
+                mel_hi = _hz_to_mel(issue.freq_max_hz)
+                # y=0 is top (high freq), y=draw_h is bottom (low freq)
+                frac_top = (mel_hi - self._mel_view_min) / mel_range
+                frac_bot = (mel_lo - self._mel_view_min) / mel_range
+                y_top = int(draw_h * (1.0 - frac_top))
+                y_bot = int(draw_h * (1.0 - frac_bot))
+                # Clamp to visible area
+                y_top = max(0, min(y_top, int(draw_h)))
+                y_bot = max(0, min(y_bot, int(draw_h)))
+                if y_top >= y_bot:
+                    continue  # entirely outside visible freq range
+                ry = y_top
+                rh = y_bot - y_top
+            elif not is_spec:
+                # Waveform mode: per-channel or full height
+                if issue.channel is None:
+                    ry = 0
+                    rh = int(draw_h)
+                else:
+                    ch = issue.channel
+                    if ch < nch:
+                        ry = int(ch * lane_h)
+                        rh = int(lane_h)
+                    else:
+                        continue
+            else:
+                # Spectrogram mode, no frequency bounds — full height
+                ry = 0
+                rh = int(draw_h)
+
+            painter.fillRect(rx, ry, rw, rh, fill)
+            painter.setPen(QPen(border, 1))
+            painter.drawRect(rx, ry, rw, rh)
+
     def _draw_time_scale(self, painter, x0, draw_w, draw_h):
         """Draw horizontal time axis with adaptive tick labels below the waveform."""
         if self._samplerate <= 0 or draw_w <= 0:
@@ -1370,23 +1416,19 @@ class WaveformWidget(QWidget):
 
         tips: list[str] = []
 
-        # Marker and issue tooltips only in waveform mode
-        if self._display_mode != "waveform":
-            QToolTip.hideText()
-            return
+        # Marker tooltips (waveform mode only)
+        if self._display_mode == "waveform":
+            _MARKER_PX_TOL = 6
+            if self._show_markers and self._peak_sample >= 0:
+                peak_px = x0 + self._sample_to_x(self._peak_sample, draw_w)
+                if abs(mx - peak_px) <= _MARKER_PX_TOL:
+                    tips.append(f"Peak: {self._peak_db:.1f} dBFS")
+            if self._show_markers and self._rms_max_sample >= 0:
+                rms_px = x0 + self._sample_to_x(self._rms_max_sample, draw_w)
+                if abs(mx - rms_px) <= _MARKER_PX_TOL:
+                    tips.append(f"Max RMS: {self._rms_max_db:.1f} dBFS")
 
-        # Marker tooltips (only when markers are visible)
-        _MARKER_PX_TOL = 6
-        if self._show_markers and self._peak_sample >= 0:
-            peak_px = x0 + self._sample_to_x(self._peak_sample, draw_w)
-            if abs(mx - peak_px) <= _MARKER_PX_TOL:
-                tips.append(f"Peak: {self._peak_db:.1f} dBFS")
-        if self._show_markers and self._rms_max_sample >= 0:
-            rms_px = x0 + self._sample_to_x(self._rms_max_sample, draw_w)
-            if abs(mx - rms_px) <= _MARKER_PX_TOL:
-                tips.append(f"Max RMS: {self._rms_max_db:.1f} dBFS")
-
-        # Issue tooltips (only for enabled overlays)
+        # Issue tooltips (both modes, only for enabled overlays)
         for issue in self._issues:
             if issue.label not in self._enabled_overlays:
                 continue
@@ -1397,9 +1439,10 @@ class WaveformWidget(QWidget):
             hit_end = s_end + tolerance
             if sample < hit_start or sample > hit_end:
                 continue
-            # Check channel match: None = all channels, or specific channel
-            if issue.channel is not None and issue.channel != mouse_ch:
-                continue
+            # In waveform mode check channel match; in spectrogram mode skip channel check
+            if self._display_mode == "waveform":
+                if issue.channel is not None and issue.channel != mouse_ch:
+                    continue
             tips.append(issue.description)
 
         if tips:

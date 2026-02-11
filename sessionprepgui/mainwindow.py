@@ -979,7 +979,6 @@ class SessionPrepWindow(QMainWindow):
         self._waveform.set_display_mode(mode)
 
         # Hide waveform-only toolbar controls in spectrogram mode
-        self._overlay_btn.setVisible(is_waveform)
         self._markers_toggle.setVisible(is_waveform)
         self._rms_lr_toggle.setVisible(is_waveform)
         self._rms_avg_toggle.setVisible(is_waveform)

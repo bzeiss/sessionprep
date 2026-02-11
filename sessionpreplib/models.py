@@ -42,6 +42,8 @@ class IssueLocation:
     severity: Severity
     label: str
     description: str
+    freq_min_hz: float | None = None
+    freq_max_hz: float | None = None
 
 
 @dataclass

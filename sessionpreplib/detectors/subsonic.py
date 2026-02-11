@@ -202,6 +202,8 @@ class SubsonicDetector(TrackDetector):
                     severity=Severity.ATTENTION,
                     label="subsonic",
                     description=summary,
+                    freq_min_hz=0.0,
+                    freq_max_hz=float(self.cutoff_hz),
                 ))
             else:
                 for ch in warn_channels:
@@ -216,6 +218,8 @@ class SubsonicDetector(TrackDetector):
                         severity=Severity.ATTENTION,
                         label="subsonic",
                         description=desc,
+                        freq_min_hz=0.0,
+                        freq_max_hz=float(self.cutoff_hz),
                     ))
 
         return DetectorResult(
@@ -317,6 +321,8 @@ class SubsonicDetector(TrackDetector):
                 severity=Severity.ATTENTION,
                 label="subsonic",
                 description=desc,
+                freq_min_hz=0.0,
+                freq_max_hz=float(self.cutoff_hz),
             ))
 
         if all_regions:
