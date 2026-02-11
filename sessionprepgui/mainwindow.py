@@ -6,7 +6,7 @@ import os
 import sys
 
 from PySide6.QtCore import Qt, Slot, QSize, QEvent, QTimer
-from PySide6.QtGui import QAction, QFont, QColor, QIcon, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QActionGroup, QFont, QColor, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -333,16 +333,40 @@ class SessionPrepWindow(QMainWindow):
         toggle_style = (
             "QToolButton:checked { background-color: #2a6db5; color: #ffffff; }")
 
+        dropdown_style = (
+            "QToolButton { padding-right: 30px; }"
+            "QToolButton::menu-indicator { subcontrol-position: right center;"
+            " subcontrol-origin: padding; right: 5px; }")
+
+        # Display mode dropdown (leftmost)
+        self._display_mode_btn = QToolButton()
+        self._display_mode_btn.setText("Waveform")
+        self._display_mode_btn.setToolTip("Switch between Waveform and Spectrogram display")
+        self._display_mode_btn.setPopupMode(QToolButton.InstantPopup)
+        self._display_mode_btn.setAutoRaise(True)
+        self._display_mode_btn.setStyleSheet(dropdown_style)
+        display_menu = QMenu(self._display_mode_btn)
+        self._wf_action = display_menu.addAction("Waveform")
+        self._spec_action = display_menu.addAction("Spectrogram")
+        self._wf_action.setCheckable(True)
+        self._wf_action.setChecked(True)
+        self._spec_action.setCheckable(True)
+        display_group = QActionGroup(self)
+        display_group.addAction(self._wf_action)
+        display_group.addAction(self._spec_action)
+        display_group.triggered.connect(self._on_display_mode_changed)
+        self._display_mode_btn.setMenu(display_menu)
+        wf_toolbar.addWidget(self._display_mode_btn)
+
+        wf_toolbar.addSpacing(8)
+
         # Overlay dropdown (populated per-track)
         self._overlay_btn = QToolButton()
         self._overlay_btn.setText("Detector Overlays")
         self._overlay_btn.setToolTip("Select detector overlays to display on the waveform")
         self._overlay_btn.setPopupMode(QToolButton.InstantPopup)
         self._overlay_btn.setAutoRaise(True)
-        self._overlay_btn.setStyleSheet(
-            "QToolButton { padding-right: 30px; }"
-            "QToolButton::menu-indicator { subcontrol-position: right center;"
-            " subcontrol-origin: padding; right: 5px; }")
+        self._overlay_btn.setStyleSheet(dropdown_style)
         self._overlay_menu = QMenu(self._overlay_btn)
         self._overlay_btn.setMenu(self._overlay_menu)
         wf_toolbar.addWidget(self._overlay_btn)
@@ -788,6 +812,8 @@ class SessionPrepWindow(QMainWindow):
             return
 
         self._waveform.set_precomputed(result)
+        cmap = self._config.get("gui", {}).get("spectrogram_colormap", "magma")
+        self._waveform.set_colormap(cmap)
 
         all_issues = []
         for det_result in track.detector_results.values():
@@ -858,6 +884,20 @@ class SessionPrepWindow(QMainWindow):
         self._waveform.set_enabled_overlays(checked)
         n = len(checked)
         self._overlay_btn.setText(f"Detector Overlays ({n})" if n else "Detector Overlays")
+
+    @Slot(QAction)
+    def _on_display_mode_changed(self, action):
+        """Switch waveform widget display mode and toggle toolbar controls."""
+        is_waveform = action == self._wf_action
+        mode = "waveform" if is_waveform else "spectrogram"
+        self._display_mode_btn.setText(action.text())
+        self._waveform.set_display_mode(mode)
+
+        # Hide waveform-only toolbar controls in spectrogram mode
+        self._overlay_btn.setVisible(is_waveform)
+        self._markers_toggle.setVisible(is_waveform)
+        self._rms_lr_toggle.setVisible(is_waveform)
+        self._rms_avg_toggle.setVisible(is_waveform)
 
     def _populate_table(self, session):
         """Update the track table with analysis results."""
@@ -1184,8 +1224,11 @@ class SessionPrepWindow(QMainWindow):
                 if new_pipeline != old_pipeline:
                     self._on_analyze()
                 else:
-                    # GUI-only change — just refresh reports
+                    # GUI-only change — just refresh reports and colormap
                     self._render_summary()
+                    cmap = self._config.get("gui", {}).get(
+                        "spectrogram_colormap", "magma")
+                    self._waveform.set_colormap(cmap)
                     if self._current_track:
                         html = render_track_detail_html(
                             self._current_track, self._session,

@@ -43,6 +43,7 @@ _GUI_DEFAULTS: dict[str, Any] = {
     "show_clean_detectors": False,
     "report_verbosity": "normal",
     "output_folder": "processed",
+    "spectrogram_colormap": "magma",
     "default_project_dir": "",
 }
 

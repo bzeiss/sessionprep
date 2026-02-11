@@ -412,6 +412,12 @@ class PreferencesDialog(QDialog):
                     "Must be a simple folder name without path separators."
                 ),
             ),
+            ParamSpec(
+                key="spectrogram_colormap", type=str, default="magma",
+                choices=["magma", "viridis", "grayscale"],
+                label="Spectrogram color theme",
+                description="Color palette used for the spectrogram display.",
+            ),
         ]
         values = self._config.get("gui", {})
         page, widgets = _build_param_page(gui_params, values)

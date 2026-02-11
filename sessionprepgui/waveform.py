@@ -5,11 +5,141 @@ from __future__ import annotations
 import numpy as np
 
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import (QColor, QFont, QLinearGradient, QPainter,
+from PySide6.QtGui import (QColor, QFont, QImage, QLinearGradient, QPainter,
                           QPainterPath, QPen)
 from PySide6.QtWidgets import QToolTip, QWidget
+from scipy.signal import stft as scipy_stft
 
 from .theme import COLORS
+
+
+# ---------------------------------------------------------------------------
+# Spectrogram colormaps
+# ---------------------------------------------------------------------------
+
+SPECTROGRAM_COLORMAPS: dict[str, np.ndarray] = {}  # name → (256, 4) uint8 RGBA
+
+
+def _register_colormap(name: str,
+                       controls: list[tuple[float, tuple[int, int, int]]]):
+    """Build a 256-entry RGBA LUT from control points via linear interpolation."""
+    lut = np.zeros((256, 4), dtype=np.uint8)
+    lut[:, 3] = 255  # fully opaque
+    positions = np.array([c[0] for c in controls])
+    for ch in range(3):
+        values = np.array([c[1][ch] for c in controls], dtype=np.float64)
+        lut[:, ch] = np.clip(
+            np.interp(np.linspace(0, 1, 256), positions, values), 0, 255
+        ).astype(np.uint8)
+    SPECTROGRAM_COLORMAPS[name] = lut
+
+
+_register_colormap("magma", [
+    (0.0, (0, 0, 4)),
+    (0.25, (81, 18, 124)),
+    (0.5, (183, 55, 121)),
+    (0.75, (254, 159, 109)),
+    (1.0, (252, 253, 191)),
+])
+
+_register_colormap("viridis", [
+    (0.0, (68, 1, 84)),
+    (0.25, (59, 82, 139)),
+    (0.5, (33, 145, 140)),
+    (0.75, (94, 201, 98)),
+    (1.0, (253, 231, 37)),
+])
+
+_register_colormap("grayscale", [
+    (0.0, (0, 0, 0)),
+    (1.0, (255, 255, 255)),
+])
+
+
+# ---------------------------------------------------------------------------
+# Mel filterbank
+# ---------------------------------------------------------------------------
+
+def _hz_to_mel(f: float) -> float:
+    return 2595.0 * np.log10(1.0 + f / 700.0)
+
+
+def _mel_to_hz(m: float) -> float:
+    return 700.0 * (10.0 ** (m / 2595.0) - 1.0)
+
+
+def _mel_filterbank(sr: int, n_fft: int, n_mels: int = 128,
+                    f_min: float = 20.0, f_max: float = 22050.0
+                    ) -> np.ndarray:
+    """Build a Mel filterbank matrix (n_mels, n_fft // 2 + 1)."""
+    f_max = min(f_max, sr / 2.0)
+    n_freqs = n_fft // 2 + 1
+    mel_min = _hz_to_mel(f_min)
+    mel_max = _hz_to_mel(f_max)
+    mel_points = np.linspace(mel_min, mel_max, n_mels + 2)
+    hz_points = 700.0 * (10.0 ** (mel_points / 2595.0) - 1.0)
+    bin_points = np.floor((n_fft + 1) * hz_points / sr).astype(np.intp)
+
+    fb = np.zeros((n_mels, n_freqs), dtype=np.float64)
+    for i in range(n_mels):
+        left, center, right = bin_points[i], bin_points[i + 1], bin_points[i + 2]
+        if center == left:
+            center = left + 1
+        if right == center:
+            right = center + 1
+        for j in range(int(left), int(center)):
+            if j < n_freqs:
+                fb[i, j] = (j - left) / (center - left)
+        for j in range(int(center), int(right)):
+            if j < n_freqs:
+                fb[i, j] = (right - j) / (right - center)
+    return fb
+
+
+# ---------------------------------------------------------------------------
+# Spectrogram computation (used by background worker)
+# ---------------------------------------------------------------------------
+
+_SPEC_N_FFT = 2048
+_SPEC_HOP = 512
+_SPEC_N_MELS = 256
+_SPEC_F_MIN = 20.0
+_SPEC_F_MAX = 22050.0
+_SPEC_DB_FLOOR = -80.0  # dB floor for normalization
+
+
+def compute_mel_spectrogram(channels: list[np.ndarray], sr: int
+                            ) -> np.ndarray | None:
+    """Compute a full-file mel spectrogram from channel data.
+
+    Returns a float32 array of shape (n_mels, n_frames) in dB, or None
+    if the audio is too short.
+    """
+    if not channels:
+        return None
+    # Mix to mono
+    if len(channels) == 1:
+        mono = channels[0].astype(np.float64)
+    else:
+        mono = np.mean(
+            np.column_stack([ch.astype(np.float64) for ch in channels]),
+            axis=1,
+        )
+    if len(mono) < _SPEC_N_FFT:
+        return None
+    # STFT
+    _f, _t, Zxx = scipy_stft(
+        mono, fs=sr, nperseg=_SPEC_N_FFT,
+        noverlap=_SPEC_N_FFT - _SPEC_HOP, boundary=None,
+    )
+    power = np.abs(Zxx) ** 2
+    # Mel filterbank
+    f_max = min(_SPEC_F_MAX, sr / 2.0)
+    fb = _mel_filterbank(sr, _SPEC_N_FFT, _SPEC_N_MELS, _SPEC_F_MIN, f_max)
+    mel_spec = fb @ power  # (n_mels, n_frames)
+    # To dB
+    mel_spec = 10.0 * np.log10(np.maximum(mel_spec, 1e-10))
+    return mel_spec.astype(np.float32)
 
 
 class WaveformLoadWorker(QThread):
@@ -84,6 +214,9 @@ class WaveformLoadWorker(QThread):
                 rms_max_db = 20.0 * np.log10(rms_lin) if rms_lin > 0 else float('-inf')
                 rms_max_amplitude = rms_lin
 
+        # --- Spectrogram ---
+        spec_db = compute_mel_spectrogram(channels, sr)
+
         self.finished.emit({
             "channels": channels,
             "samplerate": sr,
@@ -96,6 +229,7 @@ class WaveformLoadWorker(QThread):
             "rms_max_sample": rms_max_sample,
             "rms_max_db": rms_max_db,
             "rms_max_amplitude": rms_max_amplitude,
+            "spec_db": spec_db,
         })
 
 
@@ -120,8 +254,8 @@ class WaveformWidget(QWidget):
         "information": QColor(68, 153, 255, 100),
         "info": QColor(68, 153, 255, 100),
     }
-    _MARGIN_LEFT = 30
-    _MARGIN_RIGHT = 30
+    _MARGIN_LEFT = 38
+    _MARGIN_RIGHT = 38
     _MARGIN_BOTTOM = 20
 
     def __init__(self, parent=None):
@@ -162,6 +296,13 @@ class WaveformWidget(QWidget):
         # Mouse guide (crosshair)
         self._mouse_x: int = -1  # -1 = not hovering
         self._mouse_y: int = -1
+        # Display mode
+        self._display_mode: str = "waveform"  # "waveform" | "spectrogram"
+        # Spectrogram data
+        self._spec_db: np.ndarray | None = None  # (n_mels, n_frames) dB
+        self._spec_image: QImage | None = None
+        self._spec_cache_key: tuple = ()
+        self._colormap: str = "magma"
         self.setMinimumHeight(80)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
@@ -207,6 +348,9 @@ class WaveformWidget(QWidget):
         self._rms_envelope = []
         self._rms_combined = []
         self._rms_cache_key = (0, 0, 0)
+        self._spec_db = None
+        self._spec_image = None
+        self._spec_cache_key = ()
         self.update()
 
     def set_loading(self, loading: bool):
@@ -245,6 +389,9 @@ class WaveformWidget(QWidget):
         self._rms_envelope = []
         self._rms_combined = []
         self._rms_cache_key = (0, 0, 0)
+        self._spec_db = result.get("spec_db")
+        self._spec_image = None
+        self._spec_cache_key = ()
         self._loading = False
         self.update()
 
@@ -376,12 +523,78 @@ class WaveformWidget(QWidget):
             return
 
         x0, draw_w = self._draw_area()
+        draw_h = h - self._MARGIN_BOTTOM
+
+        # Dispatch to mode-specific painter
+        if self._display_mode == "spectrogram":
+            self._paint_spectrogram(painter, x0, draw_w, draw_h)
+        else:
+            self._paint_waveform(painter, x0, draw_w, draw_h)
+
+        # --- Time scale (shared) ---
+        self._draw_time_scale(painter, x0, draw_w, draw_h)
+
+        # Playback cursor (shared, spans all channels)
+        if self._total_samples > 0:
+            cursor_x = x0 + self._sample_to_x(self._cursor_sample, draw_w)
+            if x0 <= cursor_x <= x0 + draw_w:
+                painter.setPen(QPen(QColor("#ffffff"), 1))
+                painter.drawLine(cursor_x, 0, cursor_x, int(draw_h))
+
+        # --- Crosshair mouse guide (shared vertical, mode-specific readout) ---
+        if self._mouse_y >= 0:
+            mx = self._mouse_x
+            my = self._mouse_y
+            guide_color = QColor(200, 200, 200, 60)
+            painter.setPen(QPen(guide_color, 1, Qt.DashLine))
+            painter.drawLine(0, my, w, my)
+            if mx >= 0:
+                painter.drawLine(mx, 0, mx, int(draw_h))
+
+            if self._display_mode == "spectrogram":
+                self._draw_freq_guide(painter, x0, draw_w, draw_h, my)
+            else:
+                nch = self._num_channels
+                if nch > 0:
+                    lane_h = draw_h / nch
+                    self._draw_db_guide(painter, x0, draw_w, draw_h,
+                                        nch, lane_h, my)
+
+        painter.end()
+
+    def _draw_db_guide(self, painter, x0, draw_w, draw_h, nch, lane_h, my):
+        """Draw dBFS readout labels at mouse y position."""
+        mouse_ch = int(my / lane_h) if lane_h > 0 else 0
+        mouse_ch = max(0, min(mouse_ch, nch - 1))
+        ch_y_off = mouse_ch * lane_h
+        ch_mid_y = ch_y_off + lane_h / 2.0
+        ch_scale = (lane_h / 2.0) * 0.85 * self._vscale
+
+        if ch_scale > 0:
+            amp = abs(ch_mid_y - my) / ch_scale
+            if amp > 0:
+                db_val = 20.0 * np.log10(amp)
+                db_label = f"{db_val:.1f}"
+            else:
+                db_label = "-\u221e"
+            painter.setFont(QFont("Consolas", 7))
+            label_color = QColor(180, 180, 180, 120)
+            painter.setPen(label_color)
+            fm = painter.fontMetrics()
+            tw = fm.horizontalAdvance(db_label)
+            painter.drawText(x0 - 5 - tw, int(ch_y_off) + fm.ascent() + 1,
+                             db_label)
+            painter.drawText(x0 + draw_w + 5, int(ch_y_off) + fm.ascent() + 1,
+                             db_label)
+
+    def _paint_waveform(self, painter, x0, draw_w, draw_h):
+        """Paint the waveform display with channels, overlays, RMS, and markers."""
+        w = self.width()
         self._build_peaks(draw_w)
         if self._show_rms_lr or self._show_rms_avg:
             self._build_rms_envelope(draw_w)
 
         nch = self._num_channels
-        draw_h = h - self._MARGIN_BOTTOM
         lane_h = draw_h / nch
 
         # --- dB scale and grid lines ---
@@ -396,14 +609,12 @@ class WaveformWidget(QWidget):
             border = self._SEVERITY_BORDER.get(sev_val, QColor(255, 255, 255, 60))
 
             ix1 = x0 + self._sample_to_x(issue.sample_start, draw_w)
-            # sample_end is inclusive — map end+1 to get the right edge
             ix2 = (x0 + self._sample_to_x(issue.sample_end + 1, draw_w)
                    if issue.sample_end is not None else ix1)
             rx = ix1
-            rw = max(ix2 - ix1, 2)  # min 2px wide so point issues are visible
+            rw = max(ix2 - ix1, 2)
 
             if issue.channel is None:
-                # Spans all channels
                 ry = 0
                 rh = int(draw_h)
             else:
@@ -412,7 +623,7 @@ class WaveformWidget(QWidget):
                     ry = int(ch * lane_h)
                     rh = int(lane_h)
                 else:
-                    continue  # channel index out of range
+                    continue
 
             painter.fillRect(rx, ry, rw, rh, fill)
             painter.setPen(QPen(border, 1))
@@ -424,7 +635,6 @@ class WaveformWidget(QWidget):
             mid_y = y_off + lane_h / 2.0
             scale = (lane_h / 2.0) * 0.85 * self._vscale
 
-            # Clip painting to this channel's lane within drawing area
             lane_top = int(y_off)
             lane_bot = int(y_off + lane_h)
             painter.setClipRect(x0, lane_top, draw_w, lane_bot - lane_top)
@@ -432,7 +642,6 @@ class WaveformWidget(QWidget):
             color = QColor(self._CHANNEL_COLORS[ch % len(self._CHANNEL_COLORS)])
             mins, maxs = self._peaks_cache[ch]
 
-            # Build closed envelope path: top edge L→R, bottom edge R→L
             top_path = QPainterPath()
             bot_path = QPainterPath()
             top_path.moveTo(x0, mid_y - maxs[0] * scale)
@@ -441,14 +650,12 @@ class WaveformWidget(QWidget):
                 top_path.lineTo(x0 + x, mid_y - maxs[x] * scale)
                 bot_path.lineTo(x0 + x, mid_y - mins[x] * scale)
 
-            # Combine into a single closed shape
             envelope = QPainterPath(top_path)
             rev = bot_path.toReversed()
             envelope.lineTo(rev.elementAt(0).x, rev.elementAt(0).y)
             envelope.connectPath(rev)
             envelope.closeSubpath()
 
-            # Gradient fill: opaque at center line, transparent at peaks
             grad = QLinearGradient(0, y_off, 0, y_off + lane_h)
             color_edge = QColor(color)
             color_edge.setAlpha(30)
@@ -462,7 +669,6 @@ class WaveformWidget(QWidget):
             painter.setBrush(grad)
             painter.drawPath(envelope)
 
-            # Thin outline on top and bottom edges for definition
             outline = QColor(color)
             outline.setAlpha(200)
             painter.setBrush(Qt.NoBrush)
@@ -470,25 +676,22 @@ class WaveformWidget(QWidget):
             painter.drawPath(top_path)
             painter.drawPath(bot_path)
 
-            # Center line
             center_color = QColor(COLORS["accent"])
             center_color.setAlpha(80)
             painter.setPen(QPen(center_color, 1, Qt.DotLine))
             painter.drawLine(x0, int(mid_y), x0 + draw_w, int(mid_y))
 
-            # Remove clip before drawing separator
             painter.setClipping(False)
 
-            # Channel separator (except after last channel)
             if ch < nch - 1:
                 sep_y = int(y_off + lane_h)
                 painter.setPen(QPen(QColor("#555555"), 1))
                 painter.drawLine(0, sep_y, w, sep_y)
 
-        # --- RMS overlay (on top of waveform, below cursor) ---
+        # --- RMS overlay ---
         if (self._show_rms_lr or self._show_rms_avg) and self._rms_envelope:
-            ch_pen = QPen(QColor(255, 220, 60, 200), 1.0)     # yellow – per-channel
-            comb_pen = QPen(QColor(255, 100, 40, 220), 1.5)   # orange – combined
+            ch_pen = QPen(QColor(255, 220, 60, 200), 1.0)
+            comb_pen = QPen(QColor(255, 100, 40, 220), 1.5)
             for ch in range(nch):
                 if ch >= len(self._rms_envelope):
                     break
@@ -499,7 +702,6 @@ class WaveformWidget(QWidget):
                 painter.setClipRect(x0, lane_top, draw_w, int(lane_h))
                 painter.setBrush(Qt.NoBrush)
 
-                # Per-channel RMS
                 if self._show_rms_lr:
                     ch_env = self._rms_envelope[ch]
                     ch_path = QPainterPath()
@@ -509,7 +711,6 @@ class WaveformWidget(QWidget):
                     painter.setPen(ch_pen)
                     painter.drawPath(ch_path)
 
-                # Combined RMS
                 if self._show_rms_avg and self._rms_combined:
                     comb_path = QPainterPath()
                     comb_path.moveTo(x0, mid_y - self._rms_combined[0] * scale)
@@ -524,56 +725,168 @@ class WaveformWidget(QWidget):
         if self._show_markers:
             self._draw_markers(painter, x0, draw_w, draw_h, nch, lane_h)
 
-        # --- Time scale ---
-        self._draw_time_scale(painter, x0, draw_w, draw_h)
+    def _paint_spectrogram(self, painter, x0, draw_w, draw_h):
+        """Paint the spectrogram display with mel-scale frequency axis."""
+        if self._spec_db is None:
+            painter.setPen(QPen(QColor(COLORS["dim"])))
+            painter.drawText(x0, int(draw_h / 2),
+                             "Spectrogram not available (audio too short)")
+            return
 
-        # Playback cursor (spans all channels)
-        if self._total_samples > 0:
-            cursor_x = x0 + self._sample_to_x(self._cursor_sample, draw_w)
-            if x0 <= cursor_x <= x0 + draw_w:
-                painter.setPen(QPen(QColor("#ffffff"), 1))
-                painter.drawLine(cursor_x, 0, cursor_x, int(draw_h))
+        # Build or reuse cached spectrogram image
+        cache_key = (self._view_start, self._view_end, draw_w,
+                     int(draw_h), self._colormap)
+        if self._spec_cache_key != cache_key or self._spec_image is None:
+            self._build_spec_image(draw_w, int(draw_h))
+            self._spec_cache_key = cache_key
 
-        # --- Crosshair mouse guide with dBFS readout ---
-        if self._mouse_y >= 0 and nch > 0:
-            mx = self._mouse_x
-            my = self._mouse_y
-            mouse_ch = int(my / lane_h) if lane_h > 0 else 0
-            mouse_ch = max(0, min(mouse_ch, nch - 1))
-            ch_y_off = mouse_ch * lane_h
-            ch_mid_y = ch_y_off + lane_h / 2.0
-            ch_scale = (lane_h / 2.0) * 0.85 * self._vscale
+        if self._spec_image is not None:
+            painter.drawImage(x0, 0, self._spec_image)
 
-            # Draw horizontal guide line across full width
-            guide_color = QColor(200, 200, 200, 60)
-            painter.setPen(QPen(guide_color, 1, Qt.DashLine))
-            painter.drawLine(0, my, w, my)
+        # Frequency scale
+        self._draw_freq_scale(painter, x0, draw_w, int(draw_h))
 
-            # Draw vertical guide line across waveform area
-            if mx >= 0:
-                painter.drawLine(mx, 0, mx, int(draw_h))
+    def _build_spec_image(self, width: int, height: int):
+        """Render the visible portion of the spectrogram to a cached QImage."""
+        spec = self._spec_db
+        if spec is None or width <= 0 or height <= 0:
+            self._spec_image = None
+            return
 
-            # Compute dBFS from mouse y position
-            if ch_scale > 0:
-                amp = abs(ch_mid_y - my) / ch_scale
-                if amp > 0:
-                    db_val = 20.0 * np.log10(amp)
-                    db_label = f"{db_val:.1f}"
-                else:
-                    db_label = "-\u221e"
-                # Draw label at top of left scale margin
-                painter.setFont(QFont("Consolas", 7))
-                label_color = QColor(180, 180, 180, 120)
-                painter.setPen(label_color)
-                fm = painter.fontMetrics()
-                tw = fm.horizontalAdvance(db_label)
-                painter.drawText(x0 - 5 - tw, int(ch_y_off) + fm.ascent() + 1,
-                                 db_label)
-                # Also on the right
-                painter.drawText(x0 + draw_w + 5, int(ch_y_off) + fm.ascent() + 1,
-                                 db_label)
+        n_mels, n_frames = spec.shape
 
-        painter.end()
+        # Map view range to spectrogram frame indices
+        frame_start = max(0, self._view_start * n_frames // self._total_samples)
+        frame_end = min(n_frames, self._view_end * n_frames // self._total_samples)
+        if frame_end <= frame_start:
+            frame_end = min(frame_start + 1, n_frames)
+
+        view_spec = spec[:, frame_start:frame_end]  # (n_mels, view_frames)
+
+        # Normalize to 0..1 (clamp to dB floor..0)
+        db_floor = _SPEC_DB_FLOOR
+        db_max = float(spec.max()) if spec.size > 0 else 0.0
+        norm = np.clip((view_spec - db_floor) / max(db_max - db_floor, 1.0),
+                       0.0, 1.0)
+
+        # Flip vertically (low freq at bottom)
+        norm = norm[::-1, :]
+
+        # Scale to (height, width) using nearest-neighbor
+        row_idx = np.linspace(0, n_mels - 1, height).astype(np.intp)
+        col_idx = np.linspace(0, norm.shape[1] - 1, width).astype(np.intp)
+        scaled = norm[row_idx][:, col_idx]  # (height, width)
+
+        # Apply colormap
+        lut = SPECTROGRAM_COLORMAPS.get(self._colormap)
+        if lut is None:
+            lut = SPECTROGRAM_COLORMAPS.get("magma", np.zeros((256, 4), np.uint8))
+        indices = (scaled * 255).astype(np.uint8)
+        rgba = lut[indices]  # (height, width, 4)
+
+        # Create QImage
+        rgba_c = np.ascontiguousarray(rgba)
+        self._spec_image_data = rgba_c  # prevent garbage collection
+        self._spec_image = QImage(
+            rgba_c.data, width, height, width * 4,
+            QImage.Format.Format_RGBA8888,
+        )
+
+    def _draw_freq_scale(self, painter, x0, draw_w, draw_h):
+        """Draw frequency scale on left/right margins for spectrogram mode."""
+        if self._spec_db is None or draw_h <= 0:
+            return
+
+        _FREQ_TICKS = [50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
+        _MIN_TICK_SPACING = 20
+
+        f_max = min(_SPEC_F_MAX, self._samplerate / 2.0)
+        mel_min = _hz_to_mel(_SPEC_F_MIN)
+        mel_max = _hz_to_mel(f_max)
+        mel_range = mel_max - mel_min
+        if mel_range <= 0:
+            return
+
+        scale_font = QFont("Consolas", 7)
+        painter.setFont(scale_font)
+        fm = painter.fontMetrics()
+
+        label_color = QColor(COLORS["dim"])
+        tick_pen = QPen(label_color, 1)
+
+        grid_color = QColor(COLORS["accent"])
+        grid_color.setAlpha(35)
+        grid_pen = QPen(grid_color, 1, Qt.DotLine)
+
+        text_h = fm.height()
+        used_ys: list[int] = []
+        for freq in _FREQ_TICKS:
+            if freq < _SPEC_F_MIN or freq > f_max:
+                continue
+            mel = _hz_to_mel(freq)
+            frac = (mel - mel_min) / mel_range
+            y = int(draw_h * (1.0 - frac))  # low freq at bottom
+            if y < text_h or y > draw_h - text_h:
+                continue
+
+            too_close = any(abs(uy - y) < _MIN_TICK_SPACING for uy in used_ys)
+            if too_close:
+                continue
+            used_ys.append(y)
+
+            # Label
+            if freq >= 1000:
+                label = f"{freq // 1000}k"
+            else:
+                label = str(freq)
+
+            # Grid line
+            painter.setPen(grid_pen)
+            painter.drawLine(x0, y, x0 + draw_w, y)
+
+            # Left margin
+            painter.setPen(tick_pen)
+            tw = fm.horizontalAdvance(label)
+            painter.drawText(x0 - 5 - tw, y + fm.ascent() // 2, label)
+
+            # Right margin
+            painter.drawText(x0 + draw_w + 5, y + fm.ascent() // 2, label)
+
+            # Tick marks
+            painter.drawLine(x0 - 3, y, x0, y)
+            painter.drawLine(x0 + draw_w, y, x0 + draw_w + 3, y)
+
+    def _draw_freq_guide(self, painter, x0, draw_w, draw_h, my):
+        """Draw frequency readout at mouse position in spectrogram mode."""
+        if self._spec_db is None or draw_h <= 0:
+            return
+
+        f_max = min(_SPEC_F_MAX, self._samplerate / 2.0)
+        mel_min = _hz_to_mel(_SPEC_F_MIN)
+        mel_max = _hz_to_mel(f_max)
+        mel_range = mel_max - mel_min
+        if mel_range <= 0:
+            return
+
+        frac = 1.0 - (my / draw_h)
+        frac = max(0.0, min(frac, 1.0))
+        mel = mel_min + frac * mel_range
+        freq = _mel_to_hz(mel)
+
+        if freq >= 1000:
+            freq_label = f"{freq / 1000:.1f} kHz"
+        else:
+            freq_label = f"{freq:.0f} Hz"
+
+        painter.setFont(QFont("Consolas", 7))
+        label_color = QColor(180, 180, 180, 120)
+        painter.setPen(label_color)
+        fm = painter.fontMetrics()
+        tw = fm.horizontalAdvance(freq_label)
+        label_y = int(my) + fm.ascent() // 2
+        # Draw inside the waveform area (labels are too wide for the margin)
+        painter.drawText(x0 + 4, label_y, freq_label)
+        painter.drawText(x0 + draw_w - tw - 4, label_y, freq_label)
 
     def _draw_db_scale(self, painter, x0, draw_w, h, nch, lane_h):
         """Draw dB measurement scale on left/right margins and grid lines."""
@@ -858,6 +1171,8 @@ class WaveformWidget(QWidget):
         self._rms_envelope = []
         self._rms_combined = []
         self._rms_cache_key = (0, 0, 0)
+        self._spec_image = None
+        self._spec_cache_key = ()
         super().resizeEvent(event)
 
     def mousePressEvent(self, event):
@@ -899,6 +1214,11 @@ class WaveformWidget(QWidget):
         tolerance = int(samples_per_px * 5)
 
         tips: list[str] = []
+
+        # Marker and issue tooltips only in waveform mode
+        if self._display_mode != "waveform":
+            QToolTip.hideText()
+            return
 
         # Marker tooltips (only when markers are visible)
         _MARKER_PX_TOL = 6
@@ -1175,6 +1495,24 @@ class WaveformWidget(QWidget):
     def set_enabled_overlays(self, labels: set[str]):
         """Set which detector issue overlays are visible by label."""
         self._enabled_overlays = set(labels)
+        self.update()
+
+    def set_display_mode(self, mode: str):
+        """Switch between 'waveform' and 'spectrogram' display modes."""
+        if mode not in ("waveform", "spectrogram"):
+            return
+        self._display_mode = mode
+        self._spec_image = None
+        self._spec_cache_key = ()
+        self.update()
+
+    def set_colormap(self, name: str):
+        """Set the spectrogram colormap by name."""
+        if name not in SPECTROGRAM_COLORMAPS:
+            return
+        self._colormap = name
+        self._spec_image = None
+        self._spec_cache_key = ()
         self.update()
 
     def _compute_rms_max_sample(self):
