@@ -362,7 +362,7 @@ class SessionPrepWindow(QMainWindow):
 
         # Spectrogram settings dropdown (visible only in spectrogram mode)
         self._spec_settings_btn = QToolButton()
-        self._spec_settings_btn.setText("Spectrogram Settings")
+        self._spec_settings_btn.setText("Display")
         self._spec_settings_btn.setToolTip("Configure spectrogram display parameters")
         self._spec_settings_btn.setPopupMode(QToolButton.InstantPopup)
         self._spec_settings_btn.setAutoRaise(True)
