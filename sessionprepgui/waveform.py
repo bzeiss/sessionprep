@@ -811,6 +811,8 @@ class WaveformWidget(QWidget):
                                   for i in range(len(env_x))])
 
             grad = QLinearGradient(0, y_off, 0, y_off + lane_h)
+            view_len = self._view_end - self._view_start
+            spp = view_len / max(draw_w, 1)  # samples per pixel
             color_edge = QColor(color)
             color_edge.setAlpha(30)
             color_mid = QColor(color)
@@ -819,13 +821,18 @@ class WaveformWidget(QWidget):
             grad.setColorAt(0.5, color_mid)
             grad.setColorAt(1.0, color_edge)
 
+            # Solid dark fill first to occlude grid lines behind
             painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(COLORS["bg"]))
+            painter.drawPolygon(env_poly)
+            # Gradient on top
             painter.setBrush(grad)
             painter.drawPolygon(env_poly)
 
-            # Outline polylines
+            # Outline polylines — softer when zoomed out
+            outline_alpha = max(100, min(200, int(200 - spp * 0.1)))
             outline = QColor(color)
-            outline.setAlpha(200)
+            outline.setAlpha(outline_alpha)
             painter.setBrush(Qt.NoBrush)
             painter.setPen(QPen(outline, self._wf_line_width))
             top_poly = QPolygonF([QPointF(xs[i], ys_top[i])
