@@ -2007,11 +2007,16 @@ class WaveformWidget(QWidget):
             return
 
         half_win = win // 2
-        # Per-channel window-means from cached cumsums (O(1) per channel)
-        ch_wms: list[np.ndarray] = []
+
+        # Compute window-means only for the view-relevant slice of the
+        # cumsum — O(view_length + 2*win) instead of O(total_samples).
         have_cumsums = len(self._rms_cumsums) == len(self._channels)
+
+        ch_wms: list[np.ndarray] = []
+        wm_offset = 0  # global wm index of ch_wms[][0]
         for ch_idx, ch_data in enumerate(self._channels):
             n = len(ch_data)
+            n_wm_total = n - win + 1
             if n <= win:
                 ch_wms.append(np.zeros(1, dtype=np.float64))
                 continue
@@ -2022,46 +2027,59 @@ class WaveformWidget(QWidget):
                 cs = np.empty(n + 1, dtype=np.float64)
                 cs[0] = 0.0
                 np.cumsum(sq, out=cs[1:])
-            ch_wms.append((cs[win:] - cs[:n - win + 1]) / win)
+            # View-local slice only
+            wm_lo = max(0, vs - half_win - win)
+            wm_hi = min(n_wm_total, ve + half_win + win)
+            wm_offset = wm_lo
+            ch_wms.append(
+                (cs[wm_lo + win : wm_hi + win] - cs[wm_lo : wm_hi]) / win)
 
-        # Combined (average across channels)
+        # Combined (average across channels) — already view-local sized
         min_len = min(len(wm) for wm in ch_wms)
-        combined_wm = np.mean(
-            np.column_stack([wm[:min_len] for wm in ch_wms]), axis=1
-        )
+        if min_len > 1 and len(ch_wms) > 1:
+            combined_wm = np.mean(
+                np.column_stack([wm[:min_len] for wm in ch_wms]), axis=1)
+        elif ch_wms:
+            combined_wm = ch_wms[0][:min_len].copy()
+        else:
+            combined_wm = np.zeros(1, dtype=np.float64)
 
-        def _downsample(wm: np.ndarray) -> np.ndarray:
-            n_means = len(wm)
-            if n_means == 0:
+        def _downsample(wm: np.ndarray, offset: int) -> np.ndarray:
+            """Downsample a view-local wm slice to *width* pixels.
+
+            *offset* is the global wm index of wm[0].
+            """
+            n_wm = len(wm)
+            if n_wm == 0:
                 return np.zeros(width)
 
-            # Map pixel bins into wm index space
+            # Map pixel bins to global wm indices, then to local
             pixel_edges = np.arange(width + 1)
             s_edges = vs + pixel_edges * view_len // width
-            wm_edges = np.clip(s_edges - half_win, 0, n_means)
-            first = int(wm_edges[0])
-            last = int(wm_edges[-1])
+            global_wm = np.clip(s_edges - half_win, 0, offset + n_wm)
+            local_wm = np.clip(global_wm - offset, 0, n_wm)
+
+            first = int(local_wm[0])
+            last = int(local_wm[-1])
             last = max(last, first + 1)
-            last = min(last, n_means)
+            last = min(last, n_wm)
             wm_slice = wm[first:last]
             n_slice = len(wm_slice)
 
             if n_slice >= width:
-                # Fast path: reshape → vectorised max
                 spb = n_slice // width
                 n_use = spb * width
                 reshaped = wm_slice[:n_use].reshape(width, spb)
                 result = np.sqrt(np.maximum(reshaped.max(axis=1), 0.0))
-                # Fold leftover into last bin
                 if n_use < n_slice:
                     tail_max = float(wm_slice[n_use:].max())
                     result[-1] = np.sqrt(max(float(result[-1]) ** 2, tail_max))
                 return result
             else:
-                # More pixels than wm samples — map to nearest
-                local = np.clip(wm_edges[:-1] - first, 0, n_slice - 1).astype(np.intp)
+                local = np.clip(local_wm[:-1] - first, 0,
+                                max(n_slice - 1, 0)).astype(np.intp)
                 return np.sqrt(np.maximum(wm_slice[local], 0.0))
 
-        self._rms_envelope = [_downsample(wm) for wm in ch_wms]
-        self._rms_combined = _downsample(combined_wm)
+        self._rms_envelope = [_downsample(wm, wm_offset) for wm in ch_wms]
+        self._rms_combined = _downsample(combined_wm, wm_offset)
         self._rms_cache_key = cache_key
