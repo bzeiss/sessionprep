@@ -330,6 +330,70 @@
   - Approach: Simple spectral centroid or band energy checks against filename keywords
   - Categorization: ATTENTION (informational)
 
+### Vocal Automation (Future Feature)
+
+- [ ] **Vocal automation curve generation** (Status: ❌) `FUTURE`
+  - **Scope:** Pre-mix vocal cleanup to make vocals compressor-ready
+  - **Goal:** Remove mechanical problems (plosives, sibilance, peaks, level inconsistencies) that waste time and sabotage compressor
+  - **NOT in scope:** Macro dynamics (verse/chorus balance), artistic automation, creative mixing decisions
+  - **When:** After core features are complete and stable
+
+#### Core Processors
+
+- [ ] **Phrase-level leveler**
+  - Purpose: Smooth out loudness variations between phrases (2-4 second windows)
+  - Algorithm: Bring outlier phrases toward median ±3-6 dB (genre-dependent)
+  - Settings: `window_ms`, `target_range_db`, `smoothing` (aggressive/moderate/gentle)
+  - Not normalization: Preserve intentional dynamics, only fix extremes
+
+- [ ] **Plosive tamer**
+  - Purpose: Remove low-frequency thumps from P, B consonants
+  - Detection: 50-200 Hz bursts, <50ms duration
+  - Action: Momentary 6-12 dB reduction (genre-dependent threshold)
+  - Settings: `threshold` (0.0-1.0 energy ratio), `reduction_db`, `freq_range`
+
+- [ ] **Sibilance tamer**
+  - Purpose: Reduce harsh high-frequency spikes from S, T consonants
+  - Detection: 5-10 kHz spikes, <100ms duration
+  - Action: Momentary 3-8 dB reduction (frequency-specific or broadband)
+  - Settings: `threshold` (ratio vs. mid-freq), `reduction_db`, `freq_range`
+
+- [ ] **Peak limiter**
+  - Purpose: Catch random peaks that would overload compressor (mouth clicks, breath pops)
+  - Detection: Peaks >6 dB above local RMS (500ms window)
+  - Action: Fast reduction over 10-50ms (5ms attack, 30ms release)
+  - Settings: `threshold_db`, `target_db`, `attack_ms`, `release_ms`
+
+#### Genre Preset System
+
+- [ ] **Preset configurations**
+  - Pop: Aggressive control (±3 dB range, heavy plosive/sibilance reduction)
+  - Rock: Moderate control (±6 dB range, preserve energy)
+  - Jazz: Minimal control (±10 dB range, preserve natural dynamics)
+  - Minimal: Only obvious problems (disable leveler, catch extremes only)
+  - Custom: User-configurable thresholds
+
+#### Implementation Details
+
+- [ ] **Automation curve generation**
+  - Smoothing: 50ms attack, 200ms release (avoid zipper noise, pumping)
+  - Thinning: Reduce to <5000 points for DAW compatibility
+  - Global smoothing: Apply ballistics (compressor-style attack/release)
+  - Preserve intentional peaks: Don't squash belts/screams (>10 dB above target)
+
+- [ ] **GUI integration**
+  - Vocal automation panel (waveform + automation overlay)
+  - Preset dropdown (pop/rock/jazz/minimal/custom)
+  - Processor checkboxes + threshold sliders
+  - Real-time curve regeneration (adjust settings, preview curve)
+  - Statistics display (plosives detected, sibilance regions, peaks reduced)
+  - Visualization only (no interactive editing—refinement done in DAW)
+
+- [ ] **Export formats**
+  - DAWproject: Native volume automation lane
+  - Pro Tools PTSL: Native automation (when PTSL integration ready)
+  - JSON: For custom workflows / manual import
+
 ### Documentation
 
 - [x] **Reorganize docs** (Status: ✅ Done)
