@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import QPointF, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import (QColor, QFont, QImage, QLinearGradient, QPainter,
-                          QPainterPath, QPen)
+                          QPen, QPolygonF)
 from PySide6.QtWidgets import QToolTip, QWidget
 from scipy.signal import stft as scipy_stft
 
@@ -197,21 +197,24 @@ class WaveformLoadWorker(QThread):
         peak_db = 20.0 * np.log10(peak_lin) if peak_lin > 0 else float('-inf')
         peak_amplitude = float(channels[peak_channel][peak_sample])
 
-        # --- RMS max finding ---
+        # --- RMS cumsum (computed once, reused for envelope drawing) ---
         rms_max_sample = -1
         rms_max_db = float('-inf')
         rms_max_amplitude = 0.0
+        rms_cumsums: list[np.ndarray] = []
         if win > 0:
             ch_wms: list[np.ndarray] = []
             for ch_data in channels:
                 n = len(ch_data)
                 if n <= win:
+                    rms_cumsums.append(np.zeros(2, dtype=np.float64))
                     ch_wms.append(np.zeros(1, dtype=np.float64))
                     continue
                 sq = ch_data.astype(np.float64) ** 2
                 cs = np.empty(n + 1, dtype=np.float64)
                 cs[0] = 0.0
                 np.cumsum(sq, out=cs[1:])
+                rms_cumsums.append(cs)
                 ch_wms.append((cs[win:] - cs[:n - win + 1]) / win)
             min_len = min(len(wm) for wm in ch_wms)
             if min_len > 0:
@@ -242,6 +245,7 @@ class WaveformLoadWorker(QThread):
             "rms_max_sample": rms_max_sample,
             "rms_max_db": rms_max_db,
             "rms_max_amplitude": rms_max_amplitude,
+            "rms_cumsums": rms_cumsums,
             "spec_db": spec_db,
         })
 
@@ -347,9 +351,17 @@ class WaveformWidget(QWidget):
         self._spec_db_floor: float = _SPEC_DB_FLOOR
         self._spec_db_ceil: float = 0.0
         self._spec_recompute_worker: SpectrogramRecomputeWorker | None = None
+        # Cached RMS cumsums (computed once per track in background worker)
+        self._rms_cumsums: list[np.ndarray] = []
         # Scroll inversion
         self._invert_h: bool = False
         self._invert_v: bool = False
+        # Scroll throttle
+        self._scroll_pending: bool = False
+        self._scroll_timer: QTimer = QTimer(self)
+        self._scroll_timer.setSingleShot(True)
+        self._scroll_timer.setInterval(8)  # ~120 fps cap
+        self._scroll_timer.timeout.connect(self._flush_scroll)
         self.setMinimumHeight(80)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
@@ -396,6 +408,7 @@ class WaveformWidget(QWidget):
         self._rms_envelope = []
         self._rms_combined = []
         self._rms_cache_key = (0, 0, 0)
+        self._rms_cumsums = []
         self._spec_db = None
         self._spec_image = None
         self._spec_cache_key = ()
@@ -440,6 +453,7 @@ class WaveformWidget(QWidget):
         self._rms_envelope = []
         self._rms_combined = []
         self._rms_cache_key = (0, 0, 0)
+        self._rms_cumsums = result.get("rms_cumsums", [])
         self._spec_db = result.get("spec_db")
         self._spec_image = None
         self._spec_cache_key = ()
@@ -475,12 +489,47 @@ class WaveformWidget(QWidget):
         draw_w = max(1, w - self._MARGIN_LEFT - self._MARGIN_RIGHT)
         return self._MARGIN_LEFT, draw_w
 
+    @staticmethod
+    def _peaks_for_view(ch_data, vs, ve, width):
+        """Compute (mins, maxs) arrays for one channel over samples [vs:ve]."""
+        view_data = ch_data[vs:ve]
+        n = len(view_data)
+        if n == 0:
+            return np.zeros(width, dtype=np.float64), np.zeros(width, dtype=np.float64)
+        if n >= width:
+            spb = n // width
+            n_use = spb * width
+            reshaped = view_data[:n_use].reshape(width, spb)
+            mins = reshaped.min(axis=1).astype(np.float64)
+            maxs = reshaped.max(axis=1).astype(np.float64)
+            if n_use < n:
+                tail = view_data[n_use:]
+                mins[-1] = min(float(mins[-1]), float(tail.min()))
+                maxs[-1] = max(float(maxs[-1]), float(tail.max()))
+        else:
+            mins = np.zeros(width, dtype=np.float64)
+            maxs = np.zeros(width, dtype=np.float64)
+            starts = np.arange(width) * n // width
+            ends = np.minimum((np.arange(width) + 1) * n // width, n)
+            valid = ends > starts
+            if valid.any():
+                single = valid & ((ends - starts) == 1)
+                if single.any():
+                    mins[single] = view_data[starts[single]]
+                    maxs[single] = view_data[starts[single]]
+                multi = valid & ((ends - starts) > 1)
+                for i in np.nonzero(multi)[0]:
+                    chunk = view_data[starts[i]:ends[i]]
+                    mins[i] = chunk.min()
+                    maxs[i] = chunk.max()
+        return mins, maxs
+
     def _build_peaks(self, width: int):
         """Downsample audio to peak envelope for the given pixel width, per channel.
 
-        Stores ``(mins, maxs)`` NumPy arrays per channel.  The main path
-        uses ``reshape`` + vectorised ``min``/``max`` (two NumPy calls per
-        channel instead of *width* Python-level calls).
+        Supports incremental updates on horizontal scroll: when the view
+        shifts by a fraction, existing peak data is shifted and only the
+        newly exposed bins are recomputed.
         """
         if not self._channels or width <= 0:
             self._peaks_cache = []
@@ -495,49 +544,60 @@ class WaveformWidget(QWidget):
             self._peaks_cache = []
             return
 
+        # Try incremental update: same width & view_len, shifted start
+        old_w, old_vs, old_ve = self._cached_view
+        can_inc = (
+            self._peaks_cache
+            and old_w == width
+            and (old_ve - old_vs) == view_len
+            and vs != old_vs
+            and len(self._peaks_cache) == len(self._channels)
+        )
+        if can_inc:
+            # How many bins shifted?
+            shift_samples = vs - old_vs  # positive = scrolled right
+            shift_bins = int(round(shift_samples * width / view_len))
+            if 0 < abs(shift_bins) < width:
+                new_cache = []
+                for ch_idx, ch_data in enumerate(self._channels):
+                    old_mins, old_maxs = self._peaks_cache[ch_idx]
+                    mins = np.empty(width, dtype=np.float64)
+                    maxs = np.empty(width, dtype=np.float64)
+                    if shift_bins > 0:
+                        # Scrolled right: keep left portion, compute right
+                        keep = width - shift_bins
+                        mins[:keep] = old_mins[shift_bins:]
+                        maxs[:keep] = old_maxs[shift_bins:]
+                        # Compute new bins [keep:width]
+                        new_vs = vs + keep * view_len // width
+                        new_ve = ve
+                        new_w = width - keep
+                        nm, nx = self._peaks_for_view(
+                            ch_data, new_vs, new_ve, new_w)
+                        mins[keep:] = nm
+                        maxs[keep:] = nx
+                    else:
+                        # Scrolled left: keep right portion, compute left
+                        sb = -shift_bins
+                        keep = width - sb
+                        mins[sb:] = old_mins[:keep]
+                        maxs[sb:] = old_maxs[:keep]
+                        # Compute new bins [0:sb]
+                        new_vs = vs
+                        new_ve = vs + sb * view_len // width
+                        nm, nx = self._peaks_for_view(
+                            ch_data, new_vs, new_ve, sb)
+                        mins[:sb] = nm
+                        maxs[:sb] = nx
+                    new_cache.append((mins, maxs))
+                self._peaks_cache = new_cache
+                self._cached_view = cache_key
+                return
+
+        # Full recompute (zoom change, resize, or large jump)
         self._peaks_cache = []
         for ch_data in self._channels:
-            view_data = ch_data[vs:ve]
-            n = len(view_data)
-
-            if n == 0:
-                self._peaks_cache.append(
-                    (np.zeros(width), np.zeros(width)))
-                continue
-
-            if n >= width:
-                # Fast path: reshape → vectorised min/max
-                spb = n // width                    # samples per bin
-                n_use = spb * width
-                reshaped = view_data[:n_use].reshape(width, spb)
-                mins = reshaped.min(axis=1).astype(np.float64)
-                maxs = reshaped.max(axis=1).astype(np.float64)
-                # Fold leftover samples into the last bin
-                if n_use < n:
-                    tail = view_data[n_use:]
-                    mins[-1] = min(float(mins[-1]), float(tail.min()))
-                    maxs[-1] = max(float(maxs[-1]), float(tail.max()))
-            else:
-                # Extreme zoom: more pixels than samples
-                mins = np.zeros(width, dtype=np.float64)
-                maxs = np.zeros(width, dtype=np.float64)
-                starts = np.arange(width) * n // width
-                ends = np.minimum(
-                    (np.arange(width) + 1) * n // width, n)
-                valid = ends > starts
-                if valid.any():
-                    # Single-sample bins (the common sub-case)
-                    single = valid & ((ends - starts) == 1)
-                    if single.any():
-                        mins[single] = view_data[starts[single]]
-                        maxs[single] = view_data[starts[single]]
-                    # Rare multi-sample bins (near n ≈ width)
-                    multi = valid & ((ends - starts) > 1)
-                    for i in np.nonzero(multi)[0]:
-                        chunk = view_data[starts[i]:ends[i]]
-                        mins[i] = chunk.min()
-                        maxs[i] = chunk.max()
-
+            mins, maxs = self._peaks_for_view(ch_data, vs, ve, width)
             self._peaks_cache.append((mins, maxs))
         self._cached_view = cache_key
 
@@ -709,6 +769,8 @@ class WaveformWidget(QWidget):
 
     def _paint_waveform(self, painter, x0, draw_w, draw_h):
         """Paint the waveform display with channels, overlays, RMS, and markers."""
+        # Disable AA for waveform paths (perf: ~30-50% faster fill/stroke)
+        painter.setRenderHint(QPainter.Antialiasing, False)
         w = self.width()
         self._build_peaks(draw_w)
         if self._show_rms_lr or self._show_rms_avg:
@@ -733,19 +795,17 @@ class WaveformWidget(QWidget):
             color = QColor(self._CHANNEL_COLORS[ch % len(self._CHANNEL_COLORS)])
             mins, maxs = self._peaks_cache[ch]
 
-            top_path = QPainterPath()
-            bot_path = QPainterPath()
-            top_path.moveTo(x0, mid_y - maxs[0] * scale)
-            bot_path.moveTo(x0, mid_y - mins[0] * scale)
-            for x in range(1, len(mins)):
-                top_path.lineTo(x0 + x, mid_y - maxs[x] * scale)
-                bot_path.lineTo(x0 + x, mid_y - mins[x] * scale)
+            # Build x/y arrays in numpy, then construct QPolygonF once
+            n_pts = len(mins)
+            xs = np.arange(n_pts, dtype=np.float64) + x0
+            ys_top = mid_y - maxs * scale
+            ys_bot = mid_y - mins * scale
 
-            envelope = QPainterPath(top_path)
-            rev = bot_path.toReversed()
-            envelope.lineTo(rev.elementAt(0).x, rev.elementAt(0).y)
-            envelope.connectPath(rev)
-            envelope.closeSubpath()
+            # Filled envelope: top L→R then bottom R→L
+            env_x = np.concatenate([xs, xs[::-1]])
+            env_y = np.concatenate([ys_top, ys_bot[::-1]])
+            env_poly = QPolygonF([QPointF(env_x[i], env_y[i])
+                                  for i in range(len(env_x))])
 
             grad = QLinearGradient(0, y_off, 0, y_off + lane_h)
             color_edge = QColor(color)
@@ -758,14 +818,19 @@ class WaveformWidget(QWidget):
 
             painter.setPen(Qt.NoPen)
             painter.setBrush(grad)
-            painter.drawPath(envelope)
+            painter.drawPolygon(env_poly)
 
+            # Outline polylines
             outline = QColor(color)
             outline.setAlpha(200)
             painter.setBrush(Qt.NoBrush)
             painter.setPen(QPen(outline, 1))
-            painter.drawPath(top_path)
-            painter.drawPath(bot_path)
+            top_poly = QPolygonF([QPointF(xs[i], ys_top[i])
+                                  for i in range(n_pts)])
+            bot_poly = QPolygonF([QPointF(xs[i], ys_bot[i])
+                                  for i in range(n_pts)])
+            painter.drawPolyline(top_poly)
+            painter.drawPolyline(bot_poly)
 
             center_color = QColor(COLORS["accent"])
             center_color.setAlpha(80)
@@ -795,22 +860,25 @@ class WaveformWidget(QWidget):
 
                 if self._show_rms_lr:
                     ch_env = self._rms_envelope[ch]
-                    ch_path = QPainterPath()
-                    ch_path.moveTo(x0, mid_y - ch_env[0] * scale)
-                    for x in range(1, len(ch_env)):
-                        ch_path.lineTo(x0 + x, mid_y - ch_env[x] * scale)
+                    n_rms = len(ch_env)
+                    rxs = np.arange(n_rms, dtype=np.float64) + x0
+                    rys = mid_y - ch_env * scale
                     painter.setPen(ch_pen)
-                    painter.drawPath(ch_path)
+                    painter.drawPolyline(QPolygonF(
+                        [QPointF(rxs[i], rys[i]) for i in range(n_rms)]))
 
                 if self._show_rms_avg and len(self._rms_combined) > 0:
-                    comb_path = QPainterPath()
-                    comb_path.moveTo(x0, mid_y - self._rms_combined[0] * scale)
-                    for x in range(1, len(self._rms_combined)):
-                        comb_path.lineTo(x0 + x, mid_y - self._rms_combined[x] * scale)
+                    n_comb = len(self._rms_combined)
+                    cxs = np.arange(n_comb, dtype=np.float64) + x0
+                    cys = mid_y - self._rms_combined * scale
                     painter.setPen(comb_pen)
-                    painter.drawPath(comb_path)
+                    painter.drawPolyline(QPolygonF(
+                        [QPointF(cxs[i], cys[i]) for i in range(n_comb)]))
 
                 painter.setClipping(False)
+
+        # Re-enable AA for markers and text
+        painter.setRenderHint(QPainter.Antialiasing, True)
 
         # --- Peak and RMS max markers ---
         if self._show_markers:
@@ -1581,12 +1649,19 @@ class WaveformWidget(QWidget):
                 new_start = max(0, new_end - view_len)
             self._view_start = new_start
             self._view_end = new_end
-            self._invalidate_peaks()
-            self.update()
+            self._invalidate_rms_only()
+            if not self._scroll_pending:
+                self._scroll_pending = True
+                self._scroll_timer.start()
             event.accept()
 
         else:
             event.ignore()
+
+    def _flush_scroll(self):
+        """Coalesce rapid scroll events into a single repaint."""
+        self._scroll_pending = False
+        self.update()
 
     def keyPressEvent(self, event):
         """Pro Tools keyboard shortcuts: R = zoom in, T = zoom out.
@@ -1645,6 +1720,12 @@ class WaveformWidget(QWidget):
     def _invalidate_peaks(self):
         self._peaks_cache = []
         self._cached_view = (0, 0, 0)
+        self._rms_envelope = []
+        self._rms_combined = []
+        self._rms_cache_key = (0, 0, 0)
+
+    def _invalidate_rms_only(self):
+        """Invalidate RMS envelope cache but keep peaks for incremental updates."""
         self._rms_envelope = []
         self._rms_combined = []
         self._rms_cache_key = (0, 0, 0)
@@ -1871,15 +1952,19 @@ class WaveformWidget(QWidget):
             self._rms_max_sample = -1
             return
         ch_wms: list[np.ndarray] = []
-        for ch_data in self._channels:
+        have_cumsums = len(self._rms_cumsums) == len(self._channels)
+        for ch_idx, ch_data in enumerate(self._channels):
             n = len(ch_data)
             if n <= win:
                 ch_wms.append(np.zeros(1, dtype=np.float64))
                 continue
-            sq = ch_data.astype(np.float64) ** 2
-            cs = np.empty(n + 1, dtype=np.float64)
-            cs[0] = 0.0
-            np.cumsum(sq, out=cs[1:])
+            if have_cumsums:
+                cs = self._rms_cumsums[ch_idx]
+            else:
+                sq = ch_data.astype(np.float64) ** 2
+                cs = np.empty(n + 1, dtype=np.float64)
+                cs[0] = 0.0
+                np.cumsum(sq, out=cs[1:])
             ch_wms.append((cs[win:] - cs[:n - win + 1]) / win)
         min_len = min(len(wm) for wm in ch_wms)
         if min_len == 0:
@@ -1897,8 +1982,9 @@ class WaveformWidget(QWidget):
     def _build_rms_envelope(self, width: int):
         """Compute per-channel AND combined RMS envelopes for *width* pixels.
 
-        Uses a sliding-window cumsum over each channel independently,
-        then picks the max-RMS within each pixel's sample range.
+        Uses pre-cached cumsum arrays (computed once per track by the
+        background worker) to derive sliding-window RMS, then downsamples
+        to pixel resolution.
 
         Results:
             ``_rms_envelope``  – list (per channel) of np.ndarray
@@ -1921,18 +2007,22 @@ class WaveformWidget(QWidget):
             return
 
         half_win = win // 2
-        # Per-channel window-means arrays (full resolution)
+        # Per-channel window-means from cached cumsums (O(1) per channel)
         ch_wms: list[np.ndarray] = []
-        for ch_data in self._channels:
+        have_cumsums = len(self._rms_cumsums) == len(self._channels)
+        for ch_idx, ch_data in enumerate(self._channels):
             n = len(ch_data)
             if n <= win:
                 ch_wms.append(np.zeros(1, dtype=np.float64))
                 continue
-            sq = ch_data.astype(np.float64) ** 2
-            cs = np.empty(n + 1, dtype=np.float64)
-            cs[0] = 0.0
-            np.cumsum(sq, out=cs[1:])
-            ch_wms.append((cs[win:] - cs[: n - win + 1]) / win)
+            if have_cumsums:
+                cs = self._rms_cumsums[ch_idx]
+            else:
+                sq = ch_data.astype(np.float64) ** 2
+                cs = np.empty(n + 1, dtype=np.float64)
+                cs[0] = 0.0
+                np.cumsum(sq, out=cs[1:])
+            ch_wms.append((cs[win:] - cs[:n - win + 1]) / win)
 
         # Combined (average across channels)
         min_len = min(len(wm) for wm in ch_wms)
