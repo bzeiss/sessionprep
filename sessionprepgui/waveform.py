@@ -353,6 +353,9 @@ class WaveformWidget(QWidget):
         self._spec_recompute_worker: SpectrogramRecomputeWorker | None = None
         # Cached RMS cumsums (computed once per track in background worker)
         self._rms_cumsums: list[np.ndarray] = []
+        # Waveform display settings
+        self._wf_antialias: bool = False
+        self._wf_line_width: int = 1
         # Scroll inversion
         self._invert_h: bool = False
         self._invert_v: bool = False
@@ -769,8 +772,8 @@ class WaveformWidget(QWidget):
 
     def _paint_waveform(self, painter, x0, draw_w, draw_h):
         """Paint the waveform display with channels, overlays, RMS, and markers."""
-        # Disable AA for waveform paths (perf: ~30-50% faster fill/stroke)
-        painter.setRenderHint(QPainter.Antialiasing, False)
+        # AA for waveform paths — user-configurable (default off for perf)
+        painter.setRenderHint(QPainter.Antialiasing, self._wf_antialias)
         w = self.width()
         self._build_peaks(draw_w)
         if self._show_rms_lr or self._show_rms_avg:
@@ -824,7 +827,7 @@ class WaveformWidget(QWidget):
             outline = QColor(color)
             outline.setAlpha(200)
             painter.setBrush(Qt.NoBrush)
-            painter.setPen(QPen(outline, 1))
+            painter.setPen(QPen(outline, self._wf_line_width))
             top_poly = QPolygonF([QPointF(xs[i], ys_top[i])
                                   for i in range(n_pts)])
             bot_poly = QPolygonF([QPointF(xs[i], ys_bot[i])
@@ -846,8 +849,9 @@ class WaveformWidget(QWidget):
 
         # --- RMS overlay ---
         if (self._show_rms_lr or self._show_rms_avg) and self._rms_envelope:
-            ch_pen = QPen(QColor(255, 220, 60, 200), 1.0)
-            comb_pen = QPen(QColor(255, 100, 40, 220), 1.5)
+            lw = self._wf_line_width
+            ch_pen = QPen(QColor(255, 220, 60, 200), float(lw))
+            comb_pen = QPen(QColor(255, 100, 40, 220), float(lw) * 1.5)
             for ch in range(nch):
                 if ch >= len(self._rms_envelope):
                     break
@@ -1878,6 +1882,16 @@ class WaveformWidget(QWidget):
         """Set scroll inversion mode: 'default', 'horizontal', 'vertical', 'both'."""
         self._invert_h = mode in ("horizontal", "both")
         self._invert_v = mode in ("vertical", "both")
+
+    def set_wf_antialias(self, enabled: bool):
+        """Enable or disable anti-aliased waveform lines."""
+        self._wf_antialias = enabled
+        self.update()
+
+    def set_wf_line_width(self, width: int):
+        """Set waveform outline / RMS line width in pixels (1 or 2)."""
+        self._wf_line_width = max(1, min(width, 3))
+        self.update()
 
     def set_colormap(self, name: str):
         """Set the spectrogram colormap by name."""

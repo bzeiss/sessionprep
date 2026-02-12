@@ -472,6 +472,36 @@ class SessionPrepWindow(QMainWindow):
         self._spec_settings_btn.setVisible(False)
         wf_toolbar.addWidget(self._spec_settings_btn)
 
+        # Waveform settings dropdown (visible only in waveform mode)
+        self._wf_settings_btn = QToolButton()
+        self._wf_settings_btn.setText("Display")
+        self._wf_settings_btn.setToolTip("Configure waveform display parameters")
+        self._wf_settings_btn.setPopupMode(QToolButton.InstantPopup)
+        self._wf_settings_btn.setAutoRaise(True)
+        self._wf_settings_btn.setStyleSheet(dropdown_style)
+        wf_menu = QMenu(self._wf_settings_btn)
+
+        # -- Anti-Aliased Lines toggle --
+        self._wf_aa_action = wf_menu.addAction("Anti-Aliased Lines")
+        self._wf_aa_action.setCheckable(True)
+        self._wf_aa_action.setChecked(False)
+        self._wf_aa_action.toggled.connect(self._on_wf_aa_changed)
+
+        # -- Line Thickness submenu --
+        thick_menu = wf_menu.addMenu("Line Thickness")
+        self._wf_thick_group = QActionGroup(self)
+        for label, val in [("Thin (1px)", 1), ("Normal (2px)", 2)]:
+            act = thick_menu.addAction(label)
+            act.setCheckable(True)
+            act.setData(val)
+            if val == 1:
+                act.setChecked(True)
+            self._wf_thick_group.addAction(act)
+        self._wf_thick_group.triggered.connect(self._on_wf_line_width_changed)
+
+        self._wf_settings_btn.setMenu(wf_menu)
+        wf_toolbar.addWidget(self._wf_settings_btn)
+
         wf_toolbar.addSpacing(8)
 
         # Overlay dropdown (populated per-track)
@@ -1020,11 +1050,20 @@ class SessionPrepWindow(QMainWindow):
         self._waveform.set_display_mode(mode)
 
         # Hide waveform-only toolbar controls in spectrogram mode
+        self._wf_settings_btn.setVisible(is_waveform)
         self._markers_toggle.setVisible(is_waveform)
         self._rms_lr_toggle.setVisible(is_waveform)
         self._rms_avg_toggle.setVisible(is_waveform)
         # Show spectrogram-only controls
         self._spec_settings_btn.setVisible(not is_waveform)
+
+    @Slot(bool)
+    def _on_wf_aa_changed(self, checked: bool):
+        self._waveform.set_wf_antialias(checked)
+
+    @Slot(QAction)
+    def _on_wf_line_width_changed(self, action):
+        self._waveform.set_wf_line_width(int(action.data()))
 
     @Slot(QAction)
     def _on_spec_fft_changed(self, action):
