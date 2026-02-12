@@ -38,7 +38,7 @@ FILE_COLOR_SUSTAINED = QColor("#44cccc")
 
 STYLESHEET = """
     QMainWindow { background-color: #1e1e1e; }
-    QMenuBar { background-color: #2d2d2d; color: #dddddd; }
+    QMenuBar { background-color: #252525; color: #dddddd; }
     QMenuBar::item:selected { background-color: #3a3a3a; }
     QMenu { background-color: #2d2d2d; color: #dddddd; border: 1px solid #555; }
     QMenu::item:selected { background-color: #2a6db5; }
@@ -58,7 +58,7 @@ STYLESHEET = """
     QPushButton:disabled { color: #666666; background-color: #2d2d2d; }
     QStatusBar { background-color: #2d2d2d; color: #888888; }
     QTabWidget::pane { border-top: 1px solid #555; background-color: #1e1e1e; }
-    QTabBar { background-color: #2d2d2d; }
+    QTabBar { background-color: #2d2d2d; qproperty-drawBase: 0; }
     QTabBar::tab {
         background-color: #2d2d2d; color: #aaaaaa;
         border: none; border-bottom: 2px solid transparent;
@@ -67,6 +67,23 @@ STYLESHEET = """
     QTabBar::tab:selected { color: #dddddd; border-bottom: 2px solid #4499ff; }
     QTabBar::tab:hover:!selected { color: #cccccc; background-color: #353535; }
     QTabBar::tab:disabled { color: #555555; }
+    /* Top-level phase tabs (documentMode stretches tab bar to full width) */
+    QTabWidget#phaseTabs > QTabBar {
+        background-color: #343434;
+        border: none;
+        qproperty-drawBase: 0;
+    }
+    QTabWidget#phaseTabs > QTabBar::tab {
+        background-color: #343434; color: #aaaaaa;
+        padding: 8px 24px; font-size: 10pt;
+        border: none; border-bottom: 2px solid transparent;
+    }
+    QTabWidget#phaseTabs > QTabBar::tab:selected {
+        color: #dddddd; border-bottom: 2px solid #4499ff;
+    }
+    QTabWidget#phaseTabs > QTabBar::tab:hover:!selected {
+        color: #cccccc; background-color: #3d3d3d;
+    }
     QProgressBar {
         background-color: #2d2d2d; border: 1px solid #555; border-radius: 4px;
         text-align: center; color: #dddddd; height: 20px;

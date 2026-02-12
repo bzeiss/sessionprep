@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QStackedWidget,
     QStyle,
@@ -64,6 +65,9 @@ _TAB_FILE = 1
 
 _PAGE_PROGRESS = 0
 _PAGE_TABS = 1
+
+_PHASE_ANALYSIS = 0
+_PHASE_SETUP = 1
 
 _SEVERITY_SORT = {"PROBLEMS": 0, "Error": 0, "ATTENTION": 1, "OK": 2, "": 3}
 
@@ -191,15 +195,33 @@ class SessionPrepWindow(QMainWindow):
 
     def _init_ui(self):
         self._init_menus()
-        self._init_toolbar()
 
+        # ── Top-level phase tabs ──────────────────────────────────────────
+        self._phase_tabs = QTabWidget()
+        self._phase_tabs.setObjectName("phaseTabs")
+        self._phase_tabs.setDocumentMode(True)
+
+        # Tab 0 — Analysis
+        analysis_page = QWidget()
+        analysis_layout = QVBoxLayout(analysis_page)
+        analysis_layout.setContentsMargins(0, 0, 0, 0)
+        analysis_layout.setSpacing(0)
+        self._init_analysis_toolbar()
+        analysis_layout.addWidget(self._analysis_toolbar)
         main_splitter = QSplitter(Qt.Horizontal)
         main_splitter.addWidget(self._build_left_panel())
         main_splitter.addWidget(self._build_right_panel())
         main_splitter.setStretchFactor(0, 2)
         main_splitter.setStretchFactor(1, 3)
         main_splitter.setSizes([420, 580])
-        self.setCentralWidget(main_splitter)
+        analysis_layout.addWidget(main_splitter, 1)
+        self._phase_tabs.addTab(analysis_page, "Analysis")
+
+        # Tab 1 — Session Setup (placeholder)
+        self._phase_tabs.addTab(self._build_setup_page(), "Session Setup")
+        self._phase_tabs.setTabEnabled(_PHASE_SETUP, False)
+
+        self.setCentralWidget(self._phase_tabs)
 
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
@@ -233,22 +255,53 @@ class SessionPrepWindow(QMainWindow):
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
 
-    def _init_toolbar(self):
-        toolbar = QToolBar("Main Toolbar")
-        toolbar.setIconSize(QSize(16, 16))
-        toolbar.setMovable(False)
-        self.addToolBar(toolbar)
+    def _init_analysis_toolbar(self):
+        self._analysis_toolbar = QToolBar("Analysis")
+        self._analysis_toolbar.setIconSize(QSize(16, 16))
+        self._analysis_toolbar.setMovable(False)
+        self._analysis_toolbar.setFloatable(False)
 
         self._open_action = QAction("Open", self)
         self._open_action.triggered.connect(self._on_open_path)
-        toolbar.addAction(self._open_action)
+        self._analysis_toolbar.addAction(self._open_action)
 
-        toolbar.addSeparator()
+        self._analysis_toolbar.addSeparator()
 
         self._analyze_action = QAction("Analyze", self)
         self._analyze_action.setEnabled(False)
         self._analyze_action.triggered.connect(self._on_analyze)
-        toolbar.addAction(self._analyze_action)
+        self._analysis_toolbar.addAction(self._analyze_action)
+
+    def _build_setup_page(self) -> QWidget:
+        """Build the Session Setup phase page with its own toolbar."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Setup toolbar (embedded in page)
+        self._setup_toolbar = QToolBar("Session Setup")
+        self._setup_toolbar.setIconSize(QSize(16, 16))
+        self._setup_toolbar.setMovable(False)
+        self._setup_toolbar.setFloatable(False)
+
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._setup_toolbar.addWidget(spacer)
+
+        self._transfer_action = QAction("Transfer", self)
+        self._transfer_action.setEnabled(False)
+        self._setup_toolbar.addAction(self._transfer_action)
+
+        layout.addWidget(self._setup_toolbar)
+
+        # Placeholder content
+        label = QLabel("Session Setup — connect to a DAW to begin")
+        label.setAlignment(Qt.AlignCenter)
+        label.setStyleSheet(f"color: {COLORS['dim']}; font-size: 13pt;")
+        layout.addWidget(label, 1)
+
+        return page
 
     def _build_left_panel(self) -> QWidget:
         panel = QWidget()
@@ -347,6 +400,7 @@ class SessionPrepWindow(QMainWindow):
 
         # ── Page 1: tabs (Summary / File) ─────────────────────────────────
         self._detail_tabs = QTabWidget()
+        self._detail_tabs.setDocumentMode(True)
 
         # Summary tab — single QTextBrowser
         self._summary_view = self._make_report_browser()
@@ -634,6 +688,8 @@ class SessionPrepWindow(QMainWindow):
         self._current_track = None
 
         # Reset UI
+        self._phase_tabs.setCurrentIndex(_PHASE_ANALYSIS)
+        self._phase_tabs.setTabEnabled(_PHASE_SETUP, False)
         self._track_table.setRowCount(0)
         self._summary_view.clear()
         self._file_report.clear()
@@ -835,6 +891,9 @@ class SessionPrepWindow(QMainWindow):
         # Switch to tabs — summary tab
         self._right_stack.setCurrentIndex(_PAGE_TABS)
         self._detail_tabs.setCurrentIndex(_TAB_SUMMARY)
+
+        # Enable Session Setup phase now that analysis is available
+        self._phase_tabs.setTabEnabled(_PHASE_SETUP, True)
 
         ok_count = sum(1 for t in session.tracks if t.status == "OK")
         self._status_bar.showMessage(
