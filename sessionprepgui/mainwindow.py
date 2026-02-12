@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 
 from sessionpreplib.audio import get_window_samples
 from sessionpreplib.config import default_config, flatten_structured_config
+from sessionpreplib.detector import TrackDetector
 from sessionpreplib.detectors import detector_help_map
 from sessionpreplib.utils import protools_sort_key
 
@@ -254,9 +255,9 @@ class SessionPrepWindow(QMainWindow):
 
         # Track table
         self._track_table = _DraggableTrackTable()
-        self._track_table.setColumnCount(5)
+        self._track_table.setColumnCount(6)
         self._track_table.setHorizontalHeaderLabels(
-            ["File", "Ch", "Analysis", "Classification", "Gain"]
+            ["File", "Ch", "Analysis", "Classification", "Gain", "RMS Anchor"]
         )
         self._track_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._track_table.setSelectionMode(QTableWidget.SingleSelection)
@@ -274,10 +275,12 @@ class SessionPrepWindow(QMainWindow):
         header.setSectionResizeMode(2, QHeaderView.Interactive)
         header.setSectionResizeMode(3, QHeaderView.Interactive)
         header.setSectionResizeMode(4, QHeaderView.Interactive)
+        header.setSectionResizeMode(5, QHeaderView.Interactive)
         header.resizeSection(1, 30)
         header.resizeSection(2, 150)
         header.resizeSection(3, 120)
         header.resizeSection(4, 90)
+        header.resizeSection(5, 100)
 
         self._track_table.cellClicked.connect(self._on_row_clicked)
         self._track_table.currentCellChanged.connect(self._on_current_cell_changed)
@@ -653,7 +656,7 @@ class SessionPrepWindow(QMainWindow):
             item = _SortableItem(fname, protools_sort_key(fname))
             item.setForeground(FILE_COLOR_OK)
             self._track_table.setItem(row, 0, item)
-            for col in range(1, 5):
+            for col in range(1, 6):
                 cell = _SortableItem("", "")
                 cell.setForeground(QColor(COLORS["dim"]))
                 self._track_table.setItem(row, col, cell)
@@ -748,6 +751,7 @@ class SessionPrepWindow(QMainWindow):
         # Remove previous cell widgets
         self._track_table.removeCellWidget(row, 3)
         self._track_table.removeCellWidget(row, 4)
+        self._track_table.removeCellWidget(row, 5)
 
         pr = (
             next(iter(track.processor_results.values()), None)
@@ -811,6 +815,9 @@ class SessionPrepWindow(QMainWindow):
             )
             spin.valueChanged.connect(self._on_gain_changed)
             self._track_table.setCellWidget(row, 4, spin)
+
+            # RMS Anchor combo (column 5)
+            self._create_anchor_combo(row, track)
 
     @Slot(object, object)
     def _on_analyze_done(self, session, summary):
@@ -1093,6 +1100,7 @@ class SessionPrepWindow(QMainWindow):
             # Remove any previous cell widgets before repopulating
             self._track_table.removeCellWidget(row, 3)
             self._track_table.removeCellWidget(row, 4)
+            self._track_table.removeCellWidget(row, 5)
 
             fname_item = self._track_table.item(row, 0)
             if not fname_item:
@@ -1181,6 +1189,9 @@ class SessionPrepWindow(QMainWindow):
                 )
                 spin.valueChanged.connect(self._on_gain_changed)
                 self._track_table.setCellWidget(row, 4, spin)
+
+                # RMS Anchor combo (column 5)
+                self._create_anchor_combo(row, track)
             else:
                 cls_item = _SortableItem("", "zzz")
                 self._track_table.setItem(row, 3, cls_item)
@@ -1188,12 +1199,12 @@ class SessionPrepWindow(QMainWindow):
                 self._track_table.setItem(row, 4, gain_item)
         self._track_table.setSortingEnabled(True)
 
-        # Auto-fit columns 2–4 to content, File column stays Stretch, Ch stays Fixed
+        # Auto-fit columns 2–5 to content, File column stays Stretch, Ch stays Fixed
         header = self._track_table.horizontalHeader()
-        for col in (2, 3, 4):
+        for col in (2, 3, 4, 5):
             header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         self._track_table.resizeColumnsToContents()
-        for col in (2, 3, 4):
+        for col in (2, 3, 4, 5):
             header.setSectionResizeMode(col, QHeaderView.Interactive)
 
     # ── Classification override helpers ───────────────────────────────────
@@ -1311,6 +1322,123 @@ class SessionPrepWindow(QMainWindow):
         for proc in self._session.processors:
             result = proc.process(track)
             track.processor_results[proc.id] = result
+
+    # ── RMS Anchor override helpers ──────────────────────────────────────
+
+    _ANCHOR_LABELS = ["Default", "Max", "P99", "P95", "P90", "P85"]
+    _ANCHOR_TO_OVERRIDE = {
+        "Default": None, "Max": "max",
+        "P99": "p99", "P95": "p95", "P90": "p90", "P85": "p85",
+    }
+    _OVERRIDE_TO_LABEL = {v: k for k, v in _ANCHOR_TO_OVERRIDE.items()}
+
+    def _create_anchor_combo(self, row: int, track):
+        """Create and install an RMS Anchor combo in column 5."""
+        anchor_sort = _SortableItem("Default", "default")
+        self._track_table.setItem(row, 5, anchor_sort)
+
+        combo = QComboBox()
+        combo.addItems(self._ANCHOR_LABELS)
+        combo.blockSignals(True)
+        current = self._OVERRIDE_TO_LABEL.get(
+            track.rms_anchor_override, "Default")
+        combo.setCurrentText(current)
+        combo.blockSignals(False)
+        combo.setProperty("track_filename", track.filename)
+        combo.setStyleSheet(
+            f"QComboBox {{ color: {COLORS['text']}; }}"
+        )
+        combo.currentTextChanged.connect(self._on_rms_anchor_changed)
+        self._track_table.setCellWidget(row, 5, combo)
+
+    @Slot(str)
+    def _on_rms_anchor_changed(self, text: str):
+        """Handle user changing the RMS Anchor dropdown."""
+        combo = self.sender()
+        if not combo or not self._session:
+            return
+        fname = combo.property("track_filename")
+        if not fname:
+            return
+        track = next(
+            (t for t in self._session.tracks if t.filename == fname), None
+        )
+        if not track:
+            return
+
+        track.rms_anchor_override = self._ANCHOR_TO_OVERRIDE.get(text)
+        self._reanalyze_single_track(track)
+
+    def _reanalyze_single_track(self, track):
+        """Re-run all track detectors + processors for a single track."""
+        if not self._session:
+            return
+
+        # Re-run track-level detectors (already sorted by dependency)
+        for det in self._session.detectors:
+            if isinstance(det, TrackDetector):
+                try:
+                    result = det.analyze(track)
+                    track.detector_results[det.id] = result
+                except Exception:
+                    pass
+
+        # Re-run processors
+        self._recalculate_processor(track)
+
+        # Update table row
+        row = self._find_table_row(track.filename)
+        if row >= 0:
+            # Analysis label
+            dets = self._session.detectors if self._session else None
+            label, color = track_analysis_label(track, dets)
+            analysis_item = _SortableItem(label, _SEVERITY_SORT.get(label, 9))
+            analysis_item.setForeground(QColor(color))
+            self._track_table.setItem(row, 2, analysis_item)
+
+            # Gain spin box + sort item
+            pr = next(iter(track.processor_results.values()), None)
+            new_gain = pr.gain_db if pr else 0.0
+            spin = self._track_table.cellWidget(row, 4)
+            if isinstance(spin, QDoubleSpinBox):
+                spin.blockSignals(True)
+                spin.setValue(new_gain)
+                spin.blockSignals(False)
+            gain_sort = self._track_table.item(row, 4)
+            if gain_sort:
+                gain_sort.setText(f"{new_gain:+.1f}")
+                gain_sort._sort_key = new_gain
+
+            # Classification may change if anchor affects it
+            if pr:
+                cls_text = pr.classification or "Unknown"
+                if "Transient" in cls_text:
+                    base_cls = "Transient"
+                elif cls_text == "Skip":
+                    base_cls = "Skip"
+                else:
+                    base_cls = "Sustained"
+                cls_combo = self._track_table.cellWidget(row, 3)
+                if isinstance(cls_combo, QComboBox):
+                    cls_combo.blockSignals(True)
+                    cls_combo.setCurrentText(base_cls)
+                    cls_combo.blockSignals(False)
+                    self._style_classification_combo(cls_combo, base_cls)
+                sort_item = self._track_table.item(row, 3)
+                if sort_item:
+                    sort_item.setText(base_cls)
+                    sort_item._sort_key = base_cls.lower()
+
+        # Refresh File tab + waveform overlays if this track is displayed
+        if self._current_track and self._current_track.filename == track.filename:
+            html = render_track_detail_html(track, self._session,
+                                            show_clean=self._show_clean,
+                                            verbose=self._verbose)
+            self._file_report.setHtml(self._wrap_html(html))
+            all_issues = []
+            for result in track.detector_results.values():
+                all_issues.extend(getattr(result, "issues", []))
+            self._update_overlay_menu(all_issues)
 
     @staticmethod
     def _wrap_html(body: str) -> str:

@@ -104,7 +104,16 @@ class TailExceedanceDetector(TrackDetector):
                 data=empty_data,
             )
 
-        if self.rms_anchor_mode != "percentile":
+        # Resolve per-track RMS anchor override
+        ov = getattr(track, "rms_anchor_override", None)
+        if ov == "max":
+            effective_mode = "max"
+        elif ov and ov.startswith("p"):
+            effective_mode = "percentile"
+        else:
+            effective_mode = self.rms_anchor_mode
+
+        if effective_mode != "percentile":
             return DetectorResult(
                 detector_id=self.id,
                 severity=Severity.CLEAN,

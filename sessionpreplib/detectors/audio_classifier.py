@@ -134,10 +134,19 @@ class AudioClassifierDetector(TrackDetector):
         max_mean = float(np.max(active_means)) if active_means.size else 0.0
         rms_max_db = float(linear_to_db(np.sqrt(max_mean)))
 
-        if self.rms_anchor_mode == "max":
+        # Resolve per-track RMS anchor override
+        ov = getattr(track, "rms_anchor_override", None)
+        if ov == "max":
+            anchor_mode, percentile = "max", self.rms_percentile
+        elif ov and ov.startswith("p"):
+            anchor_mode, percentile = "percentile", float(ov[1:])
+        else:
+            anchor_mode, percentile = self.rms_anchor_mode, self.rms_percentile
+
+        if anchor_mode == "max":
             anchor_mean = max_mean
         else:
-            anchor_mean = float(np.percentile(active_means, self.rms_percentile))
+            anchor_mean = float(np.percentile(active_means, percentile))
 
         rms_anchor_db = float(linear_to_db(np.sqrt(anchor_mean)))
 
@@ -242,6 +251,8 @@ class AudioClassifierDetector(TrackDetector):
             f"density {density:.0%}, {classification}"
         )
 
+        anchor_label = "max" if anchor_mode == "max" else f"p{percentile:g}"
+
         return DetectorResult(
             detector_id=self.id,
             severity=Severity.INFO,
@@ -251,6 +262,7 @@ class AudioClassifierDetector(TrackDetector):
                 "rms_max_db": float(rms_max_db),
                 "rms_anchor_db": float(rms_anchor_db),
                 "rms_anchor_mean": float(anchor_mean),
+                "rms_anchor_label": anchor_label,
                 "crest": float(crest),
                 "decay_db": float(decay_db),
                 "density": float(density),

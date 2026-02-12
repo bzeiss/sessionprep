@@ -102,6 +102,10 @@ class BimodalNormalizeProcessor(AudioProcessor):
             else:
                 method = "Peak Limited"
 
+        # Use per-track anchor label from detector if available
+        anchor_label = crest_result.data.get(
+            "rms_anchor_label", self._rms_anchor_label)
+
         return ProcessorResult(
             processor_id=self.id,
             gain_db=float(gain),
@@ -113,7 +117,7 @@ class BimodalNormalizeProcessor(AudioProcessor):
                 "target_rms": self.target_rms,
                 "detected_peak_db": peak_db,
                 "detected_rms_db": rms_anchor_db,
-                "rms_anchor_label": self._rms_anchor_label,
+                "rms_anchor_label": anchor_label,
                 "gain_for_peak": float(gain_for_peak),
                 "gain_for_rms": float(gain_for_rms),
             },
