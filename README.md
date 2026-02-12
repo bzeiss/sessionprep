@@ -45,9 +45,14 @@ sessionprep-gui
 ```
 
 The GUI provides an interactive file table, per-track detail view, waveform
-and spectrogram display with issue overlays, and audio playback. On first launch it creates a
-`sessionprep.config.json` in your user preferences directory with all default
-thresholds.
+and spectrogram display with issue overlays, and audio playback.  Select
+multiple tracks (Shift-click or Ctrl-click) and hold **Alt+Shift** while
+clicking a dropdown (RMS Anchor, Classification) to apply the change to all
+selected tracks at once — mirroring the Pro Tools convention for batch control
+changes.  Re-analysis runs asynchronously with a progress bar.
+
+On first launch it creates a `sessionprep.config.json` in your user
+preferences directory with all default thresholds.
 
 Use **File → Preferences** to customize every detector and processor parameter
 through a tree-based settings dialog. Each parameter shows a description,

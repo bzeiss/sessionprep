@@ -479,3 +479,4 @@
 | ~~Skip reanalysis on GUI-only changes~~ | — | ✅ Resolved (Preferences dialog detects gui-vs-analysis changes) |
 | ~~Subsonic STFT speedup~~ | — | ✅ Resolved (scipy.signal.stft replaces per-window Python FFT loop; scipy promoted to core dep) |
 | ~~Scipy as core dependency~~ | — | ✅ Resolved (scipy>=1.12 promoted from gui optional to core dependencies; used by subsonic STFT + spectrogram) |
+| ~~Batch RMS anchor / classification override~~ | — | ✅ Resolved (BatchEditTableWidget + BatchComboBox in widgets.py, selectionCommand override preserves multi-selection, Alt+Shift batch apply, async BatchReanalyzeWorker with progress) |

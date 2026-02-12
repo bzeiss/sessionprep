@@ -485,3 +485,70 @@ to sanity-check the musical intent and optionally override:
 | **−** | Zoom out at cursor |
 | **↑** | Scale up (amplitude in waveform, frequency range in spectrogram) |
 | **↓** | Scale down (amplitude in waveform, frequency range in spectrogram) |
+
+---
+
+## 8. GUI Track Table Controls
+
+### 8.1 Selection
+
+Standard Extended Selection applies to the track table:
+
+| Action | Effect |
+|--------|--------|
+| **Click** | Select single row |
+| **Shift + click** | Extend selection to contiguous range |
+| **Ctrl + click** | Toggle individual rows (non-adjacent selection) |
+
+### 8.2 Batch Editing
+
+Hold **Alt+Shift** and click a dropdown in any selected row to apply the
+chosen value to **all** selected rows.  This mirrors the Pro Tools convention
+where Alt-clicking a control applies it across the track selection.
+
+- The multi-row selection is preserved while the dropdown is open (the table
+  overrides Qt's default behaviour of clearing the selection on cell-widget
+  focus).
+- Re-selecting the same value that is already shown still triggers the batch
+  action — useful for normalising all selected rows to a common setting.
+- Re-analysis of affected tracks runs **asynchronously** with a progress bar.
+  The selection is restored after re-analysis completes, even if sorting
+  reorders the rows.
+
+Supported batch dropdowns:
+
+| Dropdown | Column | Effect |
+|----------|--------|--------|
+| **RMS Anchor** | 5 | Override per-track RMS anchor; triggers full re-analysis (detectors + processors) |
+| **Classification** | 3 | Override per-track classification; triggers processor-only re-calculation |
+
+### 8.3 RMS Anchor Override
+
+Per-track dropdown overriding the global `rms_anchor` analysis setting.
+
+| Label | Override value | Meaning |
+|-------|---------------|---------|
+| Default | *(none)* | Use the global setting from Preferences |
+| Max | `max` | Loudest gated RMS window |
+| P99 | `p99` | 99th percentile of gated RMS windows |
+| P95 | `p95` | 95th percentile (default global setting) |
+| P90 | `p90` | 90th percentile |
+| P85 | `p85` | 85th percentile |
+
+Changing the anchor re-runs all detectors and processors for the affected
+track(s), since the anchor value influences both tail exceedance detection and
+gain calculation.
+
+### 8.4 Classification Override
+
+Per-track dropdown overriding the auto-detected audio classification.
+
+| Label | Effect |
+|-------|--------|
+| Transient | Force peak-based normalization (`target_peak`) |
+| Sustained | Force RMS-based normalization (`target_rms`) |
+| Skip | Exclude track from processing (gain = 0 dB, spin box disabled) |
+
+Changing the classification re-runs processors only (no detector re-analysis
+needed), since the classification affects only the normalization method and
+gain calculation.

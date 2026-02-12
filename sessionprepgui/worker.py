@@ -1,4 +1,4 @@
-"""Background worker thread for pipeline analysis."""
+"""Background worker threads for pipeline analysis."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import threading
 
 from PySide6.QtCore import QThread, Signal
 
+from sessionpreplib.detector import TrackDetector
 from sessionpreplib.pipeline import Pipeline, load_session
 from sessionpreplib.detectors import default_detectors
 from sessionpreplib.processors import default_processors
@@ -124,5 +125,72 @@ class AnalyzeWorker(QThread):
             summary = build_diagnostic_summary(session)
 
             self.finished.emit(session, summary)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class BatchReanalyzeWorker(QThread):
+    """Re-run detectors and/or processors for a subset of tracks.
+
+    Used by the batch-edit workflow: after the user applies a change
+    (e.g. RMS anchor override) to multiple tracks at once, this worker
+    performs the heavy re-analysis in the background so the GUI stays
+    responsive.
+
+    Parameters
+    ----------
+    tracks:
+        The tracks to re-analyze.
+    detectors:
+        Configured detector instances (from ``session.detectors``).
+    processors:
+        Configured processor instances (from ``session.processors``).
+    run_detectors:
+        If ``True`` (default), re-run track-level detectors before
+        processors.  Set to ``False`` for lightweight changes that
+        only need processor re-calculation (e.g. classification override).
+    """
+
+    progress = Signal(str)
+    progress_value = Signal(int, int)     # (current, total)
+    track_done = Signal(str)              # filename
+    batch_finished = Signal()             # renamed to avoid QThread.finished collision
+    error = Signal(str)
+
+    def __init__(self, tracks, detectors, processors,
+                 run_detectors: bool = True):
+        super().__init__()
+        self._tracks = list(tracks)
+        self._detectors = detectors
+        self._processors = processors
+        self._run_detectors = run_detectors
+
+    def run(self):
+        try:
+            total = len(self._tracks)
+            for i, track in enumerate(self._tracks):
+                self.progress.emit(f"Re-analyzing {track.filename}\u2026")
+                self.progress_value.emit(i, total)
+
+                if self._run_detectors:
+                    for det in self._detectors:
+                        if isinstance(det, TrackDetector):
+                            try:
+                                result = det.analyze(track)
+                                track.detector_results[det.id] = result
+                            except Exception:
+                                pass
+
+                for proc in self._processors:
+                    try:
+                        result = proc.process(track)
+                        track.processor_results[proc.id] = result
+                    except Exception:
+                        pass
+
+                self.track_done.emit(track.filename)
+
+            self.progress_value.emit(total, total)
+            self.batch_finished.emit()
         except Exception as e:
             self.error.emit(str(e))

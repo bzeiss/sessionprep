@@ -1169,7 +1169,8 @@ group).
 | `settings.py` | `load_config()`, `save_config()`, `config_path()` — persistent GUI preferences |
 | `theme.py` | `COLORS` dict, `FILE_COLOR_*` constants, dark palette + stylesheet |
 | `helpers.py` | `esc()`, `track_analysis_label(track, detectors=None)` (filters via `is_relevant()`), `fmt_time()`, severity maps |
-| `worker.py` | `AnalyzeWorker` (QThread) — runs pipeline in background thread, thread-safe progress counting (`threading.Lock`), emits real progress (`progress_value`), per-track completion signals (`track_analyzed`, `track_planned`) for incremental table updates |
+| `widgets.py` | `BatchEditTableWidget`, `BatchComboBox` — reusable batch-edit base classes preserving multi-row selection across cell-widget clicks (zero app imports) |
+| `worker.py` | `AnalyzeWorker` (QThread) — runs pipeline in background thread, thread-safe progress counting (`threading.Lock`), emits real progress (`progress_value`), per-track completion signals (`track_analyzed`, `track_planned`) for incremental table updates. `BatchReanalyzeWorker` (QThread) — re-runs detectors/processors for a subset of tracks asynchronously after batch overrides |
 | `report.py` | HTML rendering: `render_summary_html()`, `render_fader_table_html()`, `render_track_detail_html()` |
 | `waveform.py` | `WaveformWidget` — two display modes (waveform + spectrogram), vectorised NumPy peak/RMS downsampling, mel spectrogram (256 mel bins via `scipy.signal.stft`, configurable FFT/window/dB range/colormap), dB and frequency scales, peak/RMS markers, crosshair mouse guide (dBFS in waveform, Hz in spectrogram), mouse-wheel zoom/pan (Ctrl+wheel h-zoom, Ctrl+Shift+wheel v-zoom, Shift+Alt+wheel freq pan, Shift+wheel scroll), keyboard shortcuts (R/T zoom), detector issue overlays with optional frequency bounds, RMS L/R and RMS AVG envelopes, playback cursor, tooltips |
 | `playback.py` | `PlaybackController` — sounddevice OutputStream lifecycle, QTimer cursor updates, signal-based API |
@@ -1181,6 +1182,7 @@ group).
 ```
 settings (leaf) <--  mainwindow
 theme (leaf)  <--  helpers  <--  report  <--  mainwindow
+widgets (leaf) <---------------------------------+
                                                  |
               waveform     <--------------------+
               playback     <--------------------+
@@ -1188,12 +1190,31 @@ theme (leaf)  <--  helpers  <--  report  <--  mainwindow
               preferences  <--------------------+
 ```
 
-No circular imports. `settings`, `theme`, and `helpers` are pure leaves.
-`preferences` reads `ParamSpec` metadata from detectors and processors.
+No circular imports. `settings`, `theme`, `helpers`, and `widgets` are pure
+leaves. `preferences` reads `ParamSpec` metadata from detectors and processors.
 `mainwindow` composes all other modules.
 
 ### 17.4 Key Design Decisions
 
+- **BatchEditTableWidget** (`widgets.py`) is a generic `QTableWidget` subclass
+  that preserves multi-row selection when a persistent-editor cell widget (e.g.
+  a `QComboBox`) receives focus.  The core mechanism is a `selectionCommand()`
+  override that returns `NoUpdate` when Qt's internal
+  `checkPersistentEditorFocus()` would otherwise `ClearAndSelect`.  This
+  replicates the behaviour found in Pro Tools, where Shift-selecting multiple
+  tracks and Alt-clicking a control (send, insert, etc.) applies the change to
+  all selected tracks.  The modifier key combination is **Alt+Shift**.
+  `BatchComboBox` detects this modifier on `mousePressEvent` and sets a
+  `batch_mode` flag that the changed-slot inspects.  Combo signals should use
+  `textActivated` (not `currentTextChanged`) so that re-selecting the same
+  value still triggers the batch path.  `batch_selected_keys(key_column)` and
+  `restore_selection(keys, key_column)` accept a configurable identifier
+  column (default 0) so the pattern works regardless of table layout.
+  `BatchReanalyzeWorker` runs the re-analysis asynchronously with progress
+  signals; its custom signal is named `batch_finished` to avoid collision with
+  `QThread.finished`.  App-level integration uses a single generic method
+  `_batch_apply_combo(combo, column, value, prepare_fn, run_detectors)` that
+  any dropdown batch-change can delegate to.
 - **PlaybackController** encapsulates all `sounddevice` state with a
   signal-based API (`cursor_updated`, `playback_finished`, `error`).
   `mainwindow.py` has zero direct `sd` usage.

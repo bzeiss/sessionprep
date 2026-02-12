@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sys
 
-from PySide6.QtCore import Qt, Slot, QSize, QEvent, QTimer, QUrl, QMimeData
+from PySide6.QtCore import Qt, Slot, QSize, QTimer, QUrl, QMimeData
 from PySide6.QtGui import QAction, QActionGroup, QFont, QColor, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -53,7 +53,8 @@ from .theme import (
 from .helpers import track_analysis_label, esc, fmt_time
 from .preferences import PreferencesDialog
 from .report import render_summary_html, render_track_detail_html
-from .worker import AnalyzeWorker
+from .widgets import BatchEditTableWidget, BatchComboBox
+from .worker import AnalyzeWorker, BatchReanalyzeWorker
 from .waveform import WaveformWidget, WaveformLoadWorker
 from sessionpreplib.audio import AUDIO_EXTENSIONS
 from .playback import PlaybackController
@@ -93,8 +94,8 @@ class _HelpBrowser(QTextBrowser):
         super().mouseMoveEvent(event)
 
 
-class _DraggableTrackTable(QTableWidget):
-    """QTableWidget that supports dragging files to external applications."""
+class _DraggableTrackTable(BatchEditTableWidget):
+    """BatchEditTableWidget with file-drag support for external applications."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -164,6 +165,8 @@ class SessionPrepWindow(QMainWindow):
         self._summary = None
         self._source_dir = None
         self._worker = None
+        self._batch_worker: BatchReanalyzeWorker | None = None
+        self._batch_filenames: set[str] = set()
         self._wf_worker: WaveformLoadWorker | None = None
         self._current_track = None
         self._detector_help = detector_help_map()
@@ -260,7 +263,7 @@ class SessionPrepWindow(QMainWindow):
             ["File", "Ch", "Analysis", "Classification", "Gain", "RMS Anchor"]
         )
         self._track_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self._track_table.setSelectionMode(QTableWidget.SingleSelection)
+        self._track_table.setSelectionMode(QTableWidget.ExtendedSelection)
         self._track_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._track_table.verticalHeader().setVisible(False)
         self._track_table.setMinimumWidth(300)
@@ -786,14 +789,14 @@ class SessionPrepWindow(QMainWindow):
             sort_item = _SortableItem(base_cls, base_cls.lower())
             self._track_table.setItem(row, 3, sort_item)
 
-            combo = QComboBox()
+            combo = BatchComboBox()
             combo.addItems(["Transient", "Sustained", "Skip"])
             combo.blockSignals(True)
             combo.setCurrentText(base_cls)
             combo.blockSignals(False)
             combo.setProperty("track_filename", track.filename)
             self._style_classification_combo(combo, base_cls)
-            combo.currentTextChanged.connect(self._on_classification_changed)
+            combo.textActivated.connect(self._on_classification_changed)
             self._track_table.setCellWidget(row, 3, combo)
 
             gain_db = pr.gain_db
@@ -1159,14 +1162,14 @@ class SessionPrepWindow(QMainWindow):
                 self._track_table.setItem(row, 3, sort_item)
 
                 # Classification combo widget
-                combo = QComboBox()
+                combo = BatchComboBox()
                 combo.addItems(["Transient", "Sustained", "Skip"])
                 combo.blockSignals(True)
                 combo.setCurrentText(base_cls)
                 combo.blockSignals(False)
                 combo.setProperty("track_filename", track.filename)
                 self._style_classification_combo(combo, base_cls)
-                combo.currentTextChanged.connect(self._on_classification_changed)
+                combo.textActivated.connect(self._on_classification_changed)
                 self._track_table.setCellWidget(row, 3, combo)
 
                 # Gain spin box
@@ -1234,49 +1237,24 @@ class SessionPrepWindow(QMainWindow):
         if not track:
             return
 
-        # Set override and recalculate processor result
-        track.classification_override = text
-        self._recalculate_processor(track)
-
-        # Update combo color
-        self._style_classification_combo(combo, text)
-
-        # Update hidden sort items and gain spin box in the same row
-        pr = next(iter(track.processor_results.values()), None)
-        new_gain = pr.gain_db if pr else 0.0
-        for row in range(self._track_table.rowCount()):
-            item = self._track_table.item(row, 0)
-            if item and item.text() == fname:
-                # Classification sort item
-                sort_item = self._track_table.item(row, 3)
-                if sort_item:
-                    sort_item.setText(text)
-                    sort_item._sort_key = text.lower()
-                # Gain spin box
-                spin = self._track_table.cellWidget(row, 4)
-                if isinstance(spin, QDoubleSpinBox):
-                    spin.blockSignals(True)
-                    spin.setValue(new_gain)
-                    spin.setEnabled(text != "Skip")
-                    spin.blockSignals(False)
-                # Gain sort item
-                gain_sort = self._track_table.item(row, 4)
-                if gain_sort:
-                    gain_sort.setText(f"{new_gain:+.1f}")
-                    gain_sort._sort_key = new_gain
-                break
-
-        # Refresh File tab and overlay menu if this track is currently displayed
-        if self._current_track and self._current_track.filename == fname:
-            html = render_track_detail_html(track, self._session,
-                                            show_clean=self._show_clean,
-                                            verbose=self._verbose)
-            self._file_report.setHtml(self._wrap_html(html))
-            # Rebuild overlay menu with updated is_relevant checks
-            all_issues = []
-            for result in track.detector_results.values():
-                all_issues.extend(getattr(result, "issues", []))
-            self._update_overlay_menu(all_issues)
+        # Batch path: async re-analysis for all selected rows
+        if getattr(combo, 'batch_mode', False):
+            combo.batch_mode = False
+            track.classification_override = text
+            def _prepare(t):
+                t.classification_override = text
+            self._batch_apply_combo(combo, 3, text, _prepare,
+                                    run_detectors=False)
+        else:
+            # Skip if the value didn't actually change
+            if track.classification_override == text:
+                return
+            track.classification_override = text
+            # Single-track sync path
+            self._recalculate_processor(track)
+            self._style_classification_combo(combo, text)
+            self._update_track_row(fname)
+            self._refresh_file_tab(track)
 
     @Slot(float)
     def _on_gain_changed(self, value: float):
@@ -1323,6 +1301,109 @@ class SessionPrepWindow(QMainWindow):
             result = proc.process(track)
             track.processor_results[proc.id] = result
 
+    # ── Batch combo helper ────────────────────────────────────────────────
+
+    def _batch_apply_combo(self, source_combo, column: int, value: str,
+                           prepare_fn, run_detectors: bool = True):
+        """Apply *value* to the combo in *column* for every selected row.
+
+        1. **Sync** — set overrides via *prepare_fn(track)* and update
+           combo widgets instantly.
+        2. **Async** — start a ``BatchReanalyzeWorker`` that re-runs
+           detectors/processors in the background, updating table rows
+           as each track completes and restoring the multi-selection at
+           the end.
+
+        *prepare_fn(track)* must only mutate the data model (e.g. set an
+        override field).  It must **not** run analysis.
+        """
+        if not self._session:
+            return
+        if self._batch_worker and self._batch_worker.isRunning():
+            return
+        if self._worker and self._worker.isRunning():
+            return
+
+        track_map = {t.filename: t for t in self._session.tracks}
+        batch_keys = self._track_table.batch_selected_keys()
+
+        # Collect tracks and update combo widgets (sync, instant)
+        tracks_to_reanalyze: list = []
+        self._track_table.setSortingEnabled(False)
+        for fname in batch_keys:
+            track = track_map.get(fname)
+            if not track or track.status != "OK":
+                continue
+            prepare_fn(track)
+            tracks_to_reanalyze.append(track)
+            row = self._find_table_row(fname)
+            if row >= 0:
+                w = self._track_table.cellWidget(row, column)
+                if isinstance(w, BatchComboBox):
+                    w.blockSignals(True)
+                    w.setCurrentText(value)
+                    w.blockSignals(False)
+        if not tracks_to_reanalyze:
+            self._track_table.setSortingEnabled(True)
+            return
+
+        # Save filenames for selection restore after worker completes
+        self._batch_filenames = batch_keys
+
+        # Show progress UI
+        self._progress_label.setText("Re-analyzing…")
+        self._progress_bar.setRange(0, len(tracks_to_reanalyze))
+        self._progress_bar.setValue(0)
+        self._right_stack.setCurrentIndex(_PAGE_PROGRESS)
+        self._analyze_action.setEnabled(False)
+
+        # Start async worker
+        self._batch_worker = BatchReanalyzeWorker(
+            tracks_to_reanalyze,
+            self._session.detectors,
+            self._session.processors,
+            run_detectors=run_detectors,
+        )
+        self._batch_worker.progress.connect(self._on_worker_progress)
+        self._batch_worker.progress_value.connect(self._on_worker_progress_value)
+        self._batch_worker.track_done.connect(self._on_batch_track_done)
+        self._batch_worker.batch_finished.connect(self._on_batch_done)
+        self._batch_worker.error.connect(self._on_batch_error)
+        self._batch_worker.start()
+
+    @Slot(str)
+    def _on_batch_track_done(self, filename: str):
+        """Update one table row after the worker finishes re-analyzing it."""
+        self._update_track_row(filename)
+
+    @Slot()
+    def _on_batch_done(self):
+        """Finalize the batch: restore selection, switch back to tabs."""
+        self._batch_worker = None
+        self._analyze_action.setEnabled(True)
+        self._right_stack.setCurrentIndex(_PAGE_TABS)
+
+        # Re-enable sorting (was disabled in _batch_apply_combo);
+        # rows may reorder, so restore selection by key afterward.
+        self._track_table.setSortingEnabled(True)
+        self._track_table.restore_selection(self._batch_filenames)
+        self._batch_filenames = set()
+
+        # Refresh file tab if displayed track was in the batch
+        if self._current_track:
+            self._refresh_file_tab(self._current_track)
+
+    @Slot(str)
+    def _on_batch_error(self, message: str):
+        """Handle fatal error from the batch worker."""
+        self._batch_worker = None
+        self._analyze_action.setEnabled(True)
+        self._track_table.setSortingEnabled(True)
+        self._track_table.restore_selection(self._batch_filenames)
+        self._batch_filenames = set()
+        self._right_stack.setCurrentIndex(_PAGE_TABS)
+        self._status_bar.showMessage(f"Batch error: {message}")
+
     # ── RMS Anchor override helpers ──────────────────────────────────────
 
     _ANCHOR_LABELS = ["Default", "Max", "P99", "P95", "P90", "P85"]
@@ -1337,7 +1418,7 @@ class SessionPrepWindow(QMainWindow):
         anchor_sort = _SortableItem("Default", "default")
         self._track_table.setItem(row, 5, anchor_sort)
 
-        combo = QComboBox()
+        combo = BatchComboBox()
         combo.addItems(self._ANCHOR_LABELS)
         combo.blockSignals(True)
         current = self._OVERRIDE_TO_LABEL.get(
@@ -1348,7 +1429,7 @@ class SessionPrepWindow(QMainWindow):
         combo.setStyleSheet(
             f"QComboBox {{ color: {COLORS['text']}; }}"
         )
-        combo.currentTextChanged.connect(self._on_rms_anchor_changed)
+        combo.textActivated.connect(self._on_rms_anchor_changed)
         self._track_table.setCellWidget(row, 5, combo)
 
     @Slot(str)
@@ -1366,11 +1447,26 @@ class SessionPrepWindow(QMainWindow):
         if not track:
             return
 
-        track.rms_anchor_override = self._ANCHOR_TO_OVERRIDE.get(text)
-        self._reanalyze_single_track(track)
+        new_override = self._ANCHOR_TO_OVERRIDE.get(text)
+
+        # Batch path: async re-analysis for all selected rows
+        if getattr(combo, 'batch_mode', False):
+            combo.batch_mode = False
+            track.rms_anchor_override = new_override
+            def _prepare(t):
+                t.rms_anchor_override = new_override
+            self._batch_apply_combo(combo, 5, text, _prepare,
+                                    run_detectors=True)
+        else:
+            # Skip if the value didn't actually change (textActivated
+            # fires even when the user re-selects the same item)
+            if track.rms_anchor_override == new_override:
+                return
+            track.rms_anchor_override = new_override
+            self._reanalyze_single_track(track)
 
     def _reanalyze_single_track(self, track):
-        """Re-run all track detectors + processors for a single track."""
+        """Re-run all track detectors + processors for a single track (sync)."""
         if not self._session:
             return
 
@@ -1386,59 +1482,87 @@ class SessionPrepWindow(QMainWindow):
         # Re-run processors
         self._recalculate_processor(track)
 
-        # Update table row
-        row = self._find_table_row(track.filename)
-        if row >= 0:
-            # Analysis label
-            dets = self._session.detectors if self._session else None
-            label, color = track_analysis_label(track, dets)
-            analysis_item = _SortableItem(label, _SEVERITY_SORT.get(label, 9))
-            analysis_item.setForeground(QColor(color))
-            self._track_table.setItem(row, 2, analysis_item)
+        # Update UI
+        self._update_track_row(track.filename)
+        self._refresh_file_tab(track)
 
-            # Gain spin box + sort item
-            pr = next(iter(track.processor_results.values()), None)
-            new_gain = pr.gain_db if pr else 0.0
-            spin = self._track_table.cellWidget(row, 4)
-            if isinstance(spin, QDoubleSpinBox):
-                spin.blockSignals(True)
-                spin.setValue(new_gain)
-                spin.blockSignals(False)
-            gain_sort = self._track_table.item(row, 4)
-            if gain_sort:
-                gain_sort.setText(f"{new_gain:+.1f}")
-                gain_sort._sort_key = new_gain
+    # ── Track-row UI helpers ─────────────────────────────────────────────
 
-            # Classification may change if anchor affects it
-            if pr:
-                cls_text = pr.classification or "Unknown"
-                if "Transient" in cls_text:
-                    base_cls = "Transient"
-                elif cls_text == "Skip":
-                    base_cls = "Skip"
-                else:
-                    base_cls = "Sustained"
-                cls_combo = self._track_table.cellWidget(row, 3)
-                if isinstance(cls_combo, QComboBox):
-                    cls_combo.blockSignals(True)
-                    cls_combo.setCurrentText(base_cls)
-                    cls_combo.blockSignals(False)
-                    self._style_classification_combo(cls_combo, base_cls)
-                sort_item = self._track_table.item(row, 3)
-                if sort_item:
-                    sort_item.setText(base_cls)
-                    sort_item._sort_key = base_cls.lower()
+    def _update_track_row(self, filename: str):
+        """Refresh analysis label, classification, gain, and sort items
+        for the table row matching *filename*.
 
-        # Refresh File tab + waveform overlays if this track is displayed
-        if self._current_track and self._current_track.filename == track.filename:
-            html = render_track_detail_html(track, self._session,
-                                            show_clean=self._show_clean,
-                                            verbose=self._verbose)
-            self._file_report.setHtml(self._wrap_html(html))
-            all_issues = []
-            for result in track.detector_results.values():
-                all_issues.extend(getattr(result, "issues", []))
-            self._update_overlay_menu(all_issues)
+        Called from:
+        - ``_reanalyze_single_track`` (sync single-track path)
+        - ``_on_batch_track_done`` (per-track signal from async worker)
+        """
+        if not self._session:
+            return
+        track = next(
+            (t for t in self._session.tracks if t.filename == filename), None
+        )
+        if not track:
+            return
+        row = self._find_table_row(filename)
+        if row < 0:
+            return
+
+        # Analysis label
+        dets = self._session.detectors
+        label, color = track_analysis_label(track, dets)
+        analysis_item = _SortableItem(label, _SEVERITY_SORT.get(label, 9))
+        analysis_item.setForeground(QColor(color))
+        self._track_table.setItem(row, 2, analysis_item)
+
+        # Gain spin box + sort item + classification
+        pr = next(iter(track.processor_results.values()), None)
+        new_gain = pr.gain_db if pr else 0.0
+        base_cls = None
+        if pr:
+            cls_text = pr.classification or "Unknown"
+            if "Transient" in cls_text:
+                base_cls = "Transient"
+            elif cls_text == "Skip":
+                base_cls = "Skip"
+            else:
+                base_cls = "Sustained"
+
+        spin = self._track_table.cellWidget(row, 4)
+        if isinstance(spin, QDoubleSpinBox):
+            spin.blockSignals(True)
+            spin.setValue(new_gain)
+            if base_cls is not None:
+                spin.setEnabled(base_cls != "Skip")
+            spin.blockSignals(False)
+        gain_sort = self._track_table.item(row, 4)
+        if gain_sort:
+            gain_sort.setText(f"{new_gain:+.1f}")
+            gain_sort._sort_key = new_gain
+
+        if base_cls is not None:
+            cls_combo = self._track_table.cellWidget(row, 3)
+            if isinstance(cls_combo, QComboBox):
+                cls_combo.blockSignals(True)
+                cls_combo.setCurrentText(base_cls)
+                cls_combo.blockSignals(False)
+                self._style_classification_combo(cls_combo, base_cls)
+            sort_item = self._track_table.item(row, 3)
+            if sort_item:
+                sort_item.setText(base_cls)
+                sort_item._sort_key = base_cls.lower()
+
+    def _refresh_file_tab(self, track):
+        """Refresh File tab + waveform overlays if *track* is displayed."""
+        if not self._current_track or self._current_track.filename != track.filename:
+            return
+        html = render_track_detail_html(track, self._session,
+                                        show_clean=self._show_clean,
+                                        verbose=self._verbose)
+        self._file_report.setHtml(self._wrap_html(html))
+        all_issues = []
+        for result in track.detector_results.values():
+            all_issues.extend(getattr(result, "issues", []))
+        self._update_overlay_menu(all_issues)
 
     @staticmethod
     def _wrap_html(body: str) -> str:
