@@ -494,21 +494,21 @@ class WaveformWidget(QWidget):
 
     @staticmethod
     def _peaks_for_view(ch_data, vs, ve, width):
-        """Compute (mins, maxs) arrays for one channel over samples [vs:ve]."""
+        """Compute (mins, maxs) arrays for one channel over samples [vs:ve].
+
+        Uses proportional bin edges (matching ``_sample_to_x`` mapping)
+        via ``np.reduceat`` so marker positions align pixel-perfectly
+        with the waveform envelope.
+        """
         view_data = ch_data[vs:ve]
         n = len(view_data)
         if n == 0:
             return np.zeros(width, dtype=np.float64), np.zeros(width, dtype=np.float64)
         if n >= width:
-            spb = n // width
-            n_use = spb * width
-            reshaped = view_data[:n_use].reshape(width, spb)
-            mins = reshaped.min(axis=1).astype(np.float64)
-            maxs = reshaped.max(axis=1).astype(np.float64)
-            if n_use < n:
-                tail = view_data[n_use:]
-                mins[-1] = min(float(mins[-1]), float(tail.min()))
-                maxs[-1] = max(float(maxs[-1]), float(tail.max()))
+            # Proportional bin edges — same mapping as _sample_to_x
+            starts = np.arange(width, dtype=np.int64) * n // width
+            maxs = np.maximum.reduceat(view_data, starts).astype(np.float64)
+            mins = np.minimum.reduceat(view_data, starts).astype(np.float64)
         else:
             mins = np.zeros(width, dtype=np.float64)
             maxs = np.zeros(width, dtype=np.float64)
