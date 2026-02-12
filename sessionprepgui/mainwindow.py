@@ -295,11 +295,54 @@ class SessionPrepWindow(QMainWindow):
 
         layout.addWidget(self._setup_toolbar)
 
-        # Placeholder content
-        label = QLabel("Session Setup — connect to a DAW to begin")
-        label.setAlignment(Qt.AlignCenter)
-        label.setStyleSheet(f"color: {COLORS['dim']}; font-size: 13pt;")
-        layout.addWidget(label, 1)
+        # Splitter: track table (left) + routing panel placeholder (right)
+        setup_splitter = QSplitter(Qt.Horizontal)
+
+        # ── Left: track table ─────────────────────────────────────────────
+        self._setup_table = BatchEditTableWidget()
+        self._setup_table.setColumnCount(4)
+        self._setup_table.setHorizontalHeaderLabels(
+            ["File", "Ch", "Clip Gain", "Fader Gain"]
+        )
+        self._setup_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._setup_table.setSelectionMode(QTableWidget.ExtendedSelection)
+        self._setup_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._setup_table.verticalHeader().setVisible(False)
+        self._setup_table.setMinimumWidth(300)
+        self._setup_table.setShowGrid(True)
+        self._setup_table.setAlternatingRowColors(True)
+        self._setup_table.setSortingEnabled(True)
+
+        sh = self._setup_table.horizontalHeader()
+        sh.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        sh.setSectionResizeMode(0, QHeaderView.Stretch)
+        sh.setSectionResizeMode(1, QHeaderView.Fixed)
+        sh.setSectionResizeMode(2, QHeaderView.Interactive)
+        sh.setSectionResizeMode(3, QHeaderView.Interactive)
+        sh.resizeSection(1, 30)
+        sh.resizeSection(2, 90)
+        sh.resizeSection(3, 90)
+
+        setup_splitter.addWidget(self._setup_table)
+
+        # ── Right: placeholder ────────────────────────────────────────────
+        right_placeholder = QWidget()
+        right_layout = QVBoxLayout(right_placeholder)
+        right_layout.setContentsMargins(40, 0, 40, 0)
+        right_layout.addStretch(2)
+        placeholder_label = QLabel("Connect to a DAW to configure routing")
+        placeholder_label.setAlignment(Qt.AlignCenter)
+        placeholder_label.setStyleSheet(
+            f"color: {COLORS['dim']}; font-size: 13pt;")
+        right_layout.addWidget(placeholder_label)
+        right_layout.addStretch(3)
+
+        setup_splitter.addWidget(right_placeholder)
+        setup_splitter.setStretchFactor(0, 2)
+        setup_splitter.setStretchFactor(1, 3)
+        setup_splitter.setSizes([420, 580])
+
+        layout.addWidget(setup_splitter, 1)
 
         return page
 
@@ -691,6 +734,7 @@ class SessionPrepWindow(QMainWindow):
         self._phase_tabs.setCurrentIndex(_PHASE_ANALYSIS)
         self._phase_tabs.setTabEnabled(_PHASE_SETUP, False)
         self._track_table.setRowCount(0)
+        self._setup_table.setRowCount(0)
         self._summary_view.clear()
         self._file_report.clear()
         self._waveform.setVisible(False)
@@ -894,6 +938,7 @@ class SessionPrepWindow(QMainWindow):
 
         # Enable Session Setup phase now that analysis is available
         self._phase_tabs.setTabEnabled(_PHASE_SETUP, True)
+        self._populate_setup_table()
 
         ok_count = sum(1 for t in session.tracks if t.status == "OK")
         self._status_bar.showMessage(
@@ -1269,6 +1314,47 @@ class SessionPrepWindow(QMainWindow):
         for col in (2, 3, 4, 5):
             header.setSectionResizeMode(col, QHeaderView.Interactive)
 
+    def _populate_setup_table(self):
+        """Refresh the Session Setup track table from the current session."""
+        if not self._session:
+            return
+        self._setup_table.setSortingEnabled(False)
+        self._setup_table.setRowCount(0)
+
+        ok_tracks = [t for t in self._session.tracks if t.status == "OK"]
+        self._setup_table.setRowCount(len(ok_tracks))
+
+        for row, track in enumerate(ok_tracks):
+            pr = (
+                next(iter(track.processor_results.values()), None)
+                if track.processor_results
+                else None
+            )
+            # Column 0: filename
+            fname_item = _SortableItem(
+                track.filename, protools_sort_key(track.filename))
+            fname_item.setForeground(FILE_COLOR_OK)
+            self._setup_table.setItem(row, 0, fname_item)
+
+            # Column 1: channels
+            ch_item = _SortableItem(str(track.channels), track.channels)
+            ch_item.setForeground(QColor(COLORS["dim"]))
+            self._setup_table.setItem(row, 1, ch_item)
+
+            # Column 2: clip gain
+            clip_gain = pr.gain_db if pr else 0.0
+            cg_item = _SortableItem(f"{clip_gain:+.1f} dB", clip_gain)
+            cg_item.setForeground(QColor(COLORS["text"]))
+            self._setup_table.setItem(row, 2, cg_item)
+
+            # Column 3: fader gain
+            fader_gain = pr.data.get("fader_offset", 0.0) if pr else 0.0
+            fg_item = _SortableItem(f"{fader_gain:+.1f} dB", fader_gain)
+            fg_item.setForeground(QColor(COLORS["text"]))
+            self._setup_table.setItem(row, 3, fg_item)
+
+        self._setup_table.setSortingEnabled(True)
+
     # ── Classification override helpers ───────────────────────────────────
 
     def _style_classification_combo(self, combo: QComboBox, cls_text: str):
@@ -1448,7 +1534,8 @@ class SessionPrepWindow(QMainWindow):
         self._track_table.restore_selection(self._batch_filenames)
         self._batch_filenames = set()
 
-        # Refresh file tab if displayed track was in the batch
+        # Refresh setup table and file tab
+        self._populate_setup_table()
         if self._current_track:
             self._refresh_file_tab(self._current_track)
 
@@ -1609,6 +1696,9 @@ class SessionPrepWindow(QMainWindow):
             if sort_item:
                 sort_item.setText(base_cls)
                 sort_item._sort_key = base_cls.lower()
+
+        # Keep the Session Setup table in sync
+        self._populate_setup_table()
 
     def _refresh_file_tab(self, track):
         """Refresh File tab + waveform overlays if *track* is displayed."""
