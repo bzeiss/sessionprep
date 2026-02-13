@@ -213,13 +213,13 @@ class SessionPrepWindow(QMainWindow):
         analysis_layout.setSpacing(0)
         self._init_analysis_toolbar()
         analysis_layout.addWidget(self._analysis_toolbar)
-        main_splitter = QSplitter(Qt.Horizontal)
-        main_splitter.addWidget(self._build_left_panel())
-        main_splitter.addWidget(self._build_right_panel())
-        main_splitter.setStretchFactor(0, 3)
-        main_splitter.setStretchFactor(1, 2)
-        main_splitter.setSizes([620, 480])
-        analysis_layout.addWidget(main_splitter, 1)
+        self._main_splitter = QSplitter(Qt.Horizontal)
+        self._main_splitter.addWidget(self._build_left_panel())
+        self._main_splitter.addWidget(self._build_right_panel())
+        self._main_splitter.setStretchFactor(0, 3)
+        self._main_splitter.setStretchFactor(1, 2)
+        self._main_splitter.setSizes([620, 480])
+        analysis_layout.addWidget(self._main_splitter, 1)
         self._phase_tabs.addTab(analysis_page, "Analysis")
 
         # Tab 1 — Session Setup (placeholder)
@@ -273,7 +273,7 @@ class SessionPrepWindow(QMainWindow):
 
         self._analysis_toolbar.addSeparator()
 
-        self._analyze_action = QAction("Analyze", self)
+        self._analyze_action = QAction("Reanalyze", self)
         self._analyze_action.setEnabled(False)
         self._analyze_action.triggered.connect(self._on_analyze)
         self._analysis_toolbar.addAction(self._analyze_action)
@@ -1069,6 +1069,7 @@ class SessionPrepWindow(QMainWindow):
                 cell.setForeground(QColor(COLORS["dim"]))
                 self._track_table.setItem(row, col, cell)
         self._track_table.setSortingEnabled(True)
+        self._auto_fit_track_table()
 
         self._analyze_action.setEnabled(True)
         self._status_bar.showMessage(
@@ -1640,6 +1641,7 @@ class SessionPrepWindow(QMainWindow):
         for col in (2, 3, 4, 5, 6):
             header.setSectionResizeMode(col, QHeaderView.Interactive)
         self._auto_fit_group_column()
+        self._auto_fit_track_table()
 
     def _populate_setup_table(self):
         """Refresh the Session Setup track table from the current session."""
@@ -2154,6 +2156,34 @@ class SessionPrepWindow(QMainWindow):
         # Refresh the File detail tab so it reflects the updated gain
         if self._current_track and self._current_track.status == "OK":
             self._refresh_file_tab(self._current_track)
+
+    def _auto_fit_track_table(self):
+        """Shrink the left panel to fit the track table columns, giving
+        more space to the right detail panel.
+
+        Temporarily switches the File column from Stretch to
+        ResizeToContents so we can measure its true content width,
+        then adjusts the splitter and restores Stretch mode.
+        """
+        header = self._track_table.horizontalHeader()
+
+        # Temporarily fit File column to content so we get a true width
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self._track_table.resizeColumnToContents(0)
+        total_w = sum(header.sectionSize(c) for c in range(header.count()))
+        # Restore File column to Stretch
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+
+        # vertical-header (hidden=0) + scrollbar (~20) + frame borders (~4)
+        vhw = self._track_table.verticalHeader().width() if self._track_table.verticalHeader().isVisible() else 0
+        padding = vhw + 20 + 4
+        needed = total_w + padding
+
+        splitter_total = self._main_splitter.width()
+        if splitter_total > 0:
+            right_w = max(splitter_total - needed, 300)
+            left_w = splitter_total - right_w
+            self._main_splitter.setSizes([left_w, right_w])
 
     def _auto_fit_group_column(self):
         """Resize the Group column (6) to fit the widest current combo text."""
