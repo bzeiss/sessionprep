@@ -7,7 +7,7 @@ import os
 import sys
 
 from PySide6.QtCore import Qt, Slot, QSize, QTimer, QUrl, QMimeData
-from PySide6.QtGui import QAction, QActionGroup, QFont, QColor, QIcon, QKeySequence, QPixmap, QShortcut
+from PySide6.QtGui import QAction, QActionGroup, QBrush, QFont, QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -26,6 +26,8 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStackedWidget,
     QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -100,6 +102,42 @@ class _HelpBrowser(QTextBrowser):
             from PySide6.QtWidgets import QToolTip
             QToolTip.hideText()
         super().mouseMoveEvent(event)
+
+
+_SELECTION_COLOR = QColor(42, 109, 181, 160)  # semi-transparent blue
+
+
+class _GroupTintDelegate(QStyledItemDelegate):
+    """Delegate that blends selection highlight with group background
+    so the group color shows through when selected.
+
+    Qt's style engine uses ``QPalette::Highlight`` when
+    ``State_Selected`` is set, ignoring ``backgroundBrush``.
+    We therefore *remove* ``State_Selected`` and feed the correct
+    pre-blended colour via ``backgroundBrush`` instead.
+    """
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        bg = index.data(Qt.BackgroundRole)
+        has_group = (bg is not None and isinstance(bg, QBrush)
+                     and bg.style() != Qt.NoBrush)
+        selected = bool(option.state & QStyle.State_Selected)
+
+        if selected:
+            # Remove the flag so the style won't use palette Highlight
+            option.state &= ~QStyle.State_Selected
+            if has_group:
+                gc = bg.color()
+                sc = _SELECTION_COLOR
+                a = sc.alphaF()
+                option.backgroundBrush = QBrush(QColor(
+                    int(sc.red() * a + gc.red() * (1.0 - a)),
+                    int(sc.green() * a + gc.green() * (1.0 - a)),
+                    int(sc.blue() * a + gc.blue() * (1.0 - a)),
+                ))
+            else:
+                option.backgroundBrush = QBrush(QColor(42, 109, 181))
 
 
 class _DraggableTrackTable(BatchEditTableWidget):
@@ -372,6 +410,7 @@ class SessionPrepWindow(QMainWindow):
         self._track_table.setShowGrid(True)
         self._track_table.setAlternatingRowColors(True)
         self._track_table.setSortingEnabled(True)
+        self._track_table.setItemDelegate(_GroupTintDelegate(self._track_table))
 
         header = self._track_table.horizontalHeader()
         header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -1158,6 +1197,9 @@ class SessionPrepWindow(QMainWindow):
             # Group combo (column 6)
             self._create_group_combo(row, track)
 
+            # Row background from group color
+            self._apply_row_group_color(row, track.group)
+
     @Slot(object, object)
     def _on_analyze_done(self, session, summary):
         self._session = session
@@ -1545,6 +1587,9 @@ class SessionPrepWindow(QMainWindow):
 
                 # Group combo (column 6)
                 self._create_group_combo(row, track)
+
+                # Row background from group color
+                self._apply_row_group_color(row, track.group)
             else:
                 cls_item = _SortableItem("", "zzz")
                 self._track_table.setItem(row, 3, cls_item)
@@ -1876,6 +1921,59 @@ class SessionPrepWindow(QMainWindow):
                 result[g["name"]] = argb
         return result
 
+    def _apply_row_group_color(self, row: int, group_name: str | None,
+                               gcm: dict[str, str] | None = None):
+        """Set background color on all cells in *row* based on *group_name*.
+
+        *gcm* is an optional pre-computed group-color map to avoid
+        repeated lookups when coloring many rows.
+        """
+        if gcm is None:
+            gcm = self._group_color_map()
+        _TINT_FACTOR = 0.15  # fraction of source alpha used for blending
+        argb = gcm.get(group_name) if group_name else None
+        if argb:
+            qc = _argb_to_qcolor(argb)
+            # Pre-blend with dark background so the result is the same
+            # solid color on both table items and cell widgets.
+            a = (qc.alpha() / 255.0) * _TINT_FACTOR
+            bg_r, bg_g, bg_b = 0x1e, 0x1e, 0x1e  # COLORS["bg"]
+            r = int(qc.red() * a + bg_r * (1 - a))
+            g = int(qc.green() * a + bg_g * (1 - a))
+            b = int(qc.blue() * a + bg_b * (1 - a))
+            blended = QColor(r, g, b)
+            brush = QBrush(blended)
+            rgba = f"rgb({r}, {g}, {b})"
+        else:
+            brush = QBrush()
+            rgba = None
+
+        # Background on QTableWidgetItems (cols 0–6)
+        for col in range(self._track_table.columnCount()):
+            item = self._track_table.item(row, col)
+            if item:
+                item.setBackground(brush)
+
+        # Background on cell widgets — merge into existing stylesheet
+        for col in (3, 4, 5, 6):
+            w = self._track_table.cellWidget(row, col)
+            if w is None:
+                continue
+            ss = w.styleSheet()
+            # Strip any previous background-color rule we injected
+            lines = [ln for ln in ss.split(";")
+                     if "background-color" not in ln]
+            base = ";".join(ln for ln in lines if ln.strip())
+            if rgba:
+                # Insert background-color before the closing brace
+                if base:
+                    base = base.rstrip().rstrip("}")
+                    base += f"; background-color: {rgba}; }}"
+                else:
+                    wtype = type(w).__name__
+                    base = f"{wtype} {{ background-color: {rgba}; }}"
+            w.setStyleSheet(base)
+
     def _create_group_combo(self, row: int, track):
         """Create and install a Group combo in column 6."""
         current = track.group or self._GROUP_NONE_LABEL
@@ -1925,6 +2023,7 @@ class SessionPrepWindow(QMainWindow):
             track.group = new_group
             batch_keys = self._track_table.batch_selected_keys()
             track_map = {t.filename: t for t in self._session.tracks}
+            gcm = self._group_color_map()
             self._track_table.setSortingEnabled(False)
             for bfname in batch_keys:
                 bt = track_map.get(bfname)
@@ -1942,19 +2041,21 @@ class SessionPrepWindow(QMainWindow):
                     if sort_item:
                         sort_item.setText(text)
                         sort_item._sort_key = text.lower()
+                    self._apply_row_group_color(row, new_group, gcm)
             self._track_table.setSortingEnabled(True)
             self._track_table.restore_selection(batch_keys)
         else:
             if track.group == new_group:
                 return
             track.group = new_group
-            # Update sort item
+            # Update sort item + row color
             row = self._find_table_row(fname)
             if row >= 0:
                 sort_item = self._track_table.item(row, 6)
                 if sort_item:
                     sort_item.setText(text)
                     sort_item._sort_key = text.lower()
+                self._apply_row_group_color(row, new_group)
 
     def _refresh_group_combos(self):
         """Refresh the items in all Group combo boxes from _session_groups."""
@@ -1988,6 +2089,10 @@ class SessionPrepWindow(QMainWindow):
                         if track:
                             track.group = None
                 w.blockSignals(False)
+                # Update row color (group may have changed color or been removed)
+                effective = w.currentText()
+                gname = effective if effective != self._GROUP_NONE_LABEL else None
+                self._apply_row_group_color(row, gname, gcm)
 
     def _reanalyze_single_track(self, track):
         """Re-run all track detectors + processors for a single track (sync)."""
@@ -2074,6 +2179,9 @@ class SessionPrepWindow(QMainWindow):
             if sort_item:
                 sort_item.setText(base_cls)
                 sort_item._sort_key = base_cls.lower()
+
+        # Re-apply row group color (new items lose their background)
+        self._apply_row_group_color(row, track.group)
 
         # Keep the Session Setup table in sync
         self._populate_setup_table()

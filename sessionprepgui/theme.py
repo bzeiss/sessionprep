@@ -130,7 +130,6 @@ STYLESHEET = """
     QSplitter::handle { background-color: #555; width: 2px; }
     QTableWidget { background-color: #252525; border: none; outline: none; gridline-color: #3a3a3a; }
     QTableWidget::item { padding: 2px 6px; }
-    QTableWidget::item:selected { background-color: #2a6db5; }
     QHeaderView::section { background-color: #2d2d2d; color: #dddddd; border: none; border-bottom: 1px solid #555; padding: 4px 6px; }
     QTextBrowser { background-color: #1e1e1e; border: none; }
     QPushButton { background-color: #3a3a3a; color: #dddddd; border: 1px solid #555; padding: 4px 12px; border-radius: 2px; }
