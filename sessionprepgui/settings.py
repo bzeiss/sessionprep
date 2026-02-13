@@ -33,6 +33,7 @@ from sessionpreplib.config import (
     build_structured_defaults,
     validate_structured_config,
 )
+from .theme import PT_DEFAULT_COLORS
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ _GUI_DEFAULTS: dict[str, Any] = {
     "spectrogram_colormap": "magma",
     "default_project_dir": "",
     "invert_scroll": "default",
+    "colors": copy.deepcopy(PT_DEFAULT_COLORS),
 }
 
 

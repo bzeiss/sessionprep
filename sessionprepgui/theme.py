@@ -31,6 +31,87 @@ FILE_COLOR_SILENT = QColor("#888888")
 FILE_COLOR_TRANSIENT = QColor("#cc77ff")
 FILE_COLOR_SUSTAINED = QColor("#44cccc")
 
+# ---------------------------------------------------------------------------
+# Default color palette (69 colors, ARGB format)
+# ---------------------------------------------------------------------------
+# Organized in three saturation tiers (bright → medium → dark) with hue
+# rotation within each tier.  Names are descriptive for human readability.
+
+PT_DEFAULT_COLORS: list[dict[str, str]] = [
+    # ── Bright tier (indices 0–22) ─────────────────────────────────────────
+    {"name": "Blue Dark",                   "argb": "#ff2c00fc"},
+    {"name": "Electric Violet Darkest",     "argb": "#ff5600fc"},
+    {"name": "Electric Violet Dark",        "argb": "#ff8800fc"},
+    {"name": "Electric Violet Light",       "argb": "#ffbf00fc"},
+    {"name": "Electric Violet Lightest",    "argb": "#ffbe00c0"},
+    {"name": "Flirt",                       "argb": "#ffbd0088"},
+    {"name": "Lipstick",                    "argb": "#ffbd0054"},
+    {"name": "Guardsman Red",               "argb": "#ffbc000d"},
+    {"name": "Milano Red",                  "argb": "#ffbd1e0d"},
+    {"name": "Tia Maria",                   "argb": "#ffbd520e"},
+    {"name": "Pizza",                       "argb": "#ffbe8911"},
+    {"name": "La Rioja",                    "argb": "#ffc0c514"},
+    {"name": "Lima Dark",                   "argb": "#ff89c511"},
+    {"name": "Lima Light",                  "argb": "#ff57c610"},
+    {"name": "Christi",                     "argb": "#ff2ec60f"},
+    {"name": "Malachite",                   "argb": "#ff1cc60e"},
+    {"name": "Mountain Meadow Dark",        "argb": "#ff1ec654"},
+    {"name": "Mountain Meadow Light",       "argb": "#ff20c488"},
+    {"name": "Java",                        "argb": "#ff23c3c1"},
+    {"name": "Dodger Blue Dark",            "argb": "#ff27c1fd"},
+    {"name": "Dodger Blue Light",           "argb": "#ff2184fc"},
+    {"name": "Blue Ribbon",                 "argb": "#ff1c4afc"},
+    {"name": "Blue Light",                  "argb": "#ff1900fc"},
+    # ── Medium tier (indices 23–45) ────────────────────────────────────────
+    {"name": "Navy Blue",                   "argb": "#ff1e00a3"},
+    {"name": "Pigment Indigo",              "argb": "#ff3700a3"},
+    {"name": "Purple Darkest",              "argb": "#ff5500a3"},
+    {"name": "Purple",                      "argb": "#ff7400a4"},
+    {"name": "Purple Lightest",             "argb": "#ff7c0089"},
+    {"name": "Cardinal Pink",               "argb": "#ff7b0066"},
+    {"name": "Siren",                       "argb": "#ff7a0046"},
+    {"name": "Japanese Maple",              "argb": "#ff7a000b"},
+    {"name": "Dark Burgundy",               "argb": "#ff7a120b"},
+    {"name": "Cafe Royale Dark",            "argb": "#ff7a310c"},
+    {"name": "Cafe Royale Light",           "argb": "#ff7b510d"},
+    {"name": "Corn Harvest",                "argb": "#ff898010"},
+    {"name": "Olivetone",                   "argb": "#ff66800e"},
+    {"name": "Green Leaf",                  "argb": "#ff48800d"},
+    {"name": "Bilbao",                      "argb": "#ff2d800c"},
+    {"name": "Japanese Laurel",             "argb": "#ff18800c"},
+    {"name": "Jewel Dark",                  "argb": "#ff158033"},
+    {"name": "Jewel Light",                 "argb": "#ff167f51"},
+    {"name": "Elm",                         "argb": "#ff1a8c7e"},
+    {"name": "Eastern Blue",                "argb": "#ff1d8da4"},
+    {"name": "Matisse",                     "argb": "#ff1969a4"},
+    {"name": "Tory Blue",                   "argb": "#ff1646a3"},
+    {"name": "Torea Bay",                   "argb": "#ff1423a3"},
+    # ── Dark tier (indices 46–65) ──────────────────────────────────────────
+    {"name": "Paua Dark",                   "argb": "#ff14005f"},
+    {"name": "Paua Light",                  "argb": "#ff21005f"},
+    {"name": "Ripe Plum Darkest",           "argb": "#ff31005f"},
+    {"name": "Ripe Plum",                   "argb": "#ff41005f"},
+    {"name": "Ripe Plum Lightest",          "argb": "#ff4b0057"},
+    {"name": "Blackberry",                  "argb": "#ff470042"},
+    {"name": "Barossa",                     "argb": "#ff470031"},
+    {"name": "Temptress",                   "argb": "#ff47000b"},
+    {"name": "Van Cleef Dark",              "argb": "#ff470c0b"},
+    {"name": "Van Cleef Light",             "argb": "#ff471c0b"},
+    {"name": "Bronze",                      "argb": "#ff472c0c"},
+    {"name": "Saratoga",                    "argb": "#ff574d0f"},
+    {"name": "Bronze Olive",                "argb": "#ff424a0c"},
+    {"name": "Green House Dark",            "argb": "#ff324a0c"},
+    {"name": "Green House Light",           "argb": "#ff234a0c"},
+    {"name": "Dark Fern",                   "argb": "#ff154b0b"},
+    {"name": "Parsley",                     "argb": "#ff0f4a1d"},
+    {"name": "Bottle Green",                "argb": "#ff0f4a2c"},
+    {"name": "Eden Darkest",                "argb": "#ff14594c"},
+    {"name": "Eden",                        "argb": "#ff16595f"},
+    {"name": "Eden Lightest",               "argb": "#ff14475f"},
+    {"name": "Blue Zodiac Dark",            "argb": "#ff13355f"},
+    {"name": "Blue Zodiac Light",           "argb": "#ff11225f"},
+]
+
 
 # ---------------------------------------------------------------------------
 # Dark theme

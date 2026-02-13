@@ -7,9 +7,10 @@ from decimal import Decimal
 from typing import Any
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -26,6 +28,8 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QStackedWidget,
     QStyle,
+    QTableWidget,
+    QTableWidgetItem,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -35,6 +39,20 @@ from PySide6.QtWidgets import (
 from sessionpreplib.config import ANALYSIS_PARAMS, ParamSpec
 from sessionpreplib.detectors import default_detectors
 from sessionpreplib.processors import default_processors
+from .theme import PT_DEFAULT_COLORS
+
+
+# ---------------------------------------------------------------------------
+# ARGB color helper
+# ---------------------------------------------------------------------------
+
+def _argb_to_qcolor(argb: str) -> QColor:
+    """Parse a ``#AARRGGBB`` hex string into a QColor."""
+    s = argb.lstrip("#")
+    if len(s) == 8:
+        a, r, g, b = int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16), int(s[6:8], 16)
+        return QColor(r, g, b, a)
+    return QColor(argb)
 
 
 # ---------------------------------------------------------------------------
@@ -349,6 +367,7 @@ class PreferencesDialog(QDialog):
         self._build_analysis_page()
         self._build_detector_pages()
         self._build_processor_pages()
+        self._build_colors_page()
 
         # Select first item
         self._tree.expandAll()
@@ -559,6 +578,141 @@ class PreferencesDialog(QDialog):
             self._widgets[f"processors.{proc.id}"] = widgets
             self._add_page(child, page)
 
+    # ── Colors page ────────────────────────────────────────────────────
+
+    def _build_colors_page(self):
+        item = QTreeWidgetItem(self._tree, ["Colors"])
+        item.setFont(0, QFont("", -1, QFont.Bold))
+
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        desc = QLabel(
+            "Color palette used for track groups. "
+            "Double-click a swatch to edit."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #888; font-size: 9pt;")
+        layout.addWidget(desc)
+
+        self._colors_table = QTableWidget()
+        self._colors_table.setColumnCount(3)
+        self._colors_table.setHorizontalHeaderLabels(["#", "Name", "Color"])
+        self._colors_table.verticalHeader().setVisible(False)
+        self._colors_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._colors_table.setSelectionMode(QTableWidget.SingleSelection)
+        ch = self._colors_table.horizontalHeader()
+        ch.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        ch.setSectionResizeMode(0, QHeaderView.Fixed)
+        ch.resizeSection(0, 36)
+        ch.setSectionResizeMode(1, QHeaderView.Stretch)
+        ch.setSectionResizeMode(2, QHeaderView.Fixed)
+        ch.resizeSection(2, 60)
+
+        self._colors_table.cellDoubleClicked.connect(
+            self._on_color_swatch_dbl_click)
+
+        # Populate from config
+        colors = self._config.get("gui", {}).get("colors", [])
+        if not colors:
+            colors = copy.deepcopy(PT_DEFAULT_COLORS)
+        self._colors_table.setRowCount(len(colors))
+        for row, entry in enumerate(colors):
+            self._set_color_row(row, entry.get("name", ""), entry.get("argb", "#ff888888"))
+
+        layout.addWidget(self._colors_table, 1)
+
+        # Buttons
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.setSpacing(6)
+
+        add_btn = QPushButton("Add")
+        add_btn.clicked.connect(self._on_color_add)
+        btn_row.addWidget(add_btn)
+
+        remove_btn = QPushButton("Remove")
+        remove_btn.clicked.connect(self._on_color_remove)
+        btn_row.addWidget(remove_btn)
+
+        reset_btn = QPushButton("Reset to Defaults")
+        reset_btn.clicked.connect(self._on_colors_reset)
+        btn_row.addWidget(reset_btn)
+
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        self._add_page(item, page)
+
+    def _set_color_row(self, row: int, name: str, argb: str):
+        """Populate a single row in the colors table."""
+        idx_item = QTableWidgetItem(str(row + 1))
+        idx_item.setFlags(idx_item.flags() & ~Qt.ItemIsEditable)
+        idx_item.setForeground(QColor("#888888"))
+        self._colors_table.setItem(row, 0, idx_item)
+
+        name_item = QTableWidgetItem(name)
+        self._colors_table.setItem(row, 1, name_item)
+
+        swatch_item = QTableWidgetItem()
+        swatch_item.setFlags(swatch_item.flags() & ~Qt.ItemIsEditable)
+        swatch_item.setBackground(_argb_to_qcolor(argb))
+        swatch_item.setData(Qt.UserRole, argb)
+        swatch_item.setToolTip(argb)
+        self._colors_table.setItem(row, 2, swatch_item)
+
+    def _on_color_swatch_dbl_click(self, row: int, col: int):
+        """Open QColorDialog when the swatch column is double-clicked."""
+        if col != 2:
+            return
+        item = self._colors_table.item(row, 2)
+        if not item:
+            return
+        current = _argb_to_qcolor(item.data(Qt.UserRole) or "#ff888888")
+        color = QColorDialog.getColor(
+            current, self, "Select Color",
+            QColorDialog.ShowAlphaChannel)
+        if color.isValid():
+            argb = "#{:02x}{:02x}{:02x}{:02x}".format(
+                color.alpha(), color.red(), color.green(), color.blue())
+            item.setBackground(color)
+            item.setData(Qt.UserRole, argb)
+            item.setToolTip(argb)
+
+    def _on_color_add(self):
+        row = self._colors_table.rowCount()
+        self._colors_table.insertRow(row)
+        self._set_color_row(row, "New Color", "#ff888888")
+        self._colors_table.scrollToBottom()
+        self._colors_table.editItem(self._colors_table.item(row, 1))
+
+    def _on_color_remove(self):
+        row = self._colors_table.currentRow()
+        if row >= 0:
+            self._colors_table.removeRow(row)
+
+    def _on_colors_reset(self):
+        self._colors_table.setRowCount(0)
+        self._colors_table.setRowCount(len(PT_DEFAULT_COLORS))
+        for row, entry in enumerate(PT_DEFAULT_COLORS):
+            self._set_color_row(row, entry["name"], entry["argb"])
+
+    def _read_colors(self) -> list[dict[str, str]]:
+        """Read the colors table into a list of {name, argb} dicts."""
+        colors = []
+        for row in range(self._colors_table.rowCount()):
+            name_item = self._colors_table.item(row, 1)
+            swatch_item = self._colors_table.item(row, 2)
+            if not name_item or not swatch_item:
+                continue
+            name = name_item.text().strip()
+            argb = swatch_item.data(Qt.UserRole) or "#ff888888"
+            if name:
+                colors.append({"name": name, "argb": argb})
+        return colors
+
     # ── Helpers ────────────────────────────────────────────────────────
 
     def _browse_project_dir(self, line_edit: QLineEdit):
@@ -620,6 +774,9 @@ class PreferencesDialog(QDialog):
             section = processors.setdefault(proc.id, {})
             for key, widget in self._widgets[wkey]:
                 section[key] = _read_widget(widget)
+
+        # Colors
+        gui["colors"] = self._read_colors()
 
         self._saved = True
         self.accept()

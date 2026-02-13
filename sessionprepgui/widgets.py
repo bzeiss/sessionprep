@@ -3,7 +3,7 @@
 The two classes here — ``BatchEditTableWidget`` and ``BatchComboBox`` — provide
 a generic *multi-select → Alt+Shift+combo → apply to all* pattern that works
 for **any** QTableWidget with cell-widget dropdowns.  This replicates the
-behaviour found in Pro Tools, where Shift-selecting multiple tracks and
+behaviour found in DAWs, where Shift-selecting multiple tracks and
 Alt-clicking a control applies the change to all selected tracks.
 
 How it works

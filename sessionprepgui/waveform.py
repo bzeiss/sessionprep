@@ -1675,7 +1675,7 @@ class WaveformWidget(QWidget):
         self.update()
 
     def keyPressEvent(self, event):
-        """Pro Tools keyboard shortcuts: R = zoom in, T = zoom out.
+        """DAW keyboard shortcuts: R = zoom in, T = zoom out.
 
         When the mouse is hovering over the waveform, zoom is centered on
         the mouse guide position.  Otherwise falls back to cursor position.
