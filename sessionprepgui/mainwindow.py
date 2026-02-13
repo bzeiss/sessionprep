@@ -587,7 +587,12 @@ class SessionPrepWindow(QMainWindow):
         right_layout.addStretch(3)
         self._setup_right_stack.addWidget(right_placeholder)
 
-        # Page 1: folder tree (drop target)
+        # Page 1: folder tree + transfer progress panel
+        tree_page = QWidget()
+        tree_page_layout = QVBoxLayout(tree_page)
+        tree_page_layout.setContentsMargins(0, 0, 0, 0)
+        tree_page_layout.setSpacing(0)
+
         self._folder_tree = _FolderDropTree()
         self._folder_tree.setHeaderLabels(["Folder / Track"])
         self._folder_tree.setSelectionMode(QTreeWidget.ExtendedSelection)
@@ -602,7 +607,25 @@ class SessionPrepWindow(QMainWindow):
         )
         self._folder_tree.tracks_dropped.connect(self._assign_tracks_to_folder)
         self._folder_tree.tracks_unassigned.connect(self._unassign_tracks)
-        self._setup_right_stack.addWidget(self._folder_tree)
+        tree_page_layout.addWidget(self._folder_tree, 1)
+
+        # Transfer progress panel (hidden by default)
+        self._transfer_progress_panel = QWidget()
+        tp_layout = QVBoxLayout(self._transfer_progress_panel)
+        tp_layout.setContentsMargins(6, 4, 6, 6)
+        tp_layout.setSpacing(3)
+        self._transfer_status_label = QLabel("")
+        self._transfer_status_label.setStyleSheet(
+            f"color: {COLORS['text']}; font-size: 9pt;")
+        tp_layout.addWidget(self._transfer_status_label)
+        self._transfer_progress_bar = QProgressBar()
+        self._transfer_progress_bar.setTextVisible(False)
+        self._transfer_progress_bar.setFixedHeight(14)
+        tp_layout.addWidget(self._transfer_progress_bar)
+        self._transfer_progress_panel.setVisible(False)
+        tree_page_layout.addWidget(self._transfer_progress_panel)
+
+        self._setup_right_stack.addWidget(tree_page)
 
         self._setup_right_stack.setCurrentIndex(_SETUP_RIGHT_PLACEHOLDER)
 
@@ -719,6 +742,10 @@ class SessionPrepWindow(QMainWindow):
         self._transfer_action.setEnabled(False)
         self._fetch_action.setEnabled(False)
         self._status_bar.showMessage("Transferring to Pro Tools\u2026")
+        # Show progress panel
+        self._transfer_progress_bar.setValue(0)
+        self._transfer_status_label.setText("Preparing\u2026")
+        self._transfer_progress_panel.setVisible(True)
         # Inject GUI config (groups + colors) into session.config so
         # transfer() can resolve group → color ARGB
         self._session.config.setdefault("gui", {})["default_groups"] = list(
@@ -727,19 +754,39 @@ class SessionPrepWindow(QMainWindow):
         self._session.config["gui"]["colors"] = colors
         self._daw_transfer_worker = DawTransferWorker(
             self._active_daw_processor, self._session)
-        self._daw_transfer_worker.progress.connect(
-            lambda msg: self._status_bar.showMessage(msg))
+        self._daw_transfer_worker.progress.connect(self._on_transfer_progress)
+        self._daw_transfer_worker.progress_value.connect(
+            self._on_transfer_progress_value)
         self._daw_transfer_worker.result.connect(self._on_daw_transfer_result)
         self._daw_transfer_worker.start()
+
+    @Slot(str)
+    def _on_transfer_progress(self, message: str):
+        self._transfer_status_label.setText(message)
+        self._status_bar.showMessage(message)
+
+    @Slot(int, int)
+    def _on_transfer_progress_value(self, current: int, total: int):
+        self._transfer_progress_bar.setMaximum(max(total, 1))
+        self._transfer_progress_bar.setValue(current)
 
     @Slot(bool, str, object)
     def _on_daw_transfer_result(self, ok: bool, message: str, results):
         self._daw_transfer_worker = None
         self._update_daw_lifecycle_buttons()
         if ok:
+            self._transfer_status_label.setText(message)
+            self._transfer_progress_bar.setValue(
+                self._transfer_progress_bar.maximum())
             self._status_bar.showMessage(message)
         else:
+            self._transfer_status_label.setText(f"Failed: {message}")
             self._status_bar.showMessage(f"Transfer failed: {message}")
+        # Auto-hide progress panel after 2 seconds
+        QTimer.singleShot(2000, self._hide_transfer_progress)
+
+    def _hide_transfer_progress(self):
+        self._transfer_progress_panel.setVisible(False)
 
     def _populate_folder_tree(self):
         """Build the folder tree from daw_state['protools']['folders']."""
