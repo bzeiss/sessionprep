@@ -65,7 +65,10 @@ from .helpers import track_analysis_label, esc, fmt_time
 from .preferences import PreferencesDialog, _argb_to_qcolor
 from .report import render_summary_html, render_track_detail_html
 from .widgets import BatchEditTableWidget, BatchComboBox
-from .worker import AnalyzeWorker, BatchReanalyzeWorker, DawCheckWorker, DawFetchWorker
+from .worker import (
+    AnalyzeWorker, BatchReanalyzeWorker, DawCheckWorker, DawFetchWorker,
+    DawTransferWorker,
+)
 from .waveform import WaveformWidget, WaveformLoadWorker
 from sessionpreplib.audio import AUDIO_EXTENSIONS
 from .playback import PlaybackController
@@ -376,6 +379,7 @@ class SessionPrepWindow(QMainWindow):
         self._detector_help = detector_help_map()
         self._daw_check_worker: DawCheckWorker | None = None
         self._daw_fetch_worker: DawFetchWorker | None = None
+        self._daw_transfer_worker: DawTransferWorker | None = None
 
         # Load persistent GUI configuration
         self._config = load_config()
@@ -520,6 +524,7 @@ class SessionPrepWindow(QMainWindow):
 
         self._transfer_action = QAction("Transfer", self)
         self._transfer_action.setEnabled(False)
+        self._transfer_action.triggered.connect(self._on_daw_transfer)
         self._setup_toolbar.addAction(self._transfer_action)
 
         self._sync_action = QAction("Sync", self)
@@ -637,7 +642,11 @@ class SessionPrepWindow(QMainWindow):
         dp = self._active_daw_processor
         connected = dp is not None and dp.connected
         self._fetch_action.setEnabled(connected)
-        self._transfer_action.setEnabled(False)
+        has_assignments = bool(
+            self._session
+            and self._session.daw_state.get("protools", {}).get("assignments")
+        )
+        self._transfer_action.setEnabled(connected and has_assignments)
         self._sync_action.setEnabled(False)
 
     @Slot(int)
@@ -699,6 +708,38 @@ class SessionPrepWindow(QMainWindow):
             self._status_bar.showMessage(message)
         else:
             self._status_bar.showMessage(f"Fetch failed: {message}")
+        self._update_daw_lifecycle_buttons()
+
+    # ── DAW Transfer ─────────────────────────────────────────────────────
+
+    @Slot()
+    def _on_daw_transfer(self):
+        if not self._active_daw_processor or not self._session:
+            return
+        self._transfer_action.setEnabled(False)
+        self._fetch_action.setEnabled(False)
+        self._status_bar.showMessage("Transferring to Pro Tools\u2026")
+        # Inject GUI config (groups + colors) into session.config so
+        # transfer() can resolve group → color ARGB
+        self._session.config.setdefault("gui", {})["default_groups"] = list(
+            self._session_groups)
+        colors = self._config.get("gui", {}).get("colors", PT_DEFAULT_COLORS)
+        self._session.config["gui"]["colors"] = colors
+        self._daw_transfer_worker = DawTransferWorker(
+            self._active_daw_processor, self._session)
+        self._daw_transfer_worker.progress.connect(
+            lambda msg: self._status_bar.showMessage(msg))
+        self._daw_transfer_worker.result.connect(self._on_daw_transfer_result)
+        self._daw_transfer_worker.start()
+
+    @Slot(bool, str, object)
+    def _on_daw_transfer_result(self, ok: bool, message: str, results):
+        self._daw_transfer_worker = None
+        self._update_daw_lifecycle_buttons()
+        if ok:
+            self._status_bar.showMessage(message)
+        else:
+            self._status_bar.showMessage(f"Transfer failed: {message}")
 
     def _populate_folder_tree(self):
         """Build the folder tree from daw_state['protools']['folders']."""
@@ -834,6 +875,7 @@ class SessionPrepWindow(QMainWindow):
 
         self._populate_folder_tree()
         self._populate_setup_table()
+        self._update_daw_lifecycle_buttons()
 
     @Slot(list)
     def _unassign_tracks(self, filenames: list[str]):
@@ -854,6 +896,7 @@ class SessionPrepWindow(QMainWindow):
                     pass
         self._populate_folder_tree()
         self._populate_setup_table()
+        self._update_daw_lifecycle_buttons()
 
     def _build_left_panel(self) -> QWidget:
         panel = QWidget()

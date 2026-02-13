@@ -50,6 +50,36 @@ class DawFetchWorker(QThread):
             self.result.emit(False, str(e), None)
 
 
+class DawTransferWorker(QThread):
+    """Runs DawProcessor.transfer() off the main thread with progress."""
+
+    progress = Signal(str)              # status text
+    progress_value = Signal(int, int)   # (current, total)
+    result = Signal(bool, str, object)  # (ok, message, results_list)
+
+    def __init__(self, processor: DawProcessor, session):
+        super().__init__()
+        self._processor = processor
+        self._session = session
+
+    def _on_progress(self, current: int, total: int, message: str):
+        self.progress.emit(message)
+        self.progress_value.emit(current, total)
+
+    def run(self):
+        try:
+            results = self._processor.transfer(
+                self._session, progress_cb=self._on_progress)
+            failures = [r for r in results if not r.success]
+            if failures:
+                msg = f"Transfer done: {len(results) - len(failures)}/{len(results)} OK"
+            else:
+                msg = f"Transfer complete ({len(results)} operations)"
+            self.result.emit(True, msg, results)
+        except Exception as e:
+            self.result.emit(False, str(e), None)
+
+
 class AnalyzeWorker(QThread):
     """Runs pipeline analysis in a background thread."""
 

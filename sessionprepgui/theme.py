@@ -124,9 +124,9 @@ STYLESHEET = """
     QMenu { background-color: #2d2d2d; color: #dddddd; border: 1px solid #555; }
     QMenu::item:selected { background-color: #2a6db5; }
     QToolBar { background-color: #2d2d2d; border-bottom: 1px solid #555; spacing: 6px; padding: 2px; }
-    QToolBar QToolButton { color: #dddddd; padding: 4px 8px; }
-    QToolBar QToolButton:hover { background-color: #3a3a3a; }
-    QToolBar QToolButton:disabled { color: #666666; }
+    QToolBar QToolButton { color: #dddddd; padding: 4px 8px; background-color: #3a3a3a; border: 1px solid #555; border-radius: 2px; }
+    QToolBar QToolButton:hover { background-color: #4a4a4a; }
+    QToolBar QToolButton:disabled { color: #666666; background-color: #2d2d2d; }
     QSplitter::handle { background-color: #555; width: 2px; }
     QTableWidget { background-color: #252525; border: none; outline: none; gridline-color: #3a3a3a; }
     QTableWidget::item { padding: 2px 6px; }
