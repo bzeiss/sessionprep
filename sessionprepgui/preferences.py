@@ -323,7 +323,7 @@ class PreferencesDialog(QDialog):
     def __init__(self, config: dict[str, Any], parent=None):
         super().__init__(parent)
         self.setWindowTitle("Preferences")
-        self.resize(750, 500)
+        self.resize(900, 550)
         self._config = copy.deepcopy(config)
         self._widgets: dict[str, list[tuple[str, QWidget]]] = {}
         self._general_widgets: list[tuple[str, QWidget]] = []
@@ -792,9 +792,9 @@ class PreferencesDialog(QDialog):
 
         # ── Groups table ──────────────────────────────────────────────
         self._groups_table = QTableWidget()
-        self._groups_table.setColumnCount(3)
+        self._groups_table.setColumnCount(4)
         self._groups_table.setHorizontalHeaderLabels(
-            ["Name", "Color", "Gain-Linked"])
+            ["Name", "Color", "Gain-Linked", "DAW Target"])
         vh = self._groups_table.verticalHeader()
         vh.setSectionsMovable(True)
         vh.sectionMoved.connect(self._on_group_row_moved)
@@ -807,6 +807,8 @@ class PreferencesDialog(QDialog):
         gh.resizeSection(1, 160)
         gh.setSectionResizeMode(2, QHeaderView.Fixed)
         gh.resizeSection(2, 80)
+        gh.setSectionResizeMode(3, QHeaderView.Interactive)
+        gh.resizeSection(3, 140)
 
         self._groups_table.cellChanged.connect(self._on_group_name_changed)
 
@@ -875,6 +877,7 @@ class PreferencesDialog(QDialog):
                 entry.get("name", ""),
                 entry.get("color", ""),
                 entry.get("gain_linked", False),
+                entry.get("daw_target", ""),
             )
         self._groups_table.blockSignals(False)
 
@@ -1023,7 +1026,7 @@ class PreferencesDialog(QDialog):
         return None
 
     def _set_group_row(self, row: int, name: str, color: str,
-                       gain_linked: bool):
+                       gain_linked: bool, daw_target: str = ""):
         """Populate a single row in the groups table."""
         name_item = QTableWidgetItem(name)
         self._groups_table.setItem(row, 0, name_item)
@@ -1051,6 +1054,10 @@ class PreferencesDialog(QDialog):
         chk_layout.setAlignment(Qt.AlignCenter)
         chk_layout.addWidget(chk)
         self._groups_table.setCellWidget(row, 2, chk_container)
+
+        # DAW Target name
+        daw_item = QTableWidgetItem(daw_target)
+        self._groups_table.setItem(row, 3, daw_item)
 
     def _unique_group_name(self, base: str = "New Group") -> str:
         """Generate a unique group name for the groups table."""
@@ -1122,7 +1129,8 @@ class PreferencesDialog(QDialog):
         self._groups_table.setRowCount(len(ordered))
         for row, entry in enumerate(ordered):
             self._set_group_row(
-                row, entry["name"], entry["color"], entry["gain_linked"])
+                row, entry["name"], entry["color"],
+                entry["gain_linked"], entry.get("daw_target", ""))
         self._groups_table.blockSignals(False)
         vh.blockSignals(False)
 
@@ -1147,7 +1155,10 @@ class PreferencesDialog(QDialog):
                 chk = chk_c.findChild(QCheckBox)
                 if chk:
                     gl = chk.isChecked()
-            groups.append({"name": name, "color": color, "gain_linked": gl})
+            daw_item = self._groups_table.item(logical, 3)
+            dt = daw_item.text().strip() if daw_item else ""
+            groups.append({"name": name, "color": color,
+                           "gain_linked": gl, "daw_target": dt})
         return groups
 
     def _on_groups_sort_az(self):
@@ -1158,7 +1169,8 @@ class PreferencesDialog(QDialog):
         self._groups_table.setRowCount(len(groups))
         for row, entry in enumerate(groups):
             self._set_group_row(
-                row, entry["name"], entry["color"], entry["gain_linked"])
+                row, entry["name"], entry["color"],
+                entry["gain_linked"], entry.get("daw_target", ""))
         self._groups_table.blockSignals(False)
 
     def _on_groups_reset(self):
@@ -1173,6 +1185,7 @@ class PreferencesDialog(QDialog):
                 entry["name"],
                 entry["color"],
                 entry["gain_linked"],
+                entry.get("daw_target", ""),
             )
         self._groups_table.blockSignals(False)
 
@@ -1194,10 +1207,13 @@ class PreferencesDialog(QDialog):
                 chk = chk_container.findChild(QCheckBox)
                 if chk:
                     gain_linked = chk.isChecked()
+            daw_item = self._groups_table.item(row, 3)
+            daw_target = daw_item.text().strip() if daw_item else ""
             groups.append({
                 "name": name,
                 "color": color,
                 "gain_linked": gain_linked,
+                "daw_target": daw_target,
             })
         return groups
 

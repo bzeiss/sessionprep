@@ -52,31 +52,31 @@ _GUI_DEFAULTS: dict[str, Any] = {
     "group_presets": {
         "Default": [
             # Drums
-            {"name": "Kick",    "color": "Guardsman Red",        "gain_linked": True},
-            {"name": "Snare",   "color": "Dodger Blue Light",    "gain_linked": True},
-            {"name": "Toms",    "color": "Tia Maria",            "gain_linked": True},
-            {"name": "HH",      "color": "La Rioja",             "gain_linked": False},
-            {"name": "OH",      "color": "Java",                 "gain_linked": True},
-            {"name": "Room",    "color": "Purple",               "gain_linked": False},
-            {"name": "Perc",    "color": "Corn Harvest",         "gain_linked": False},
-            {"name": "Loops",   "color": "Apricot",              "gain_linked": False},
+            {"name": "Kick",    "color": "Guardsman Red",        "gain_linked": True,  "daw_target": ""},
+            {"name": "Snare",   "color": "Dodger Blue Light",    "gain_linked": True,  "daw_target": ""},
+            {"name": "Toms",    "color": "Tia Maria",            "gain_linked": True,  "daw_target": ""},
+            {"name": "HH",      "color": "La Rioja",             "gain_linked": False, "daw_target": ""},
+            {"name": "OH",      "color": "Java",                 "gain_linked": True,  "daw_target": ""},
+            {"name": "Room",    "color": "Purple",               "gain_linked": False, "daw_target": ""},
+            {"name": "Perc",    "color": "Corn Harvest",         "gain_linked": False, "daw_target": ""},
+            {"name": "Loops",   "color": "Apricot",              "gain_linked": False, "daw_target": ""},
             # Bass
-            {"name": "Bass",    "color": "Christi",              "gain_linked": False},
+            {"name": "Bass",    "color": "Christi",              "gain_linked": False, "daw_target": ""},
             # Guitars
-            {"name": "E.Gtr",   "color": "Pizza",               "gain_linked": False},
-            {"name": "A.Gtr",   "color": "Lima Dark",            "gain_linked": False},
+            {"name": "E.Gtr",   "color": "Pizza",               "gain_linked": False, "daw_target": ""},
+            {"name": "A.Gtr",   "color": "Lima Dark",            "gain_linked": False, "daw_target": ""},
             # Keys & Synths
-            {"name": "Keys",    "color": "Malachite",            "gain_linked": False},
-            {"name": "Synths",  "color": "Electric Violet Light", "gain_linked": False},
+            {"name": "Keys",    "color": "Malachite",            "gain_linked": False, "daw_target": ""},
+            {"name": "Synths",  "color": "Electric Violet Light", "gain_linked": False, "daw_target": ""},
             # Strings & Pads
-            {"name": "Strings", "color": "Eastern Blue",         "gain_linked": False},
-            {"name": "Pads",    "color": "Flirt",                "gain_linked": False},
-            {"name": "Brass",   "color": "Milano Red",           "gain_linked": False},
+            {"name": "Strings", "color": "Eastern Blue",         "gain_linked": False, "daw_target": ""},
+            {"name": "Pads",    "color": "Flirt",                "gain_linked": False, "daw_target": ""},
+            {"name": "Brass",   "color": "Milano Red",           "gain_linked": False, "daw_target": ""},
             # Vocals
-            {"name": "VOX",     "color": "Dodger Blue Dark",     "gain_linked": False},
-            {"name": "BGs",     "color": "Matisse",              "gain_linked": False},
+            {"name": "VOX",     "color": "Dodger Blue Dark",     "gain_linked": False, "daw_target": ""},
+            {"name": "BGs",     "color": "Matisse",              "gain_linked": False, "daw_target": ""},
             # Effects
-            {"name": "FX",      "color": "Lipstick",             "gain_linked": False},
+            {"name": "FX",      "color": "Lipstick",             "gain_linked": False, "daw_target": ""},
         ],
     },
 }

@@ -549,6 +549,11 @@ class SessionPrepWindow(QMainWindow):
         self._fetch_action.triggered.connect(self._on_daw_fetch)
         self._setup_toolbar.addAction(self._fetch_action)
 
+        self._auto_assign_action = QAction("Auto-Assign", self)
+        self._auto_assign_action.setEnabled(False)
+        self._auto_assign_action.triggered.connect(self._on_auto_assign)
+        self._setup_toolbar.addAction(self._auto_assign_action)
+
         self._transfer_action = QAction("Transfer", self)
         self._transfer_action.setEnabled(False)
         self._transfer_action.triggered.connect(self._on_daw_transfer)
@@ -692,10 +697,13 @@ class SessionPrepWindow(QMainWindow):
         dp = self._active_daw_processor
         connected = dp is not None and dp.connected
         self._fetch_action.setEnabled(connected)
-        has_assignments = bool(
-            self._session
-            and self._session.daw_state.get("protools", {}).get("assignments")
+        pt_state = (
+            self._session.daw_state.get("protools", {})
+            if self._session else {}
         )
+        has_folders = bool(pt_state.get("folders"))
+        has_assignments = bool(pt_state.get("assignments"))
+        self._auto_assign_action.setEnabled(connected and has_folders)
         self._transfer_action.setEnabled(connected and has_assignments)
         self._sync_action.setEnabled(False)
 
@@ -971,6 +979,66 @@ class SessionPrepWindow(QMainWindow):
         self._populate_folder_tree()
         self._populate_setup_table()
         self._update_daw_lifecycle_buttons()
+
+    @Slot()
+    def _on_auto_assign(self):
+        """Auto-assign unassigned tracks to folders based on group DAW targets."""
+        if not self._session:
+            return
+        pt_state = self._session.daw_state.get("protools", {})
+        folders = pt_state.get("folders", [])
+        assignments = pt_state.get("assignments", {})
+        if not folders:
+            return
+
+        # Build folder name lookup: lowered+trimmed name → pt_id
+        folder_by_name: dict[str, str] = {}
+        for f in folders:
+            key = f["name"].strip().lower()
+            if key and key not in folder_by_name:
+                folder_by_name[key] = f["pt_id"]
+
+        # Build group → daw_target lookup from session groups
+        group_target: dict[str, str] = {}
+        for g in self._session_groups:
+            dt = g.get("daw_target", "").strip()
+            if dt:
+                group_target[g["name"]] = dt.lower()
+
+        if not group_target:
+            self._status_bar.showMessage("Auto-Assign: no DAW targets configured.")
+            return
+
+        # Collect assignments: folder_pt_id → [filenames]
+        batch: dict[str, list[str]] = {}
+        for track in self._session.tracks:
+            # Skip already-assigned tracks
+            if track.filename in assignments:
+                continue
+            # Skip tracks without a group or without a DAW target
+            if not track.group:
+                continue
+            target_key = group_target.get(track.group)
+            if not target_key:
+                continue
+            folder_id = folder_by_name.get(target_key)
+            if not folder_id:
+                continue
+            batch.setdefault(folder_id, []).append(track.filename)
+
+        if not batch:
+            self._status_bar.showMessage("Auto-Assign: nothing to assign.")
+            return
+
+        # Apply assignments in bulk
+        total = 0
+        for folder_id, fnames in batch.items():
+            self._assign_tracks_to_folder(fnames, folder_id)
+            total += len(fnames)
+
+        self._status_bar.showMessage(
+            f"Auto-Assign: assigned {total} track(s) to "
+            f"{len(batch)} folder(s).")
 
     def _build_left_panel(self) -> QWidget:
         panel = QWidget()
@@ -1354,9 +1422,9 @@ class SessionPrepWindow(QMainWindow):
         layout.addWidget(desc)
 
         self._groups_tab_table = QTableWidget()
-        self._groups_tab_table.setColumnCount(3)
+        self._groups_tab_table.setColumnCount(4)
         self._groups_tab_table.setHorizontalHeaderLabels(
-            ["Name", "Color", "Gain-Linked"])
+            ["Name", "Color", "Gain-Linked", "DAW Target"])
         vh = self._groups_tab_table.verticalHeader()
         vh.setSectionsMovable(True)
         vh.sectionMoved.connect(self._on_groups_tab_row_moved)
@@ -1369,6 +1437,8 @@ class SessionPrepWindow(QMainWindow):
         gh.resizeSection(1, 160)
         gh.setSectionResizeMode(2, QHeaderView.Fixed)
         gh.resizeSection(2, 80)
+        gh.setSectionResizeMode(3, QHeaderView.Interactive)
+        gh.resizeSection(3, 140)
 
         self._groups_tab_table.cellChanged.connect(
             self._on_groups_tab_name_changed)
@@ -1427,7 +1497,7 @@ class SessionPrepWindow(QMainWindow):
         return QIcon(pm)
 
     def _set_groups_tab_row(self, row: int, name: str, color: str,
-                            gain_linked: bool):
+                            gain_linked: bool, daw_target: str = ""):
         """Populate one row in the session-local groups table."""
         name_item = QTableWidgetItem(name)
         self._groups_tab_table.setItem(row, 0, name_item)
@@ -1454,6 +1524,10 @@ class SessionPrepWindow(QMainWindow):
         chk_layout.addWidget(chk)
         self._groups_tab_table.setCellWidget(row, 2, chk_container)
 
+        # DAW Target name
+        daw_item = QTableWidgetItem(daw_target)
+        self._groups_tab_table.setItem(row, 3, daw_item)
+
     def _populate_groups_tab(self):
         """Populate the groups tab table from self._session_groups."""
         self._groups_tab_table.blockSignals(True)
@@ -1461,7 +1535,8 @@ class SessionPrepWindow(QMainWindow):
         self._groups_tab_table.setRowCount(len(self._session_groups))
         for row, g in enumerate(self._session_groups):
             self._set_groups_tab_row(
-                row, g["name"], g.get("color", ""), g.get("gain_linked", False)
+                row, g["name"], g.get("color", ""),
+                g.get("gain_linked", False), g.get("daw_target", "")
             )
         self._groups_tab_table.blockSignals(False)
 
@@ -1483,10 +1558,13 @@ class SessionPrepWindow(QMainWindow):
                 chk = chk_container.findChild(QCheckBox)
                 if chk:
                     gain_linked = chk.isChecked()
+            daw_item = self._groups_tab_table.item(row, 3)
+            daw_target = daw_item.text().strip() if daw_item else ""
             groups.append({
                 "name": name,
                 "color": color,
                 "gain_linked": gain_linked,
+                "daw_target": daw_target,
             })
         return groups
 
@@ -1577,7 +1655,10 @@ class SessionPrepWindow(QMainWindow):
                 chk = chk_c.findChild(QCheckBox)
                 if chk:
                     gl = chk.isChecked()
-            ordered.append({"name": name, "color": color, "gain_linked": gl})
+            daw_item = table.item(log_idx, 3)
+            dt = daw_item.text().strip() if daw_item else ""
+            ordered.append({"name": name, "color": color,
+                            "gain_linked": gl, "daw_target": dt})
         # Reset visual mapping, repopulate
         vh.blockSignals(True)
         table.blockSignals(True)
@@ -1587,7 +1668,8 @@ class SessionPrepWindow(QMainWindow):
         table.setRowCount(len(ordered))
         for row, entry in enumerate(ordered):
             self._set_groups_tab_row(
-                row, entry["name"], entry["color"], entry["gain_linked"])
+                row, entry["name"], entry["color"],
+                entry["gain_linked"], entry.get("daw_target", ""))
         table.blockSignals(False)
         vh.blockSignals(False)
         self._session_groups = ordered
