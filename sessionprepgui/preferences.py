@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 from sessionpreplib.config import ANALYSIS_PARAMS, ParamSpec
 from sessionpreplib.detectors import default_detectors
 from sessionpreplib.processors import default_processors
+from .settings import _GUI_DEFAULTS
 from .theme import PT_DEFAULT_COLORS
 
 
@@ -774,6 +775,10 @@ class PreferencesDialog(QDialog):
         remove_btn.clicked.connect(self._on_group_remove)
         btn_row.addWidget(remove_btn)
 
+        reset_btn = QPushButton("Reset to Defaults")
+        reset_btn.clicked.connect(self._on_groups_reset)
+        btn_row.addWidget(reset_btn)
+
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
@@ -850,6 +855,18 @@ class PreferencesDialog(QDialog):
         row = self._groups_table.currentRow()
         if row >= 0:
             self._groups_table.removeRow(row)
+
+    def _on_groups_reset(self):
+        defaults = _GUI_DEFAULTS.get("default_groups", [])
+        self._groups_table.setRowCount(0)
+        self._groups_table.setRowCount(len(defaults))
+        for row, entry in enumerate(defaults):
+            self._set_group_row(
+                row,
+                entry["name"],
+                entry["color"],
+                entry["gain_linked"],
+            )
 
     def _read_groups(self) -> list[dict[str, Any]]:
         """Read the groups table into a list of dicts."""

@@ -71,6 +71,14 @@
 
 - [ ] **Wrap existing functions into PlainTextRenderer class**
 
+### P3: PreferencePage Superclass Refactor
+
+- [ ] **Refactor preferences into `PreferencePage` base class with generic Reset to Defaults**
+  - Each page subclasses `PreferencePage` with `populate(config)`, `read() -> dict`, `reset_defaults()`
+  - Dialog auto-wires Reset button per page
+  - Reduces duplication, provides consistent UX across all preference pages
+  - Currently Colors and Groups have manual Reset; General/Analysis/Detectors/Processors do not
+
 ### P3: Validation Polish
 
 - [ ] **Component-level `configure()` validation**
