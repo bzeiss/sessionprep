@@ -62,14 +62,14 @@ def generate_report(
     if grouped:
         lines.extend([
             "-" * 80,
-            "TRACK GROUPS (Identical Gain Applied)",
+            "TRACK GROUPS",
             "-" * 80,
             "",
         ])
         for gid in sorted(grouped.keys()):
             g = grouped[gid]
             gain_db = g.get("gain_db", 0.0)
-            lines.append(f"{gid} | Gain Applied: {gain_db:+.1f} dB")
+            lines.append(f"{gid} | Group level: {gain_db:+.1f} dB")
             for name in sorted(g.get("members") or [], key=protools_sort_key):
                 lines.append(f"  - {name}")
             lines.append("")

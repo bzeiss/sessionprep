@@ -1795,6 +1795,7 @@ class SessionPrepWindow(QMainWindow):
             return
         for proc in self._session.processors:
             result = proc.process(track)
+            result.data["original_gain_db"] = result.gain_db
             track.processor_results[proc.id] = result
 
     # ── Batch combo helper ────────────────────────────────────────────────
@@ -2063,6 +2064,97 @@ class SessionPrepWindow(QMainWindow):
         combo.textActivated.connect(self._on_group_changed)
         self._track_table.setCellWidget(row, 6, combo)
 
+    def _apply_linked_group_levels(self):
+        """Apply group levels for gain-linked groups and update fader offsets.
+
+        1. Restore every track's ``gain_db`` to its ``original_gain_db``.
+        2. For gain-linked groups, set all members to the group minimum.
+        3. Recompute ``fader_offset`` using the stored anchor offset.
+        4. Update the gain spin-boxes and the Session Setup table.
+        """
+        if not self._session or not self._session.processors:
+            return
+
+        glm = self._gain_linked_map()
+        linked_names = {name for name, linked in glm.items() if linked}
+
+        for proc in self._session.processors:
+            pid = proc.id
+            # 1. Restore originals
+            for track in self._session.tracks:
+                if track.status != "OK":
+                    continue
+                pr = track.processor_results.get(pid)
+                if pr is None or pr.classification == "Silent":
+                    continue
+                if "original_gain_db" not in pr.data:
+                    pr.data["original_gain_db"] = pr.gain_db
+                pr.gain_db = pr.data["original_gain_db"]
+
+            # 2. Apply group levels for linked groups
+            by_group: dict[str, list] = {}
+            for track in self._session.tracks:
+                if track.status != "OK" or track.group is None:
+                    continue
+                pr = track.processor_results.get(pid)
+                if pr is None or pr.classification == "Silent":
+                    continue
+                by_group.setdefault(track.group, []).append(track)
+
+            for gname, members in by_group.items():
+                if gname not in linked_names:
+                    continue
+                orig = [m.processor_results[pid].data["original_gain_db"]
+                        for m in members]
+                group_gain = min(orig) if orig else 0.0
+                for m in members:
+                    m.processor_results[pid].gain_db = float(group_gain)
+
+            # 3. Recompute fader offsets
+            anchor_offset = self._session.config.get(
+                f"_anchor_offset_{pid}", 0.0)
+            for track in self._session.tracks:
+                if track.status != "OK":
+                    continue
+                pr = track.processor_results.get(pid)
+                if pr is None:
+                    continue
+                if pr.classification == "Silent":
+                    pr.data["fader_offset"] = 0.0
+                else:
+                    pr.data["fader_offset"] = -float(pr.gain_db) - anchor_offset
+
+        # 4. Update UI
+        self._track_table.setSortingEnabled(False)
+        for row in range(self._track_table.rowCount()):
+            fname_item = self._track_table.item(row, 0)
+            if not fname_item:
+                continue
+            fname = fname_item.text()
+            track = next(
+                (t for t in self._session.tracks if t.filename == fname), None)
+            if not track or track.status != "OK":
+                continue
+            pr = next(iter(track.processor_results.values()), None)
+            if not pr:
+                continue
+            new_gain = pr.gain_db
+            spin = self._track_table.cellWidget(row, 4)
+            if isinstance(spin, QDoubleSpinBox):
+                spin.blockSignals(True)
+                spin.setValue(new_gain)
+                spin.blockSignals(False)
+            gain_sort = self._track_table.item(row, 4)
+            if gain_sort:
+                gain_sort.setText(f"{new_gain:+.1f}")
+                gain_sort._sort_key = new_gain
+        self._track_table.setSortingEnabled(True)
+        self._populate_setup_table()
+
+        # Refresh the File detail tab so it reflects the updated gain
+        if self._current_track and self._current_track.status == "OK":
+            self._refresh_file_tab(self._current_track)
+
     def _auto_fit_group_column(self):
         """Resize the Group column (6) to fit the widest current combo text."""
         max_w = 0
@@ -2131,7 +2223,7 @@ class SessionPrepWindow(QMainWindow):
             self._track_table.setSortingEnabled(True)
             self._track_table.restore_selection(batch_keys)
             self._auto_fit_group_column()
-            self._populate_setup_table()
+            self._apply_linked_group_levels()
         else:
             if track.group == new_group:
                 return
@@ -2147,7 +2239,7 @@ class SessionPrepWindow(QMainWindow):
                     sort_item._sort_key = rank
                 self._apply_row_group_color(row, new_group)
             self._auto_fit_group_column()
-            self._populate_setup_table()
+            self._apply_linked_group_levels()
 
     def _refresh_group_combos(self):
         """Refresh the items in all Group combo boxes from _session_groups."""
@@ -2202,7 +2294,7 @@ class SessionPrepWindow(QMainWindow):
                 self._apply_row_group_color(row, gname, gcm)
 
         self._auto_fit_group_column()
-        self._populate_setup_table()
+        self._apply_linked_group_levels()
 
     def _reanalyze_single_track(self, track):
         """Re-run all track detectors + processors for a single track (sync)."""
@@ -2220,6 +2312,9 @@ class SessionPrepWindow(QMainWindow):
 
         # Re-run processors
         self._recalculate_processor(track)
+
+        # Re-apply group levels for any gain-linked groups this track belongs to
+        self._apply_linked_group_levels()
 
         # Update UI
         self._update_track_row(track.filename)

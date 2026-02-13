@@ -200,10 +200,10 @@ class Pipeline:
         """
         Run all audio processors in priority order.
         Computes gains and classifications without modifying audio.
-        Also handles group gain equalization and fader offsets.
+        Also handles group gain levelling and fader offsets.
 
         Per-track processors run in parallel using a thread pool.
-        Group equalization and fader offsets run after all tracks complete.
+        Group levelling and fader offsets run after all tracks complete.
         """
         total = len(session.tracks)
         ok_items = [
@@ -226,8 +226,8 @@ class Pipeline:
                                filename=track.filename,
                                index=0, total=total)
 
-        # --- Group gain equalization ---
-        self._equalize_group_gains(session)
+        # --- Group gain levelling ---
+        self._apply_group_levels(session)
 
         # --- Fader offsets ---
         self._compute_fader_offsets(session)
@@ -237,8 +237,15 @@ class Pipeline:
 
         return session
 
-    def _equalize_group_gains(self, session: SessionContext):
-        """Grouped tracks get the minimum gain of the group."""
+    def _apply_group_levels(self, session: SessionContext):
+        """Apply group levels for gain-linked groups (minimum gain of the group).
+
+        Reads ``_gain_linked_groups`` from *session.config* — a set of group
+        names whose members should share the same gain.  If the key is absent
+        **all** groups are levelled (backward-compatible CLI behaviour).
+        """
+        linked: set[str] | None = session.config.get("_gain_linked_groups")
+
         for proc in self.audio_processors:
             by_gid: dict[str, list[TrackContext]] = {}
             for track in session.tracks:
@@ -247,11 +254,17 @@ class Pipeline:
                 pr = track.processor_results.get(proc.id)
                 if pr is None or pr.classification == "Silent":
                     continue
+                # Preserve the per-track gain before any group adjustment
+                if "original_gain_db" not in pr.data:
+                    pr.data["original_gain_db"] = pr.gain_db
                 by_gid.setdefault(track.group, []).append(track)
 
             for gid, members in by_gid.items():
-                gains = [m.processor_results[proc.id].gain_db for m in members]
-                group_gain = min(gains) if gains else 0.0
+                if linked is not None and gid not in linked:
+                    continue
+                orig = [m.processor_results[proc.id].data["original_gain_db"]
+                        for m in members]
+                group_gain = min(orig) if orig else 0.0
                 for m in members:
                     m.processor_results[proc.id].gain_db = float(group_gain)
 
@@ -292,6 +305,9 @@ class Pipeline:
                     for t in valid
                 ]
                 anchor_offset = max(fader_offsets) if fader_offsets else 0.0
+
+            # Store anchor offset for GUI-side recomputation
+            session.config[f"_anchor_offset_{proc.id}"] = anchor_offset
 
             if anchor_offset != 0.0:
                 for track in valid:

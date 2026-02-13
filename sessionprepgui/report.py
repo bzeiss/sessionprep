@@ -246,8 +246,15 @@ def render_track_detail_html(track, session=None, *, show_clean: bool = True,
                     f'&middot; {pr.gain_db:+.1f} dB</div>'
                 )
             if track.group:
-                parts.append(f'<div style="margin-left:8px; margin-top:4px;">'
-                             f'Group: {esc(track.group)}</div>')
+                original = pr.data.get("original_gain_db", pr.gain_db)
+                delta = pr.gain_db - original
+                parts.append(
+                    f'<div style="margin-left:8px; margin-top:4px;">'
+                    f'Group: <b>{esc(track.group)}</b>'
+                    f' &nbsp;&middot;&nbsp; Group level: <b>{pr.gain_db:+.1f} dB</b>'
+                    f' (individual: {original:+.1f} dB,'
+                    f' &Delta; {delta:+.1f} dB)</div>'
+                )
 
         # Detector results
         if track.detector_results:
