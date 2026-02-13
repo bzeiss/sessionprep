@@ -319,8 +319,8 @@ Thresholds are adjustable:
   - `--decay_lookahead_ms 200` (default) — time window for measuring decay
   - `--sparse_density_threshold 0.25` (default) — tracks with less active content are sparse
 
-If you see repeated `Normalization hints` (or systematic misclassification), adjust
-thresholds for the session, and use the force flags to lock edge cases.
+If you see systematic misclassification, adjust thresholds for the session,
+and use the force flags to lock edge cases.
 
 ### Multi-mic sources (phase vs non-linearity)
 
@@ -331,20 +331,18 @@ prefer bus processing, or keep heavy saturation/compression on the group bus.
 
 Track grouping (multi-mic and bundles):
 If a set of tracks should behave as a single instrument (e.g. kick in/out/sub,
-snare top/bottom, BV stacks), use `--group` so those files get identical applied
-gain. This preserves internal balance and avoids changing how the bundle hits a
-bus compressor.
+snare top/bottom, BV stacks), use `--group Name:pattern1,pattern2` so those
+files get identical applied gain. This preserves internal balance and avoids
+changing how the bundle hits a bus compressor.
 
-Overlaps matter:
-  - A file can accidentally match multiple group specs (for example a broad pattern
-    like `Kick*` plus a specific list like `Kick In,Kick Out`).
-  - Overlaps are ambiguous because they can change which tracks get locked together,
-    which can change gain decisions and downstream fader offsets.
+Example:
+  ```
+  --group Kick:kick,kick_sub --group OH:overhead,oh --group Toms:tom
+  ```
 
-You can control overlap behavior with `--group_overlap`:
-  - `warn` (default): keep the first match and emit an ATTENTION warning.
-  - `error`: abort if any file matches multiple groups.
-  - `merge`: merge overlapping groups into a single larger group.
+Patterns support substring, glob (`*`/`?`), or exact match (suffix `$`).
+First match wins — if a file matches multiple groups, it is assigned to the
+first matching group and a warning is printed.
 
 ### Windowing and anchor strategy
 

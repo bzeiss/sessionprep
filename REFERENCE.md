@@ -15,7 +15,6 @@ For usage and quick start, see [README.md](README.md).
 3. [Analysis Metrics (Stage B)](#3-analysis-metrics-stage-b)
 4. [Processing (Stage C)](#4-processing-stage-c)
 5. [Fader Restoration (Stage D)](#5-fader-restoration-stage-d)
-6. [Normalization Hints](#6-normalization-hints)
 
 ---
 
@@ -200,7 +199,7 @@ visible issue.
 
 - **What it means:** a file matched multiple `--group` specs.
 - **Why it matters:** indicates ambiguous patterns; grouping may not apply as intended.
-- **Controls:** `--group`, `--group_overlap`
+- **Controls:** `--group Name:pattern1,pattern2` (first match wins; overlaps produce a warning)
 - **Categorization:**
   - ATTENTION: `Grouping overlaps` with overlap details.
 
@@ -358,8 +357,6 @@ The anchor is then used to:
   - Helps pick a more appropriate normalization strategy.
   - Explains why certain tracks behave differently when you drive dynamics and
     saturation processing.
-  - If either crest or decay is close to its threshold, the `Normalization hints`
-    section will flag an edge case and suggest `--force_transient` / `--force_sustained`.
   - Sparse tracks (e.g., toms that only play occasionally) are caught by the
     density metric even when crest and decay are ambiguous.
 
@@ -421,35 +418,9 @@ are more consistent. Per-insert gain staging is still part of mixing.
 
 ---
 
-## 6. Normalization Hints
+## 6. GUI Waveform Controls
 
-This section (in the output) is not a "health" detector bucket. It is a set of
-optional hints related to how the transient/sustained classification may affect
-normalization. It is always printed (even without `-x`) so you can review edge
-cases without having to re-run in execute mode.
-
-In the `Normalization hints` section, "near transient/sustained threshold" means
-the file's crest factor or envelope decay is very close to its respective
-threshold (`--crest_threshold` default `12 dB`, `--decay_db_threshold` default
-`12 dB`).
-
-Why this matters:
-  - The classification uses three metrics (crest factor, envelope decay rate,
-    and density) that vote together. When a dynamic metric is borderline, the
-    classification could flip with small changes in the audio.
-  - Transient tracks are peak-normalized (`--target_peak`).
-  - Sustained tracks are RMS-normalized (`--target_rms`) with a peak ceiling.
-
-If either metric is within +/-2 dB of its threshold, the warning is a prompt
-to sanity-check the musical intent and optionally override:
-  - Use `--force_transient` for drum-like / hit-like material.
-  - Use `--force_sustained` for pad-like / sustained material.
-
----
-
-## 7. GUI Waveform Controls
-
-### 7.1 Mouse
+### 6.1 Mouse
 
 | Action | Effect |
 |--------|--------|
@@ -460,7 +431,7 @@ to sanity-check the musical intent and optionally override:
 | **Shift + Alt + wheel** | Scroll up / down (frequency pan, spectrogram mode) |
 | **Shift + wheel** | Scroll left / right |
 
-### 7.2 Keyboard Shortcuts
+### 6.2 Keyboard Shortcuts
 
 | Key | Effect |
 |-----|--------|
@@ -470,7 +441,7 @@ to sanity-check the musical intent and optionally override:
 > The waveform must have keyboard focus (click it first) for keyboard
 > shortcuts to work.
 
-### 7.3 Toolbar Buttons
+### 6.3 Toolbar Buttons
 
 | Button | Effect |
 |--------|--------|
@@ -488,9 +459,9 @@ to sanity-check the musical intent and optionally override:
 
 ---
 
-## 8. GUI Track Table Controls
+## 7. GUI Track Table Controls
 
-### 8.1 Selection
+### 7.1 Selection
 
 Standard Extended Selection applies to the track table:
 
@@ -500,7 +471,7 @@ Standard Extended Selection applies to the track table:
 | **Shift + click** | Extend selection to contiguous range |
 | **Ctrl + click** | Toggle individual rows (non-adjacent selection) |
 
-### 8.2 Batch Editing
+### 7.2 Batch Editing
 
 Hold **Alt+Shift** and click a dropdown in any selected row to apply the
 chosen value to **all** selected rows.  This mirrors the Pro Tools convention
@@ -522,7 +493,7 @@ Supported batch dropdowns:
 | **RMS Anchor** | 5 | Override per-track RMS anchor; triggers full re-analysis (detectors + processors) |
 | **Classification** | 3 | Override per-track classification; triggers processor-only re-calculation |
 
-### 8.3 RMS Anchor Override
+### 7.3 RMS Anchor Override
 
 Per-track dropdown overriding the global `rms_anchor` analysis setting.
 
@@ -539,7 +510,7 @@ Changing the anchor re-runs all detectors and processors for the affected
 track(s), since the anchor value influences both tail exceedance detection and
 gain calculation.
 
-### 8.4 Classification Override
+### 7.4 Classification Override
 
 Per-track dropdown overriding the auto-detected audio classification.
 

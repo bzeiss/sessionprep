@@ -14,7 +14,6 @@ from sessionpreplib.chunks import read_chunks, STANDARD_CHUNKS, detect_origin
 def render_summary_html(
     summary: dict,
     *,
-    show_hints: bool = True,
     show_faders: bool = True,
     show_clean: bool = True,
 ) -> str:
@@ -23,7 +22,6 @@ def render_summary_html(
     attention = summary.get("attention") or []
     information = summary.get("information") or []
     clean = summary.get("clean") or []
-    normalization_hints = summary.get("normalization_hints") or []
     clean_count = int(summary.get("clean_count", 0))
     total_ok = int(summary.get("total_ok", 0))
 
@@ -84,18 +82,6 @@ def render_summary_html(
         parts.append(f'<div style="color:{COLORS["clean"]}; font-size:12pt; font-weight:bold; {section_spacing}">'
                      f'\U0001f7e2 CLEAN</div>')
         parts.append(render_groups(clean, COLORS["clean"]))
-
-    # Normalization hints (optional)
-    if show_hints:
-        parts.append(f'<div style="color:{COLORS["hints"]}; font-size:12pt; font-weight:bold; {section_spacing}">'
-                     f'\U0001f50e Normalization Hints</div>')
-        if normalization_hints:
-            for hint in normalization_hints:
-                parts.append(f'<div style="margin-left:16px; color:{COLORS["hints"]};">'
-                             f'&bull; {esc(hint)}</div>')
-        else:
-            parts.append(f'<div style="margin-left:16px; color:{COLORS["clean"]};">'
-                         f'&bull; None</div>')
 
     return "\n".join(parts)
 

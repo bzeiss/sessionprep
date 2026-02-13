@@ -21,7 +21,7 @@ from .config import ConfigError, validate_config
 from .utils import (
     protools_sort_key,
     parse_group_specs,
-    assign_groups_to_files_with_policy,
+    assign_groups,
 )
 
 
@@ -447,36 +447,17 @@ def load_session(
 
     # Group assignment
     group_args = config.get("group", [])
-    group_overlap_policy = config.get("group_overlap", "warn")
     group_specs = parse_group_specs(group_args)
 
     if group_specs:
         filenames = [t.filename for t in tracks]
-        assignments, overlaps = assign_groups_to_files_with_policy(
-            filenames, group_specs, overlap_policy=group_overlap_policy,
-        )
+        assignments, warnings = assign_groups(filenames, group_specs)
         session.groups = assignments
-        session.group_overlaps = overlaps
 
         for track in tracks:
             track.group = assignments.get(track.filename)
 
-        # Generate overlap warnings
-        if overlaps:
-            if group_overlap_policy == "merge":
-                for fname, matched in overlaps:
-                    root_gid = assignments.get(fname)
-                    matched_str = ", ".join(matched)
-                    session.warnings.append(
-                        f"Grouping overlap: {fname} matched multiple groups "
-                        f"({matched_str}); merged into {root_gid}"
-                    )
-            else:
-                for fname, keep_gid, drop_gid in overlaps:
-                    session.warnings.append(
-                        f"Grouping overlap: {fname} matched multiple groups "
-                        f"({keep_gid}, {drop_gid}); using {keep_gid}"
-                    )
+        session.warnings.extend(warnings)
 
     return session
 

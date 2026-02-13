@@ -110,7 +110,6 @@ class SessionContext:
     tracks: list[TrackContext]
     config: dict[str, Any]
     groups: dict[str, str] = field(default_factory=dict)
-    group_overlaps: list = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     detectors: list = field(default_factory=list)
     processors: list = field(default_factory=list)

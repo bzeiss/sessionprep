@@ -1319,7 +1319,7 @@ class SessionPrepWindow(QMainWindow):
         if not self._summary or not self._session:
             return
         html = render_summary_html(
-            self._summary, show_hints=False, show_faders=False,
+            self._summary, show_faders=False,
             show_clean=self._show_clean,
         )
         self._summary_view.setHtml(self._wrap_html(html))

@@ -520,7 +520,6 @@ class SessionContext:
     tracks: list[TrackContext]
     config: dict[str, Any]
     groups: dict[str, str] = field(default_factory=dict)
-    group_overlaps: list = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     detectors: list = field(default_factory=list)
     processors: list = field(default_factory=list)
@@ -592,9 +591,8 @@ Contains audio I/O, cached DSP helpers, and stateless DSP functions.
 
 - `protools_sort_key(filename) -> str` — sort key matching Pro Tools behavior
 - `matches_keywords(filename, keywords) -> bool` — substring, glob, exact (`$` suffix) matching
-- `parse_group_specs(group_args) -> list[dict]`
-- `assign_groups_to_files_with_policy(filenames, group_specs, overlap_policy) -> (dict, list)`
-  Supports `"warn"`, `"error"`, `"merge"` overlap policies with union-find for merge.
+- `parse_group_specs(group_args) -> list[dict]` — parses `Name:pattern1,pattern2` syntax (mandatory `Name:` prefix; raises `ValueError` on invalid input)
+- `assign_groups(filenames, group_specs) -> (dict, list[str])` — first-match-wins assignment; returns `(filename→group_name, warnings)`
 
 ---
 
@@ -790,9 +788,9 @@ class AudioProcessor(ABC):
   - Transient -> gain = target_peak - peak
   - Sustained -> gain = min(target_rms - rms, target_peak - peak)
 
-### 7.4 Group Gain Equalization
+### 7.4 Group Levelling
 
-Implemented as a post-processing step in `Pipeline._equalize_group_gains()`.
+Implemented as a post-processing step in `Pipeline._apply_group_levels()`.
 After all processors run, grouped tracks receive the minimum gain of the group.
 
 ### 7.5 Fader Offsets
@@ -870,7 +868,7 @@ large).
 at the number of tracks.
 
 `plan()` internally calls:
-- `_equalize_group_gains()` — grouped tracks get minimum gain
+- `_apply_group_levels()` — grouped tracks get minimum gain
 - `_compute_fader_offsets()` — inverse gain + anchor adjustment
 
 ### 8.5 `load_session()` Helper
@@ -879,8 +877,8 @@ at the number of tracks.
 def load_session(source_dir, config, event_bus=None) -> SessionContext
 ```
 
-Loads all WAVs from `source_dir` in parallel, assigns groups, generates
-overlap warnings.
+Loads all WAVs from `source_dir` in parallel, assigns groups (named,
+first-match-wins), appends overlap warnings to `session.warnings`.
 
 ### 8.6 Topological Sort
 
@@ -966,7 +964,7 @@ Example `metal_session.json`:
     "gate_relative_db": 40.0,     "tail_max_regions": 20,
     "tail_min_exceed_db": 3.0,    "tail_hop_ms": 10,
     "force_transient": [],         "force_sustained": [],
-    "group": [],                   "group_overlap": "warn",
+    "group": [],
     "anchor": None,                "normalize_faders": False,
     "execute": False,              "overwrite": False,
     "output_folder": "processed",  "backup": "_originals",
@@ -1026,7 +1024,6 @@ Aggregates detector results into the four-category summary structure:
     "attention": [...],
     "information": [...],
     "clean": [...],
-    "normalization_hints": [...],
     "clean_count": int,
     "total_ok": int,
     "overview": {...},
@@ -1036,7 +1033,7 @@ Aggregates detector results into the four-category summary structure:
 Handles: file errors, format/length mismatches, clipping, DC offset, stereo
 compatibility (correlation + mono folddown combined), dual-mono, silence,
 one-sided silence, subsonic, tail exceedance, grouping overlaps, clean
-summaries, normalization hints (near-threshold crest), and overview statistics.
+summaries, and overview statistics.
 
 ### 12.2 `render_diagnostic_summary_text(summary) -> str`
 
@@ -1320,7 +1317,6 @@ file in the OS-specific user preferences directory:
         "rms_anchor": "percentile",
         "rms_percentile": 95.0,
         "gate_relative_db": 40.0,
-        "group_overlap": "warn",
         "normalize_faders": false
     },
     "detectors": {
@@ -1381,7 +1377,7 @@ The CLI is **not** affected by this file — it continues to use its own
 | `subsonic_ratio_db()` | `audio.py` (`subsonic_stft_analysis`) + `detectors/subsonic.py` |
 | `calculate_gain()` | `processors/bimodal_normalize.py` |
 | `matches_keywords()` | `utils.py` |
-| `parse_group_specs()` / `assign_groups_to_files*()` | `utils.py` |
+| `parse_group_specs()` / `assign_groups()` | `utils.py` |
 | `build_session_overview()` | Session-level detectors + `rendering.py` |
 | `build_diagnostic_summary()` | `rendering.py` |
 | `render_diagnostic_summary_text()` | `rendering.py` |
@@ -1411,6 +1407,6 @@ SessionQueue                          manages N jobs, priority-ordered
             |-- analyze()             -> TrackDetectors (topo-sorted)
             |                         -> SessionDetectors
             |-- plan()                -> AudioProcessors (priority-sorted)
-            |                         -> Group equalization + fader offsets
+            |                         -> Group levelling + fader offsets
             +-- execute()             -> AudioProcessors.apply() + file write
 ```

@@ -82,7 +82,6 @@ def default_config() -> dict[str, Any]:
         "force_transient": [],
         "force_sustained": [],
         "group": [],
-        "group_overlap": "warn",
         "anchor": None,
         "normalize_faders": False,
         "execute": False,
@@ -224,12 +223,6 @@ ANALYSIS_PARAMS: list[ParamSpec] = [
         ),
     ),
     # -- Global processing defaults ------------------------------------------
-    ParamSpec(
-        key="group_overlap", type=str, default="warn",
-        choices=["warn", "error", "merge"],
-        label="Group overlap handling",
-        description="Default behaviour when a track matches multiple groups.",
-    ),
     ParamSpec(
         key="normalize_faders", type=bool, default=False,
         label="Normalize fader offsets",

@@ -109,7 +109,7 @@
 ### P3: Group Gain as Processor
 
 - [ ] **Extract `GroupGainProcessor` at `PRIORITY_POST` (200)**
-  - Currently implemented as `Pipeline._equalize_group_gains()` post-step
+  - Currently implemented as `Pipeline._apply_group_levels()` post-step
   - Moving to a processor makes it disableable/replaceable
 
 ---
@@ -145,13 +145,10 @@
 
 ### UX / Output Quality
 
-- [ ] **Reduce normalization hint noise** (Status: ❌) `NEW`
-  - Problem: In example output, 11 of 14 files triggered "near threshold" warnings. That's not actionable—it's noise.
-  - Options:
-    1. Tighten tolerance from ±2 dB to ±1 dB
-    2. Make hints opt-in: `--show_normalization_hints`
-    3. Only show top N most borderline cases
-  - Recommendation: Option 2 (off by default)
+- [x] **Reduce normalization hint noise** (Status: ✅ Done)
+  - Removed normalization hints entirely — the three-metric classifier
+    (crest + decay + density) makes single-metric "near threshold" warnings
+    obsolete.
 
 - [ ] **Auto-generate email-ready issue summary** (Status: ❌)
   - Why: Detection without communication is incomplete. This is workflow gold.
@@ -430,6 +427,7 @@
 | ~~**5**~~ | ~~Subsonic improvements~~ | ~~Per-channel analysis, Windowed option, Documentation~~ → ✅ Done (STFT speedup, per-channel, windowed, docs) |
 | **6** | Auto-fix capabilities | DC removal, SRC |
 | ~~**7**~~ | ~~Classification v2~~ | ~~Crest improvements~~ → ✅ Done (audio classifier with decay metric) |
+| ~~**7b**~~ | ~~Simplify CLI grouping~~ | ~~Overlap policies, anonymous IDs~~ → ✅ Done (named groups, first-match-wins, no overlap policy) |
 | **8** | DAW scripting | DawProcessor ABC, backends, PTSL integration |
 | **Ongoing** | Low-hanging fruit | Stereo narrowness, Start offset, Name mismatch, `rich` optional |
 
@@ -442,7 +440,7 @@
 | Over-compression / brick-wall limiting | P0 | Mix engineer feedback |
 | Noise floor / SNR estimation | P0 | Mix engineer feedback |
 | Multi-mic phase coherence | P0 | Mix engineer feedback |
-| Reduce normalization hint noise | P0 | Mix engineer feedback |
+| ~~Reduce normalization hint noise~~ | P0 | ✅ Resolved (normalization hints removed — obsolete with three-metric classifier) |
 | Email summary generator | P0 | Workflow requirement |
 | "Effectively silent" / noise-only detection (rare) | P1 | User note (close to silence) |
 | Click/pop detection | P1 | Mix engineer feedback |
@@ -488,3 +486,5 @@
 | ~~Subsonic STFT speedup~~ | — | ✅ Resolved (scipy.signal.stft replaces per-window Python FFT loop; scipy promoted to core dep) |
 | ~~Scipy as core dependency~~ | — | ✅ Resolved (scipy>=1.12 promoted from gui optional to core dependencies; used by subsonic STFT + spectrogram) |
 | ~~Batch RMS anchor / classification override~~ | — | ✅ Resolved (BatchEditTableWidget + BatchComboBox in widgets.py, selectionCommand override preserves multi-selection, Alt+Shift batch apply, async BatchReanalyzeWorker with progress) |
+| ~~CLI grouping simplification~~ | — | ✅ Resolved (named groups via `Name:pattern` syntax, first-match-wins, overlap warnings, removed `--group_overlap`/union-find/merge) |
+| ~~Group levelling terminology~~ | — | ✅ Resolved ("equalize" → "group level" throughout codebase; `_equalize_group_gains` → `_apply_group_levels`) |

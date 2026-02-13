@@ -34,7 +34,6 @@ def build_diagnostic_summary(
         "attention": [...],
         "information": [...],
         "clean": [...],
-        "normalization_hints": [...],
         "clean_count": int,
         "total_ok": int,
         "overview": {...},
@@ -377,21 +376,6 @@ def build_diagnostic_summary(
         add_group(clean_groups, "No significant subsonic content detected",
                   None, [], standalone=True)
 
-    # --- Normalization hints ---
-    normalization_hints = []
-    crest_threshold = session.config.get("crest_threshold", 12.0)
-    for t in ok_tracks:
-        crest_r = t.detector_results.get("audio_classifier")
-        if crest_r is None:
-            continue
-        if crest_r.data.get("near_threshold"):
-            crest = crest_r.data.get("crest", 0.0)
-            normalization_hints.append(
-                f"{t.filename}: near transient/sustained threshold "
-                f"(crest {crest:.1f} dB vs {crest_threshold:.1f} dB). "
-                f"Consider forcing classification if it feels wrong."
-            )
-
     # Count clean tracks
     clean_count = len([t for t in ok_tracks if t.filename not in issue_names])
 
@@ -445,7 +429,6 @@ def build_diagnostic_summary(
         "attention": attention_groups,
         "information": info_groups,
         "clean": clean_groups,
-        "normalization_hints": normalization_hints,
         "clean_count": int(clean_count),
         "total_ok": int(total_ok),
         "overview": overview,
@@ -462,7 +445,6 @@ def render_diagnostic_summary_text(summary: dict[str, Any]) -> str:
     attention = summary.get("attention") or []
     information = summary.get("information") or []
     clean = summary.get("clean") or []
-    normalization_hints = summary.get("normalization_hints") or []
     clean_count = int(summary.get("clean_count", 0))
     total_ok = int(summary.get("total_ok", 0))
 
@@ -521,11 +503,4 @@ def render_diagnostic_summary_text(summary: dict[str, Any]) -> str:
     else:
         lines.append("   - None")
 
-    lines.append("")
-    lines.append("\U0001f50e Normalization hints")
-    if normalization_hints:
-        for hint in normalization_hints:
-            lines.append(f"   - {hint}")
-    else:
-        lines.append("   - None")
     return "\n".join(lines)

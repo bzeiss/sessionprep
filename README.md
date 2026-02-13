@@ -167,60 +167,52 @@ For the engineering rationale, see [TECHNICAL.md](TECHNICAL.md).
 
 ### Basic analysis (dry-run)
 ```bash
-python sessionprep.py .
+uv run python sessionprep.py .
 ```
 
 ### Execute processing
 ```bash
-python sessionprep.py . -x
+uv run python sessionprep.py . -x
 ```
 
 ### Force classification overrides
 ```bash
-python sessionprep.py . -x --force_transient 808 snare --force_sustained pad
+uv run python sessionprep.py . -x --force_transient 808 snare --force_sustained pad
 ```
 
 ### Hotter calibration (modern plugins)
 ```bash
-python sessionprep.py . -x --target_rms -16
+uv run python sessionprep.py . -x --target_rms -16
 ```
 
 ### Safety-first RMS anchor (strict max window)
 ```bash
-python sessionprep.py . -x --rms_anchor max
+uv run python sessionprep.py . -x --rms_anchor max
 ```
 
 ### Tune the relative gate (sparse tracks)
 ```bash
-python sessionprep.py . -x --gate_relative_db 30
+uv run python sessionprep.py . -x --gate_relative_db 30
 ```
 
 ### Anchor track (keep one fader at 0 dB)
 ```bash
-python sessionprep.py . -x --anchor "Kick"
+uv run python sessionprep.py . -x --anchor "Kick"
 ```
 
 ### Custom report filenames
 ```bash
-python sessionprep.py . -x --report my_report.txt --json my_report.json
+uv run python sessionprep.py . -x --report my_report.txt --json my_report.json
 ```
 
 ### Group related tracks (identical gain)
 ```bash
-python sessionprep.py . -x --group "Kick In,Kick Out,Kick Sub" --group "BV*"
+uv run python sessionprep.py . -x --group Kick:kick,kick_sub --group OH:overhead,oh --group Toms:tom
 ```
 
-### Control grouping overlaps
-```bash
-# Warn on overlap (default)
-python sessionprep.py . -x --group "Kick In,Kick Out" --group "Kick*" --group_overlap warn
-
-# Abort on overlap
-python sessionprep.py . -x --group "Kick In,Kick Out" --group "Kick*" --group_overlap error
-
-# Merge overlapping groups
-python sessionprep.py . -x --group "Kick In,Kick Out" --group "Kick*" --group_overlap merge
-```
+Groups use `Name:pattern1,pattern2` syntax. Patterns support substring, glob
+(`*`/`?`), or exact match (suffix `$`). First match wins; if a file matches
+multiple groups a warning is printed.
 
 ---
 
