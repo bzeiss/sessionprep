@@ -749,6 +749,8 @@ class PreferencesDialog(QDialog):
         gh.setSectionResizeMode(2, QHeaderView.Fixed)
         gh.resizeSection(2, 80)
 
+        self._groups_table.cellChanged.connect(self._on_group_name_changed)
+
         # Populate from config
         groups = self._config.get("gui", {}).get("default_groups", [])
         self._groups_table.setRowCount(len(groups))
@@ -842,12 +844,53 @@ class PreferencesDialog(QDialog):
         chk_layout.addWidget(chk)
         self._groups_table.setCellWidget(row, 2, chk_container)
 
+    def _unique_group_name(self, base: str = "New Group") -> str:
+        """Generate a unique group name for the groups table."""
+        existing = self._group_names_in_table(self._groups_table)
+        if base not in existing:
+            return base
+        n = 2
+        while f"{base} {n}" in existing:
+            n += 1
+        return f"{base} {n}"
+
+    @staticmethod
+    def _group_names_in_table(table: QTableWidget,
+                              exclude_row: int = -1) -> set[str]:
+        """Collect all group names from a table, optionally excluding one row."""
+        names: set[str] = set()
+        for r in range(table.rowCount()):
+            if r == exclude_row:
+                continue
+            item = table.item(r, 0)
+            if item:
+                n = item.text().strip()
+                if n:
+                    names.add(n)
+        return names
+
+    def _on_group_name_changed(self, row: int, col: int):
+        """Revert a group name edit if it creates a duplicate."""
+        if col != 0:
+            return
+        item = self._groups_table.item(row, 0)
+        if not item:
+            return
+        name = item.text().strip()
+        others = self._group_names_in_table(self._groups_table,
+                                            exclude_row=row)
+        if name in others:
+            # Block signals to avoid recursion, revert to unique name
+            self._groups_table.blockSignals(True)
+            item.setText(self._unique_group_name(name))
+            self._groups_table.blockSignals(False)
+
     def _on_group_add(self):
         row = self._groups_table.rowCount()
         self._groups_table.insertRow(row)
         color_names = self._color_names()
         default_color = color_names[0] if color_names else ""
-        self._set_group_row(row, "New Group", default_color, False)
+        self._set_group_row(row, self._unique_group_name(), default_color, False)
         self._groups_table.scrollToBottom()
         self._groups_table.editItem(self._groups_table.item(row, 0))
 

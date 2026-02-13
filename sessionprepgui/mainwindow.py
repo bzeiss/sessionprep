@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import copy
 import os
 import sys
 
 from PySide6.QtCore import Qt, Slot, QSize, QTimer, QUrl, QMimeData
-from PySide6.QtGui import QAction, QActionGroup, QFont, QColor, QIcon, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QActionGroup, QFont, QColor, QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -41,7 +43,7 @@ from sessionpreplib.detector import TrackDetector
 from sessionpreplib.detectors import detector_help_map
 from sessionpreplib.utils import protools_sort_key
 
-from .settings import load_config, config_path
+from .settings import load_config, config_path, _GUI_DEFAULTS
 from .theme import (
     COLORS,
     FILE_COLOR_OK,
@@ -49,10 +51,11 @@ from .theme import (
     FILE_COLOR_SILENT,
     FILE_COLOR_TRANSIENT,
     FILE_COLOR_SUSTAINED,
+    PT_DEFAULT_COLORS,
     apply_dark_theme,
 )
 from .helpers import track_analysis_label, esc, fmt_time
-from .preferences import PreferencesDialog
+from .preferences import PreferencesDialog, _argb_to_qcolor
 from .report import render_summary_html, render_track_detail_html
 from .widgets import BatchEditTableWidget, BatchComboBox
 from .worker import AnalyzeWorker, BatchReanalyzeWorker
@@ -62,6 +65,7 @@ from .playback import PlaybackController
 
 _TAB_SUMMARY = 0
 _TAB_FILE = 1
+_TAB_GROUPS = 2
 
 _PAGE_PROGRESS = 0
 _PAGE_TABS = 1
@@ -173,6 +177,7 @@ class SessionPrepWindow(QMainWindow):
         self._batch_filenames: set[str] = set()
         self._wf_worker: WaveformLoadWorker | None = None
         self._current_track = None
+        self._session_groups: list[dict] = []
         self._detector_help = detector_help_map()
 
         # Load persistent GUI configuration
@@ -696,12 +701,219 @@ class SessionPrepWindow(QMainWindow):
         self._detail_tabs.addTab(file_splitter, "File")
         self._detail_tabs.setTabEnabled(_TAB_FILE, False)
 
+        # Groups tab — session-local group editor
+        self._detail_tabs.addTab(self._build_groups_tab(), "Groups")
+        self._detail_tabs.setTabEnabled(_TAB_GROUPS, False)
+
         self._right_stack.addWidget(self._detail_tabs)  # index 1
 
         # Start on the tabs page (summary empty until first analysis)
         self._right_stack.setCurrentIndex(_PAGE_TABS)
 
         return self._right_stack
+
+    # ── Groups tab (session-local group editor) ─────────────────────────
+
+    def _build_groups_tab(self) -> QWidget:
+        """Build the session-local Groups editor tab."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        desc = QLabel(
+            "Session-local track groups. Changes here apply only to "
+            "the current session."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #888; font-size: 9pt;")
+        layout.addWidget(desc)
+
+        self._groups_tab_table = QTableWidget()
+        self._groups_tab_table.setColumnCount(3)
+        self._groups_tab_table.setHorizontalHeaderLabels(
+            ["Name", "Color", "Gain-Linked"])
+        self._groups_tab_table.verticalHeader().setVisible(False)
+        self._groups_tab_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._groups_tab_table.setSelectionMode(QTableWidget.SingleSelection)
+        gh = self._groups_tab_table.horizontalHeader()
+        gh.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        gh.setSectionResizeMode(0, QHeaderView.Stretch)
+        gh.setSectionResizeMode(1, QHeaderView.Fixed)
+        gh.resizeSection(1, 160)
+        gh.setSectionResizeMode(2, QHeaderView.Fixed)
+        gh.resizeSection(2, 80)
+
+        self._groups_tab_table.cellChanged.connect(
+            self._on_groups_tab_name_changed)
+
+        layout.addWidget(self._groups_tab_table, 1)
+
+        # Buttons
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.setSpacing(6)
+
+        add_btn = QPushButton("Add")
+        add_btn.clicked.connect(self._on_groups_tab_add)
+        btn_row.addWidget(add_btn)
+
+        remove_btn = QPushButton("Remove")
+        remove_btn.clicked.connect(self._on_groups_tab_remove)
+        btn_row.addWidget(remove_btn)
+
+        reset_btn = QPushButton("Reset to Defaults")
+        reset_btn.clicked.connect(self._on_groups_tab_reset)
+        btn_row.addWidget(reset_btn)
+
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        return page
+
+    def _color_names_from_config(self) -> list[str]:
+        """Return color names from the current config (or defaults)."""
+        colors = self._config.get("gui", {}).get("colors", PT_DEFAULT_COLORS)
+        return [c["name"] for c in colors if c.get("name")]
+
+    def _color_argb_by_name(self, name: str) -> str | None:
+        """Look up ARGB hex by color name from config."""
+        colors = self._config.get("gui", {}).get("colors", PT_DEFAULT_COLORS)
+        for c in colors:
+            if c.get("name") == name:
+                return c.get("argb")
+        return None
+
+    @staticmethod
+    def _color_swatch_icon(argb: str, size: int = 16) -> QIcon:
+        """Create a small QIcon swatch from an ARGB hex string."""
+        pm = QPixmap(size, size)
+        pm.fill(_argb_to_qcolor(argb))
+        return QIcon(pm)
+
+    def _set_groups_tab_row(self, row: int, name: str, color: str,
+                            gain_linked: bool):
+        """Populate one row in the session-local groups table."""
+        name_item = QTableWidgetItem(name)
+        self._groups_tab_table.setItem(row, 0, name_item)
+
+        # Color dropdown with swatch icons
+        color_combo = QComboBox()
+        color_combo.setIconSize(QSize(16, 16))
+        for cn in self._color_names_from_config():
+            argb = self._color_argb_by_name(cn)
+            icon = self._color_swatch_icon(argb) if argb else QIcon()
+            color_combo.addItem(icon, cn)
+        ci = color_combo.findText(color)
+        if ci >= 0:
+            color_combo.setCurrentIndex(ci)
+        self._groups_tab_table.setCellWidget(row, 1, color_combo)
+
+        # Gain-linked checkbox (centered)
+        chk = QCheckBox()
+        chk.setChecked(gain_linked)
+        chk_container = QWidget()
+        chk_layout = QHBoxLayout(chk_container)
+        chk_layout.setContentsMargins(0, 0, 0, 0)
+        chk_layout.setAlignment(Qt.AlignCenter)
+        chk_layout.addWidget(chk)
+        self._groups_tab_table.setCellWidget(row, 2, chk_container)
+
+    def _populate_groups_tab(self):
+        """Populate the groups tab table from self._session_groups."""
+        self._groups_tab_table.setRowCount(0)
+        self._groups_tab_table.setRowCount(len(self._session_groups))
+        for row, g in enumerate(self._session_groups):
+            self._set_groups_tab_row(
+                row, g["name"], g.get("color", ""), g.get("gain_linked", False)
+            )
+
+    def _read_session_groups(self) -> list[dict]:
+        """Read the session groups table back into a list of dicts."""
+        groups: list[dict] = []
+        for row in range(self._groups_tab_table.rowCount()):
+            name_item = self._groups_tab_table.item(row, 0)
+            if not name_item:
+                continue
+            name = name_item.text().strip()
+            if not name:
+                continue
+            color_combo = self._groups_tab_table.cellWidget(row, 1)
+            color = color_combo.currentText() if color_combo else ""
+            chk_container = self._groups_tab_table.cellWidget(row, 2)
+            gain_linked = False
+            if chk_container:
+                chk = chk_container.findChild(QCheckBox)
+                if chk:
+                    gain_linked = chk.isChecked()
+            groups.append({
+                "name": name,
+                "color": color,
+                "gain_linked": gain_linked,
+            })
+        return groups
+
+    @staticmethod
+    def _group_names_in_table(table: QTableWidget,
+                              exclude_row: int = -1) -> set[str]:
+        """Collect all group names from a table, optionally excluding one row."""
+        names: set[str] = set()
+        for r in range(table.rowCount()):
+            if r == exclude_row:
+                continue
+            item = table.item(r, 0)
+            if item:
+                n = item.text().strip()
+                if n:
+                    names.add(n)
+        return names
+
+    def _unique_session_group_name(self, base: str = "New Group") -> str:
+        """Generate a unique group name for the session groups table."""
+        existing = self._group_names_in_table(self._groups_tab_table)
+        if base not in existing:
+            return base
+        n = 2
+        while f"{base} {n}" in existing:
+            n += 1
+        return f"{base} {n}"
+
+    def _on_groups_tab_name_changed(self, row: int, col: int):
+        """Revert a group name edit if it creates a duplicate."""
+        if col != 0:
+            return
+        item = self._groups_tab_table.item(row, 0)
+        if not item:
+            return
+        name = item.text().strip()
+        others = self._group_names_in_table(self._groups_tab_table,
+                                            exclude_row=row)
+        if name in others:
+            self._groups_tab_table.blockSignals(True)
+            item.setText(self._unique_session_group_name(name))
+            self._groups_tab_table.blockSignals(False)
+
+    def _on_groups_tab_add(self):
+        row = self._groups_tab_table.rowCount()
+        self._groups_tab_table.insertRow(row)
+        color_names = self._color_names_from_config()
+        default_color = color_names[0] if color_names else ""
+        self._set_groups_tab_row(
+            row, self._unique_session_group_name(), default_color, False)
+        self._groups_tab_table.scrollToBottom()
+        self._groups_tab_table.editItem(self._groups_tab_table.item(row, 0))
+
+    def _on_groups_tab_remove(self):
+        row = self._groups_tab_table.currentRow()
+        if row >= 0:
+            self._groups_tab_table.removeRow(row)
+
+    def _on_groups_tab_reset(self):
+        """Reset session groups to the defaults from preferences."""
+        defaults = self._config.get("gui", {}).get(
+            "default_groups", _GUI_DEFAULTS.get("default_groups", []))
+        self._session_groups = copy.deepcopy(defaults)
+        self._populate_groups_tab()
 
     def _make_report_browser(self) -> QTextBrowser:
         """Create a consistently styled QTextBrowser for reports."""
@@ -741,8 +953,11 @@ class SessionPrepWindow(QMainWindow):
         self._play_btn.setEnabled(False)
         self._stop_btn.setEnabled(False)
         self._detail_tabs.setTabEnabled(_TAB_FILE, False)
+        self._detail_tabs.setTabEnabled(_TAB_GROUPS, False)
         self._detail_tabs.setCurrentIndex(_TAB_SUMMARY)
         self._right_stack.setCurrentIndex(_PAGE_TABS)
+        self._session_groups = []
+        self._groups_tab_table.setRowCount(0)
 
         wav_files = sorted(
             f for f in os.listdir(path) if f.lower().endswith(AUDIO_EXTENSIONS)
@@ -929,12 +1144,19 @@ class SessionPrepWindow(QMainWindow):
         self._analyze_action.setEnabled(True)
         self._worker = None
 
+        # Prefill session groups from config defaults
+        defaults = self._config.get("gui", {}).get(
+            "default_groups", _GUI_DEFAULTS.get("default_groups", []))
+        self._session_groups = copy.deepcopy(defaults)
+        self._populate_groups_tab()
+
         self._populate_table(session)
         self._render_summary()
 
         # Switch to tabs — summary tab
         self._right_stack.setCurrentIndex(_PAGE_TABS)
         self._detail_tabs.setCurrentIndex(_TAB_SUMMARY)
+        self._detail_tabs.setTabEnabled(_TAB_GROUPS, True)
 
         # Enable Session Setup phase now that analysis is available
         self._phase_tabs.setTabEnabled(_PHASE_SETUP, True)
