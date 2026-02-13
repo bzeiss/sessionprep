@@ -55,11 +55,17 @@ class DawProcessor(ABC):
     def configure(self, config: dict[str, Any]) -> None:
         """Read config values. Subclasses should call super().configure(config)."""
         self._enabled: bool = config.get(f"{self.id}_enabled", True)
+        self._connected: bool = False
 
     @property
     def enabled(self) -> bool:
         """Whether this processor is available for selection."""
         return self._enabled
+
+    @property
+    def connected(self) -> bool:
+        """Whether the last connectivity check succeeded."""
+        return self._connected
 
     @abstractmethod
     def check_connectivity(self) -> tuple[bool, str]:

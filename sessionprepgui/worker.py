@@ -6,12 +6,30 @@ import threading
 
 from PySide6.QtCore import QThread, Signal
 
+from sessionpreplib.daw_processor import DawProcessor
 from sessionpreplib.detector import TrackDetector
 from sessionpreplib.pipeline import Pipeline, load_session
 from sessionpreplib.detectors import default_detectors
 from sessionpreplib.processors import default_processors
 from sessionpreplib.rendering import build_diagnostic_summary
 from sessionpreplib.events import EventBus
+
+
+class DawCheckWorker(QThread):
+    """Runs DawProcessor.check_connectivity() off the main thread."""
+
+    result = Signal(bool, str)  # (ok, message)
+
+    def __init__(self, processor: DawProcessor):
+        super().__init__()
+        self._processor = processor
+
+    def run(self):
+        try:
+            ok, msg = self._processor.check_connectivity()
+            self.result.emit(ok, msg)
+        except Exception as e:
+            self.result.emit(False, str(e))
 
 
 class AnalyzeWorker(QThread):

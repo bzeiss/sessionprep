@@ -63,7 +63,35 @@ class ProToolsDawProcessor(DawProcessor):
         self._port: int = config.get("protools_port", 31416)
 
     def check_connectivity(self) -> tuple[bool, str]:
-        return False, "Pro Tools PTSL connection not yet implemented."
+        try:
+            from ptsl import Engine
+        except ImportError:
+            self._connected = False
+            return False, "py-ptsl package not installed"
+
+        engine = None
+        try:
+            address = f"{self._host}:{self._port}"
+            engine = Engine(
+                company_name=self._company_name,
+                application_name=self._application_name,
+                address=address,
+            )
+            version = engine.ptsl_version()
+            if version < 2025:
+                self._connected = False
+                return False, "Protocol 2025 or newer required"
+            self._connected = True
+            return True, f"Protocol: {version}"
+        except Exception as e:
+            self._connected = False
+            return False, str(e)
+        finally:
+            if engine is not None:
+                try:
+                    engine.close()
+                except Exception:
+                    pass
 
     def fetch(self, session: SessionContext) -> SessionContext:
         return session

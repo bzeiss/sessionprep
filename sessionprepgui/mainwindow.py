@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 
 from sessionpreplib.audio import get_window_samples
 from sessionpreplib.config import default_config, flatten_structured_config
+from sessionpreplib.daw_processors import default_daw_processors
 from sessionpreplib.detector import TrackDetector
 from sessionpreplib.detectors import detector_help_map
 from sessionpreplib.utils import protools_sort_key
@@ -58,7 +59,7 @@ from .helpers import track_analysis_label, esc, fmt_time
 from .preferences import PreferencesDialog, _argb_to_qcolor
 from .report import render_summary_html, render_track_detail_html
 from .widgets import BatchEditTableWidget, BatchComboBox
-from .worker import AnalyzeWorker, BatchReanalyzeWorker
+from .worker import AnalyzeWorker, BatchReanalyzeWorker, DawCheckWorker
 from .waveform import WaveformWidget, WaveformLoadWorker
 from sessionpreplib.audio import AUDIO_EXTENSIONS
 from .playback import PlaybackController
@@ -179,9 +180,15 @@ class SessionPrepWindow(QMainWindow):
         self._current_track = None
         self._session_groups: list[dict] = []
         self._detector_help = detector_help_map()
+        self._daw_check_worker: DawCheckWorker | None = None
 
         # Load persistent GUI configuration
         self._config = load_config()
+
+        # Instantiate and configure DAW processors
+        self._daw_processors = default_daw_processors()
+        self._active_daw_processor = None
+        self._configure_daw_processors()
 
         # Playback controller
         self._playback = PlaybackController(self)
@@ -291,13 +298,41 @@ class SessionPrepWindow(QMainWindow):
         self._setup_toolbar.setMovable(False)
         self._setup_toolbar.setFloatable(False)
 
+        # ── Left: DAW processor selection + check ──────────────────────
+        self._daw_combo = QComboBox()
+        self._daw_combo.setMinimumWidth(140)
+        self._setup_toolbar.addWidget(self._daw_combo)
+
+        self._daw_check_btn = QPushButton("Check")
+        self._daw_check_btn.setEnabled(False)
+        self._daw_check_btn.clicked.connect(self._on_daw_check)
+        self._setup_toolbar.addWidget(self._daw_check_btn)
+
+        self._daw_check_label = QLabel("")
+        self._daw_check_label.setContentsMargins(6, 0, 0, 0)
+        self._setup_toolbar.addWidget(self._daw_check_label)
+
+        # ── Spacer ─────────────────────────────────────────────────────
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._setup_toolbar.addWidget(spacer)
 
+        # ── Right: lifecycle actions ───────────────────────────────────
+        self._fetch_action = QAction("Fetch", self)
+        self._fetch_action.setEnabled(False)
+        self._setup_toolbar.addAction(self._fetch_action)
+
         self._transfer_action = QAction("Transfer", self)
         self._transfer_action.setEnabled(False)
         self._setup_toolbar.addAction(self._transfer_action)
+
+        self._sync_action = QAction("Sync", self)
+        self._sync_action.setEnabled(False)
+        self._setup_toolbar.addAction(self._sync_action)
+
+        # Populate combo after ALL toolbar widgets exist, then connect signal
+        self._populate_daw_combo()
+        self._daw_combo.currentIndexChanged.connect(self._on_daw_combo_changed)
 
         layout.addWidget(self._setup_toolbar)
 
@@ -353,6 +388,70 @@ class SessionPrepWindow(QMainWindow):
         layout.addWidget(setup_splitter, 1)
 
         return page
+
+    # ── DAW processor helpers ─────────────────────────────────────────────
+
+    def _configure_daw_processors(self):
+        """Configure all DAW processors from the current flat config."""
+        flat = dict(default_config())
+        flat.update(flatten_structured_config(self._config))
+        for dp in self._daw_processors:
+            dp.configure(flat)
+
+    def _populate_daw_combo(self):
+        """Fill the DAW dropdown with enabled processors."""
+        self._daw_combo.blockSignals(True)
+        self._daw_combo.clear()
+        for i, dp in enumerate(self._daw_processors):
+            if dp.enabled:
+                self._daw_combo.addItem(dp.name, i)
+        self._daw_combo.blockSignals(False)
+        if self._daw_combo.count() > 0:
+            self._on_daw_combo_changed(0)
+        else:
+            self._active_daw_processor = None
+
+    def _update_daw_lifecycle_buttons(self):
+        """Enable/disable Fetch/Transfer/Sync based on active processor state."""
+        dp = self._active_daw_processor
+        connected = dp is not None and dp.connected
+        self._fetch_action.setEnabled(connected)
+        self._transfer_action.setEnabled(False)
+        self._sync_action.setEnabled(False)
+
+    @Slot(int)
+    def _on_daw_combo_changed(self, index: int):
+        if index < 0 or index >= self._daw_combo.count():
+            self._active_daw_processor = None
+        else:
+            proc_idx = self._daw_combo.itemData(index)
+            self._active_daw_processor = self._daw_processors[proc_idx]
+        self._daw_check_label.setText("")
+        self._daw_check_btn.setEnabled(self._daw_combo.count() > 0)
+        self._update_daw_lifecycle_buttons()
+
+    @Slot()
+    def _on_daw_check(self):
+        if not self._active_daw_processor:
+            return
+        self._daw_check_btn.setEnabled(False)
+        self._daw_check_label.setText("Checking\u2026")
+        self._daw_check_label.setStyleSheet(f"color: {COLORS['dim']};")
+        self._daw_check_worker = DawCheckWorker(self._active_daw_processor)
+        self._daw_check_worker.result.connect(self._on_daw_check_result)
+        self._daw_check_worker.start()
+
+    @Slot(bool, str)
+    def _on_daw_check_result(self, ok: bool, message: str):
+        self._daw_check_worker = None
+        self._daw_check_btn.setEnabled(True)
+        if ok:
+            self._daw_check_label.setText(message)
+            self._daw_check_label.setStyleSheet(f"color: {COLORS['clean']};")
+        else:
+            self._daw_check_label.setText(message)
+            self._daw_check_label.setStyleSheet(f"color: {COLORS['problems']};")
+        self._update_daw_lifecycle_buttons()
 
     def _build_left_panel(self) -> QWidget:
         panel = QWidget()
@@ -2528,6 +2627,12 @@ class SessionPrepWindow(QMainWindow):
             self._status_bar.showMessage("Preferences saved.")
             self._waveform.set_invert_scroll(
                 self._config.get("gui", {}).get("invert_scroll", "default"))
+
+            # Re-configure DAW processors (enabled flag may have changed)
+            self._configure_daw_processors()
+            self._populate_daw_combo()
+            self._daw_check_label.setText("")
+            self._update_daw_lifecycle_buttons()
 
             if self._source_dir:
                 from sessionpreplib.config import strip_presentation_keys
