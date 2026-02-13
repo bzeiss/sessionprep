@@ -1947,6 +1947,7 @@ class SessionPrepWindow(QMainWindow):
 
         # Cancel any in-flight worker
         if self._wf_worker is not None:
+            self._wf_worker.cancel()
             self._wf_worker.finished.disconnect()
             self._wf_worker = None
 

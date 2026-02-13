@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 import numpy as np
 
 from PySide6.QtCore import QPointF, Qt, QThread, QTimer, Signal
@@ -167,6 +169,11 @@ class WaveformLoadWorker(QThread):
         self._rms_win = rms_window_samples
         self._spec_n_fft = spec_n_fft
         self._spec_window = spec_window
+        self._cancelled = threading.Event()
+
+    def cancel(self):
+        """Request early termination of the computation."""
+        self._cancelled.set()
 
     def run(self):
         data = self._audio_data
@@ -184,6 +191,9 @@ class WaveformLoadWorker(QThread):
         nch = len(channels)
         total = len(channels[0])
 
+        if self._cancelled.is_set():
+            return
+
         # --- Peak finding ---
         if nch == 1:
             peak_sample = int(np.argmax(np.abs(channels[0])))
@@ -197,6 +207,9 @@ class WaveformLoadWorker(QThread):
         peak_db = 20.0 * np.log10(peak_lin) if peak_lin > 0 else float('-inf')
         peak_amplitude = float(channels[peak_channel][peak_sample])
 
+        if self._cancelled.is_set():
+            return
+
         # --- RMS cumsum (computed once, reused for envelope drawing) ---
         rms_max_sample = -1
         rms_max_db = float('-inf')
@@ -205,6 +218,8 @@ class WaveformLoadWorker(QThread):
         if win > 0:
             ch_wms: list[np.ndarray] = []
             for ch_data in channels:
+                if self._cancelled.is_set():
+                    return
                 n = len(ch_data)
                 if n <= win:
                     rms_cumsums.append(np.zeros(2, dtype=np.float64))
@@ -227,11 +242,17 @@ class WaveformLoadWorker(QThread):
                 rms_max_db = 20.0 * np.log10(rms_lin) if rms_lin > 0 else float('-inf')
                 rms_max_amplitude = rms_lin
 
+        if self._cancelled.is_set():
+            return
+
         # --- Spectrogram ---
         spec_db = compute_mel_spectrogram(
             channels, sr,
             n_fft=self._spec_n_fft, window=self._spec_window,
         )
+
+        if self._cancelled.is_set():
+            return
 
         self.finished.emit({
             "channels": channels,
@@ -263,12 +284,19 @@ class SpectrogramRecomputeWorker(QThread):
         self._sr = sr
         self._n_fft = n_fft
         self._window = window
+        self._cancelled = threading.Event()
+
+    def cancel(self):
+        """Request early termination."""
+        self._cancelled.set()
 
     def run(self):
         result = compute_mel_spectrogram(
             self._channels, self._sr,
             n_fft=self._n_fft, window=self._window,
         )
+        if self._cancelled.is_set():
+            return
         self.finished.emit(result)
 
 
@@ -1945,6 +1973,11 @@ class WaveformWidget(QWidget):
         """Launch a background thread to recompute the mel spectrogram."""
         if not self._channels:
             return
+        # Cancel any in-flight spectrogram worker
+        if self._spec_recompute_worker is not None:
+            self._spec_recompute_worker.cancel()
+            self._spec_recompute_worker.finished.disconnect()
+            self._spec_recompute_worker = None
         self._spec_db = None
         self._spec_image = None
         self._spec_cache_key = ()
