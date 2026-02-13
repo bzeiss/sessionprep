@@ -738,7 +738,9 @@ class PreferencesDialog(QDialog):
         self._groups_table.setColumnCount(3)
         self._groups_table.setHorizontalHeaderLabels(
             ["Name", "Color", "Gain-Linked"])
-        self._groups_table.verticalHeader().setVisible(False)
+        vh = self._groups_table.verticalHeader()
+        vh.setSectionsMovable(True)
+        vh.sectionMoved.connect(self._on_group_row_moved)
         self._groups_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._groups_table.setSelectionMode(QTableWidget.SingleSelection)
         gh = self._groups_table.horizontalHeader()
@@ -784,6 +786,11 @@ class PreferencesDialog(QDialog):
         btn_row.addWidget(reset_btn)
 
         btn_row.addStretch()
+
+        az_btn = QPushButton("Sort A→Z")
+        az_btn.clicked.connect(self._on_groups_sort_az)
+        btn_row.addWidget(az_btn)
+
         layout.addLayout(btn_row)
 
         self._add_page(item, page)
@@ -900,6 +907,60 @@ class PreferencesDialog(QDialog):
         row = self._groups_table.currentRow()
         if row >= 0:
             self._groups_table.removeRow(row)
+
+    def _on_group_row_moved(self, logical: int, old_visual: int,
+                            new_visual: int):
+        """Handle drag-and-drop row reorder on the groups table."""
+        # Read all rows in the current visual order
+        vh = self._groups_table.verticalHeader()
+        ordered = self._read_groups_visual_order()
+        # Reset visual mapping, repopulate in new order
+        vh.blockSignals(True)
+        self._groups_table.blockSignals(True)
+        for i in range(self._groups_table.rowCount()):
+            vh.moveSection(vh.visualIndex(i), i)
+        self._groups_table.setRowCount(0)
+        self._groups_table.setRowCount(len(ordered))
+        for row, entry in enumerate(ordered):
+            self._set_group_row(
+                row, entry["name"], entry["color"], entry["gain_linked"])
+        self._groups_table.blockSignals(False)
+        vh.blockSignals(False)
+
+    def _read_groups_visual_order(self) -> list[dict[str, Any]]:
+        """Read groups table data in current visual (display) order."""
+        vh = self._groups_table.verticalHeader()
+        n = self._groups_table.rowCount()
+        visual_to_logical = sorted(range(n), key=lambda i: vh.visualIndex(i))
+        groups: list[dict[str, Any]] = []
+        for logical in visual_to_logical:
+            name_item = self._groups_table.item(logical, 0)
+            if not name_item:
+                continue
+            name = name_item.text().strip()
+            if not name:
+                continue
+            cc = self._groups_table.cellWidget(logical, 1)
+            color = cc.currentText() if cc else ""
+            chk_c = self._groups_table.cellWidget(logical, 2)
+            gl = False
+            if chk_c:
+                chk = chk_c.findChild(QCheckBox)
+                if chk:
+                    gl = chk.isChecked()
+            groups.append({"name": name, "color": color, "gain_linked": gl})
+        return groups
+
+    def _on_groups_sort_az(self):
+        groups = self._read_groups()
+        groups.sort(key=lambda g: g["name"].lower())
+        self._groups_table.blockSignals(True)
+        self._groups_table.setRowCount(0)
+        self._groups_table.setRowCount(len(groups))
+        for row, entry in enumerate(groups):
+            self._set_group_row(
+                row, entry["name"], entry["color"], entry["gain_linked"])
+        self._groups_table.blockSignals(False)
 
     def _on_groups_reset(self):
         defaults = _GUI_DEFAULTS.get("default_groups", [])

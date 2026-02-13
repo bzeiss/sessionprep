@@ -739,7 +739,9 @@ class SessionPrepWindow(QMainWindow):
         self._groups_tab_table.setColumnCount(3)
         self._groups_tab_table.setHorizontalHeaderLabels(
             ["Name", "Color", "Gain-Linked"])
-        self._groups_tab_table.verticalHeader().setVisible(False)
+        vh = self._groups_tab_table.verticalHeader()
+        vh.setSectionsMovable(True)
+        vh.sectionMoved.connect(self._on_groups_tab_row_moved)
         self._groups_tab_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._groups_tab_table.setSelectionMode(QTableWidget.SingleSelection)
         gh = self._groups_tab_table.horizontalHeader()
@@ -773,6 +775,11 @@ class SessionPrepWindow(QMainWindow):
         btn_row.addWidget(reset_btn)
 
         btn_row.addStretch()
+
+        az_btn = QPushButton("Sort A→Z")
+        az_btn.clicked.connect(self._on_groups_tab_sort_az)
+        btn_row.addWidget(az_btn)
+
         layout.addLayout(btn_row)
 
         return page
@@ -927,6 +934,53 @@ class SessionPrepWindow(QMainWindow):
         if row >= 0:
             self._groups_tab_table.removeRow(row)
             self._sync_session_groups()
+
+    def _on_groups_tab_row_moved(self, logical: int, old_visual: int,
+                                new_visual: int):
+        """Handle drag-and-drop row reorder on the session groups table."""
+        table = self._groups_tab_table
+        vh = table.verticalHeader()
+        n = table.rowCount()
+        # Build visual order → logical index mapping
+        visual_to_logical = sorted(range(n), key=lambda i: vh.visualIndex(i))
+        ordered: list[dict] = []
+        for log_idx in visual_to_logical:
+            name_item = table.item(log_idx, 0)
+            if not name_item:
+                continue
+            name = name_item.text().strip()
+            if not name:
+                continue
+            cc = table.cellWidget(log_idx, 1)
+            color = cc.currentText() if cc else ""
+            chk_c = table.cellWidget(log_idx, 2)
+            gl = False
+            if chk_c:
+                chk = chk_c.findChild(QCheckBox)
+                if chk:
+                    gl = chk.isChecked()
+            ordered.append({"name": name, "color": color, "gain_linked": gl})
+        # Reset visual mapping, repopulate
+        vh.blockSignals(True)
+        table.blockSignals(True)
+        for i in range(n):
+            vh.moveSection(vh.visualIndex(i), i)
+        table.setRowCount(0)
+        table.setRowCount(len(ordered))
+        for row, entry in enumerate(ordered):
+            self._set_groups_tab_row(
+                row, entry["name"], entry["color"], entry["gain_linked"])
+        table.blockSignals(False)
+        vh.blockSignals(False)
+        self._session_groups = ordered
+        self._refresh_group_combos()
+
+    def _on_groups_tab_sort_az(self):
+        groups = self._read_session_groups()
+        groups.sort(key=lambda g: g["name"].lower())
+        self._session_groups = groups
+        self._populate_groups_tab()
+        self._refresh_group_combos()
 
     def _on_groups_tab_reset(self):
         """Reset session groups to the defaults from preferences."""
@@ -1594,6 +1648,7 @@ class SessionPrepWindow(QMainWindow):
         ok_tracks = [t for t in self._session.tracks if t.status == "OK"]
         self._setup_table.setRowCount(len(ok_tracks))
         gcm = self._group_color_map()
+        gcm_rank = self._group_rank_map()
 
         for row, track in enumerate(ok_tracks):
             pr = (
@@ -1626,7 +1681,8 @@ class SessionPrepWindow(QMainWindow):
 
             # Column 4: group (read-only)
             grp_label = track.group or ""
-            grp_item = _SortableItem(grp_label, grp_label.lower())
+            grp_rank = gcm_rank.get(track.group, len(gcm_rank)) if track.group else len(gcm_rank)
+            grp_item = _SortableItem(grp_label, grp_rank)
             grp_item.setForeground(QColor(COLORS["text"]))
             self._setup_table.setItem(row, 4, grp_item)
 
@@ -1911,6 +1967,10 @@ class SessionPrepWindow(QMainWindow):
         return [self._GROUP_NONE_LABEL] + [
             g["name"] for g in self._session_groups]
 
+    def _group_rank_map(self) -> dict[str, int]:
+        """Return {group_name: position_index} for sort-by-rank ordering."""
+        return {g["name"]: i for i, g in enumerate(self._session_groups)}
+
     def _group_color_map(self) -> dict[str, str]:
         """Return {group_name: argb_hex} for all session groups."""
         result: dict[str, str] = {}
@@ -1951,7 +2011,9 @@ class SessionPrepWindow(QMainWindow):
     def _create_group_combo(self, row: int, track):
         """Create and install a Group combo in column 6."""
         current = track.group or self._GROUP_NONE_LABEL
-        sort_item = _SortableItem(current, current.lower())
+        grm = self._group_rank_map()
+        rank = grm.get(track.group, len(grm)) if track.group else len(grm)
+        sort_item = _SortableItem(current, rank)
         self._track_table.setItem(row, 6, sort_item)
 
         combo = BatchComboBox()
@@ -1998,6 +2060,8 @@ class SessionPrepWindow(QMainWindow):
             batch_keys = self._track_table.batch_selected_keys()
             track_map = {t.filename: t for t in self._session.tracks}
             gcm = self._group_color_map()
+            grm = self._group_rank_map()
+            rank = grm.get(new_group, len(grm)) if new_group else len(grm)
             self._track_table.setSortingEnabled(False)
             for bfname in batch_keys:
                 bt = track_map.get(bfname)
@@ -2014,7 +2078,7 @@ class SessionPrepWindow(QMainWindow):
                     sort_item = self._track_table.item(row, 6)
                     if sort_item:
                         sort_item.setText(text)
-                        sort_item._sort_key = text.lower()
+                        sort_item._sort_key = rank
                     self._apply_row_group_color(row, new_group, gcm)
             self._track_table.setSortingEnabled(True)
             self._track_table.restore_selection(batch_keys)
@@ -2024,18 +2088,21 @@ class SessionPrepWindow(QMainWindow):
                 return
             track.group = new_group
             # Update sort item + row color
+            grm = self._group_rank_map()
+            rank = grm.get(new_group, len(grm)) if new_group else len(grm)
             row = self._find_table_row(fname)
             if row >= 0:
                 sort_item = self._track_table.item(row, 6)
                 if sort_item:
                     sort_item.setText(text)
-                    sort_item._sort_key = text.lower()
+                    sort_item._sort_key = rank
                 self._apply_row_group_color(row, new_group)
             self._populate_setup_table()
 
     def _refresh_group_combos(self):
         """Refresh the items in all Group combo boxes from _session_groups."""
         gcm = self._group_color_map()
+        grm = self._group_rank_map()
         for row in range(self._track_table.rowCount()):
             w = self._track_table.cellWidget(row, 6)
             if isinstance(w, BatchComboBox):
@@ -2065,9 +2132,13 @@ class SessionPrepWindow(QMainWindow):
                         if track:
                             track.group = None
                 w.blockSignals(False)
-                # Update row color (group may have changed color or been removed)
+                # Update sort key + row color
                 effective = w.currentText()
                 gname = effective if effective != self._GROUP_NONE_LABEL else None
+                sort_item = self._track_table.item(row, 6)
+                if sort_item:
+                    rank = grm.get(gname, len(grm)) if gname else len(grm)
+                    sort_item._sort_key = rank
                 self._apply_row_group_color(row, gname, gcm)
 
         self._populate_setup_table()
