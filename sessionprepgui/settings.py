@@ -210,7 +210,7 @@ def _merge_structured(
             if k in default_section:
                 default_section[k] = v
 
-    for section in ("detectors", "processors"):
+    for section in ("detectors", "processors", "daw_processors"):
         if section in overrides and isinstance(overrides[section], dict):
             default_section = merged.get(section, {})
             for comp_id, comp_vals in overrides[section].items():

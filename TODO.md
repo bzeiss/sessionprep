@@ -12,27 +12,26 @@
 
 ### P1: DAW Scripting Layer
 
-- [ ] **`daw_processor.py` — DawProcessor ABC + priority bands**
-  - `DAWPRIORITY_IMPORT`, `_ROUTE`, `_APPEARANCE`, `_AUTOMATION`, `_FINALIZE`
-  - `plan(session) -> list[DawAction]`
+- [x] **`daw_processor.py` — DawProcessor ABC**
+  - `config_params()`, `configure()`, `check_connectivity()`
+  - `fetch(session)`, `transfer(session)`, `sync(session)`
+  - `execute_commands(session, commands)` — ad-hoc commands from GUI tools
+  - One processor per DAW (ProTools, DAWProject, etc.)
+  - Orchestrated by GUI/CLI directly, not Pipeline
 
-- [ ] **`daw_processors/` package — Concrete DAW processors**
-  - `template_router.py` — TemplateRouter (routing rules → folder/bus assignment)
-  - `track_colorizer.py` — TrackColorizer (color by classification or rules)
-  - `fader_restore.py` — FaderRestore (inverse gain → `set_fader` actions)
+- [x] **`daw_processors/` package — factory**
+  - `default_daw_processors()` (empty, ready for concrete processors)
 
-- [ ] **`daw_backend.py` — DawBackend ABC**
-  - `execute(actions) -> list[DawActionResult]`
-  - `supports(action_type) -> bool`
+- [x] **DawCommand / DawCommandResult models**
+  - Plain data + undo_params; processor executes via internal dispatch
 
-- [ ] **`daw_backends/` package — Concrete backends**
-  - `json_export.py` — JsonExportBackend (serialize actions to JSON)
-  - `protools.py` — ProToolsBackend (stub, future PTSL integration)
+- [x] **Config/Settings/Preferences integration**
 
-- [ ] **Pipeline phases 3+5: `plan_daw()` and `execute_daw()`**
-  - Add `daw_processors` param to Pipeline constructor
-  - `plan_daw(session) -> list[DawAction]`
-  - `execute_daw(actions, backend) -> list[DawActionResult]`
+- [ ] **Concrete: ProToolsProcessor** (PTSL)
+- [ ] **Concrete: DAWProjectProcessor** (.dawproject files)
+- [ ] **GUI toolbar dropdown** for active DAW processor selection
+- [ ] **GUI DAW Tools panel** (color picker, etc. → execute_commands)
+- [ ] **Undo execution** (rollback last transfer/sync batch)
 
 ### P1: Testing Infrastructure
 

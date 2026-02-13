@@ -338,11 +338,15 @@ def _all_param_specs() -> list[ParamSpec]:
     from .detectors import default_detectors
     from .processors import default_processors
 
+    from .daw_processors import default_daw_processors
+
     specs = list(ANALYSIS_PARAMS)
     for det in default_detectors():
         specs.extend(det.config_params())
     for proc in default_processors():
         specs.extend(proc.config_params())
+    for dp in default_daw_processors():
+        specs.extend(dp.config_params())
     return specs
 
 
@@ -392,11 +396,13 @@ def build_structured_defaults() -> dict[str, Any]:
     """
     from .detectors import default_detectors
     from .processors import default_processors
+    from .daw_processors import default_daw_processors
 
     structured: dict[str, Any] = {
         "analysis": {p.key: p.default for p in ANALYSIS_PARAMS},
         "detectors": {},
         "processors": {},
+        "daw_processors": {},
     }
 
     for det in default_detectors():
@@ -408,6 +414,11 @@ def build_structured_defaults() -> dict[str, Any]:
         params = proc.config_params()
         if params:
             structured["processors"][proc.id] = {p.key: p.default for p in params}
+
+    for dp in default_daw_processors():
+        params = dp.config_params()
+        if params:
+            structured["daw_processors"][dp.id] = {p.key: p.default for p in params}
 
     return structured
 
@@ -457,6 +468,9 @@ def flatten_structured_config(structured: dict[str, Any]) -> dict[str, Any]:
     for section in structured.get("processors", {}).values():
         if isinstance(section, dict):
             flat.update(section)
+    for section in structured.get("daw_processors", {}).values():
+        if isinstance(section, dict):
+            flat.update(section)
     return flat
 
 
@@ -470,6 +484,7 @@ def validate_structured_config(
     """
     from .detectors import default_detectors
     from .processors import default_processors
+    from .daw_processors import default_daw_processors
 
     errors: list[ConfigFieldError] = []
 
@@ -500,6 +515,18 @@ def validate_structured_config(
         for err in validate_param_values(proc.config_params(), section):
             errors.append(ConfigFieldError(
                 f"processors.{proc_id}.{err.key}", err.value, err.message,
+            ))
+
+    # DAW Processor sections
+    dp_map = {dp.id: dp for dp in default_daw_processors()}
+    dp_sections = structured.get("daw_processors", {})
+    for dp_id, section in dp_sections.items():
+        dp = dp_map.get(dp_id)
+        if dp is None or not isinstance(section, dict):
+            continue
+        for err in validate_param_values(dp.config_params(), section):
+            errors.append(ConfigFieldError(
+                f"daw_processors.{dp_id}.{err.key}", err.value, err.message,
             ))
 
     return errors

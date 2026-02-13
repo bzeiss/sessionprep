@@ -69,19 +69,27 @@ class ProcessorResult:
 
 
 @dataclass
-class DawAction:
-    action_type: str
+class DawCommand:
+    """A single operation to perform against a DAW.
+
+    Plain data object — the DawProcessor that created it is responsible
+    for execution.  undo_params captures the state needed to reverse
+    the operation (e.g. the previous fader value).
+    """
+    command_type: str
     target: str
-    params: dict[str, Any]
-    source: str
-    priority: int = 0
+    params: dict[str, Any] = field(default_factory=dict)
+    source: str = ""
+    undo_params: dict[str, Any] | None = None
 
 
 @dataclass
-class DawActionResult:
-    action: DawAction
+class DawCommandResult:
+    """Outcome of executing a single DawCommand."""
+    command: DawCommand
     success: bool
     error: str | None = None
+    timestamp: datetime = field(default_factory=datetime.now)
 
 
 @dataclass
@@ -113,12 +121,14 @@ class SessionContext:
     warnings: list[str] = field(default_factory=list)
     detectors: list = field(default_factory=list)
     processors: list = field(default_factory=list)
+    daw_state: dict[str, Any] = field(default_factory=dict)
+    daw_command_log: list[DawCommandResult] = field(default_factory=list)
 
 
 @dataclass
 class SessionResult:
     session: SessionContext
-    daw_actions: list[DawAction] = field(default_factory=list)
+    daw_commands: list[DawCommand] = field(default_factory=list)
     diagnostic_summary: dict[str, Any] = field(default_factory=dict)
 
 

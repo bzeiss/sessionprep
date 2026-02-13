@@ -22,17 +22,18 @@ duplication.
 5. [Audio Utilities](#5-audio-utilities)
 6. [Detectors](#6-detectors)
 7. [Audio Processors](#7-audio-processors)
-8. [Pipeline](#8-pipeline)
-9. [Session Queue](#9-session-queue)
-10. [Configuration & Presets](#10-configuration--presets)
-11. [Event System](#11-event-system)
-12. [Rendering](#12-rendering)
-13. [Schema Versioning](#13-schema-versioning)
-14. [Error Isolation Strategy](#14-error-isolation-strategy)
-15. [Validation Layer](#15-validation-layer)
-16. [CLI App (`sessionprep.py`)](#16-cli-app-sessionpreppy)
-17. [GUI App (`sessionprep-gui.py` / `sessionprepgui/`)](#17-gui-app-sessionprep-guipy--sessionprepgui)
-18. [Migration Notes](#18-migration-notes)
+8. [DAW Processors](#8-daw-processors)
+9. [Pipeline](#9-pipeline)
+10. [Session Queue](#10-session-queue)
+11. [Configuration & Presets](#11-configuration--presets)
+12. [Event System](#12-event-system)
+13. [Rendering](#13-rendering)
+14. [Schema Versioning](#14-schema-versioning)
+15. [Error Isolation Strategy](#15-error-isolation-strategy)
+16. [Validation Layer](#16-validation-layer)
+17. [CLI App (`sessionprep.py`)](#17-cli-app-sessionpreppy)
+18. [GUI App (`sessionprep-gui.py` / `sessionprepgui/`)](#18-gui-app-sessionprep-guipy--sessionprepgui)
+19. [Migration Notes](#19-migration-notes)
 
 ---
 
@@ -467,24 +468,34 @@ class ProcessorResult:
     error: str | None = None
 ```
 
-### 4.6 DawAction / DawActionResult
+### 4.6 DawCommand / DawCommandResult
 
-Defined but not yet consumed. Placeholder for future DAW scripting.
+Plain data objects representing DAW operations and their outcomes.
+`DawCommand` is created by a `DawProcessor`, executed by the same processor
+via internal dispatch (Option B — dumb data, smart processor).
 
 ```python
 @dataclass
-class DawAction:
-    action_type: str
-    target: str
-    params: dict[str, Any]
-    source: str
-    priority: int = 0
+class DawCommand:
+    """A single operation to perform against a DAW.
+
+    Plain data object — the DawProcessor that created it is responsible
+    for execution.  undo_params captures the state needed to reverse
+    the operation (e.g. the previous fader value).
+    """
+    command_type: str                            # e.g. "set_clip_gain", "set_fader", "set_color"
+    target: str                                  # e.g. track name, folder path
+    params: dict[str, Any] = field(default_factory=dict)
+    source: str = ""                             # processor id that produced this
+    undo_params: dict[str, Any] | None = None    # for future rollback
 
 @dataclass
-class DawActionResult:
-    action: DawAction
+class DawCommandResult:
+    """Outcome of executing a single DawCommand."""
+    command: DawCommand
     success: bool
     error: str | None = None
+    timestamp: datetime = field(default_factory=datetime.now)
 ```
 
 ### 4.7 TrackContext
@@ -523,7 +534,15 @@ class SessionContext:
     warnings: list[str] = field(default_factory=list)
     detectors: list = field(default_factory=list)
     processors: list = field(default_factory=list)
+    daw_state: dict[str, Any] = field(default_factory=dict)
+    daw_command_log: list[DawCommandResult] = field(default_factory=list)
 ```
+
+- `daw_state` — namespaced per DAW processor id. Each processor stores fetched
+  data and last-transfer snapshots here (e.g.
+  `session.daw_state["protools"]["folders"]`).
+- `daw_command_log` — flat, append-only list of all executed DAW commands across
+  all transfer/sync/execute_commands calls.
 
 ### 4.9 SessionResult / SessionJob / JobStatus
 
@@ -533,7 +552,7 @@ Used by the queue layer.
 @dataclass
 class SessionResult:
     session: SessionContext
-    daw_actions: list[DawAction] = field(default_factory=list)
+    daw_commands: list[DawCommand] = field(default_factory=list)
     diagnostic_summary: dict[str, Any] = field(default_factory=dict)
 
 class JobStatus(Enum):
@@ -808,9 +827,134 @@ def default_processors() -> list[AudioProcessor]:
 
 ---
 
-## 8. Pipeline
+## 8. DAW Processors
 
 ### 8.1 Overview
+
+Defined in `sessionpreplib/daw_processor.py`. DAW processors handle integration
+with external DAWs (Digital Audio Workstations). Each concrete subclass handles
+one DAW — e.g. `ProToolsProcessor` (PTSL), `DAWProjectProcessor` (.dawproject
+files).
+
+**Key design decisions:**
+
+- **One processor per DAW** — not split per-function. A single
+  `ProToolsProcessor` handles faders, routing, colors, etc. internally.
+- **One active at a time** — selected via GUI toolbar dropdown.
+- **Outside the Pipeline** — GUI/CLI orchestrates DAW operations directly.
+  The Pipeline stays `analyze → plan → execute` for audio processing only.
+- **Command model (Option B)** — `DawCommand` is a plain dataclass (just data).
+  The concrete `DawProcessor` owns all execution logic — it builds commands,
+  dispatches them internally, and returns `DawCommandResult` objects.
+
+### 8.2 Abstract Base Class
+
+```python
+class DawProcessor(ABC):
+    id: str
+    name: str
+
+    def config_params(cls) -> list[ParamSpec]: ...   # base: enabled toggle
+    def configure(self, config) -> None: ...
+    @property
+    def enabled(self) -> bool: ...
+
+    # Lifecycle
+    def check_connectivity(self) -> tuple[bool, str]: ...
+    def fetch(self, session) -> SessionContext: ...
+    def transfer(self, session) -> list[DawCommandResult]: ...
+    def sync(self, session) -> list[DawCommandResult]: ...
+
+    # Ad-hoc commands (GUI tools)
+    def execute_commands(self, session, commands) -> list[DawCommandResult]: ...
+```
+
+### 8.3 Lifecycle
+
+Called by the GUI/CLI, **not** by the Pipeline:
+
+1. **`configure(config)`** — read `ParamSpec` values (including `enabled`)
+2. **`check_connectivity()`** — verify the DAW is reachable. Returns
+   `(ok, message)`. Socket-based for Pro Tools PTSL, path validation for
+   file-based processors.
+3. **`fetch(session)`** — pull external state into
+   `session.daw_state[self.id]` (routing folders, track list, colors, etc.)
+4. **`transfer(session)`** — initial full push to the DAW. Internally builds
+   `DawCommand` objects, executes each via processor-private dispatch, appends
+   results to `session.daw_command_log`, and snapshots the transferred state
+   for future `sync()` diffs.
+5. **`sync(session)`** — incremental delta push. Compares current session state
+   against the snapshot stored by `transfer()` and sends only the changes.
+
+### 8.4 Ad-hoc Commands
+
+`execute_commands(session, commands)` accepts externally-built `DawCommand`
+objects — e.g. from a GUI color picker or rename tool — and routes them through
+the same internal dispatch as `transfer()`/`sync()`. Results are appended to
+`session.daw_command_log`.
+
+### 8.5 Execution Model (Option B)
+
+Commands are **plain data**; the processor is the **executor**.
+
+```
+transfer(session):
+    commands = self._build_commands(session)    # list[DawCommand]
+    results = []
+    for cmd in commands:
+        result = self._execute_command(cmd)     # processor-internal dispatch
+        results.append(result)
+        session.daw_command_log.append(result)
+    return results
+
+_execute_command(cmd):
+    match cmd.command_type:
+        case "set_clip_gain":  ...  # e.g. PTSL call
+        case "set_fader":      ...
+        case "set_color":      ...
+    → DawCommandResult(cmd, success, error, timestamp)
+```
+
+`_build_commands` and `_execute_command` are processor-private — the ABC does
+not define them. Each concrete processor implements its own dispatch.
+
+### 8.6 Undo Infrastructure
+
+Each `DawCommand` carries an `undo_params` field (e.g. `{"previous_value": -3.2}`)
+capturing the state needed to reverse the operation. Undo = processor replays the
+command log in reverse using `undo_params`. Implementation deferred; data model
+ready from day one.
+
+### 8.7 Configuration
+
+Base class provides an `{id}_enabled` `ParamSpec` (bool, default `True`).
+Subclasses extend via `super().config_params() + [...]`. The `daw_processors`
+section in the structured config follows the same pattern as detectors and
+processors:
+
+```json
+{
+    "daw_processors": {
+        "protools": { "protools_enabled": true, ... },
+        "dawproject": { "dawproject_enabled": true, ... }
+    }
+}
+```
+
+### 8.8 Registration
+
+```python
+def default_daw_processors() -> list[DawProcessor]:
+    return []
+```
+
+Empty for now. Concrete processors will be added in `sessionpreplib/daw_processors/`.
+
+---
+
+## 9. Pipeline
+
+### 9.1 Overview
 
 Defined in `sessionpreplib/pipeline.py`. Three implemented phases:
 
@@ -820,14 +964,14 @@ plan()      -> Run audio processors + group equalization + fader offsets
 execute()   -> Apply gains, backup originals, write processed files
 ```
 
-### 8.2 Phase Usage by Mode
+### 9.2 Phase Usage by Mode
 
 | Mode | Phases executed |
 |------|----------------|
 | Dry-run (default) | `analyze` -> `plan` |
 | Execute (audio only) | `analyze` -> `plan` -> `execute` |
 
-### 8.3 Pipeline Class
+### 9.3 Pipeline Class
 
 ```python
 class Pipeline:
@@ -838,7 +982,7 @@ class Pipeline:
     def execute(self, session, output_dir, backup_dir, is_overwriting) -> SessionContext: ...
 ```
 
-### 8.4 Parallel Execution
+### 9.4 Parallel Execution
 
 All three parallelizable stages use `concurrent.futures.ThreadPoolExecutor`:
 
@@ -871,7 +1015,7 @@ at the number of tracks.
 - `_apply_group_levels()` — grouped tracks get minimum gain
 - `_compute_fader_offsets()` — inverse gain + anchor adjustment
 
-### 8.5 `load_session()` Helper
+### 9.5 `load_session()` Helper
 
 ```python
 def load_session(source_dir, config, event_bus=None) -> SessionContext
@@ -880,14 +1024,14 @@ def load_session(source_dir, config, event_bus=None) -> SessionContext
 Loads all WAVs from `source_dir` in parallel, assigns groups (named,
 first-match-wins), appends overlap warnings to `session.warnings`.
 
-### 8.6 Topological Sort
+### 9.6 Topological Sort
 
 `_topo_sort_detectors()` uses Kahn's algorithm. Raises `ConfigError` on
 cycles or missing dependencies.
 
 ---
 
-## 9. Session Queue
+## 10. Session Queue
 
 Defined in `sessionpreplib/queue.py`. Manages multiple `SessionJob` instances,
 processes them sequentially in priority order.
@@ -911,17 +1055,17 @@ loads the session, runs analyze -> plan -> (optionally execute), stores
 
 ---
 
-## 10. Configuration & Presets
+## 11. Configuration & Presets
 
 Defined in `sessionpreplib/config.py`.
 
-### 10.1 Merge Order
+### 11.1 Merge Order
 
 ```
 built-in defaults  ->  preset file  ->  CLI args / GUI overrides
 ```
 
-### 10.2 Functions
+### 11.2 Functions
 
 - `default_config() -> dict` — all built-in defaults
 - `merge_configs(*configs) -> dict` — left-to-right merge; list keys (`force_transient`, `force_sustained`, `group`) are concatenated
@@ -932,7 +1076,7 @@ built-in defaults  ->  preset file  ->  CLI args / GUI overrides
 Internal/CLI-only keys (`execute`, `overwrite`, `output_folder`, `backup`,
 `report`, `json`) are excluded from presets automatically.
 
-### 10.3 Preset File Format
+### 11.3 Preset File Format
 
 JSON with `schema_version`. Only non-default values are saved.
 
@@ -949,7 +1093,7 @@ Example `metal_session.json`:
 }
 ```
 
-### 10.4 Default Config Keys
+### 11.4 Default Config Keys
 
 ```python
 {
@@ -974,7 +1118,7 @@ Example `metal_session.json`:
 
 ---
 
-## 11. Event System
+## 12. Event System
 
 Defined in `sessionpreplib/events.py`. Lightweight publish/subscribe bus.
 
@@ -1009,12 +1153,12 @@ No EventBus = no overhead. All emissions are guarded with `if self.event_bus`.
 
 ---
 
-## 12. Rendering
+## 13. Rendering
 
 Defined in `sessionpreplib/rendering.py`. Two standalone functions (not wrapped
 in an ABC — see TODO.md for future Renderer abstraction).
 
-### 12.1 `build_diagnostic_summary(session, track_detectors, session_detectors) -> dict`
+### 13.1 `build_diagnostic_summary(session, track_detectors, session_detectors) -> dict`
 
 Aggregates detector results into the four-category summary structure:
 
@@ -1035,19 +1179,19 @@ compatibility (correlation + mono folddown combined), dual-mono, silence,
 one-sided silence, subsonic, tail exceedance, grouping overlaps, clean
 summaries, and overview statistics.
 
-### 12.2 `render_diagnostic_summary_text(summary) -> str`
+### 13.2 `render_diagnostic_summary_text(summary) -> str`
 
 Renders the summary dict as plain text with emoji category headers. Used for
 both console output (via `sessionprep.py`) and the `sessionprep.txt` report.
 
-### 12.3 CLI Rendering
+### 13.3 CLI Rendering
 
 Rich-based rendering (progress bars, tables, panels) lives in `sessionprep.py`,
 not the library. `rich` is a CLI-only dependency.
 
 ---
 
-## 13. Schema Versioning
+## 14. Schema Versioning
 
 All serialized outputs include a version field:
 
@@ -1064,15 +1208,15 @@ Currently applies to:
 
 ---
 
-## 14. Error Isolation Strategy
+## 15. Error Isolation Strategy
 
-### 14.1 Principles
+### 15.1 Principles
 
 - **Partial results are always better than a crash.**
 - Errors are isolated per-track, per-detector, and per-processor.
 - Configuration errors abort early (before any work starts).
 
-### 14.2 Error Handling Table
+### 15.2 Error Handling Table
 
 | Failure | Policy |
 |---------|--------|
@@ -1082,16 +1226,16 @@ Currently applies to:
 | Config validation fails at startup | **Abort** with descriptive error |
 | Cyclic detector dependency | **Abort** at pipeline construction |
 
-### 14.3 Implementation
+### 15.3 Implementation
 
 Every `analyze()`, `process()`, and `apply()` call is wrapped in try/except
 by the pipeline. Components do not need to handle unexpected exceptions.
 
 ---
 
-## 15. Validation Layer
+## 16. Validation Layer
 
-### 15.1 Pipeline Validation
+### 16.1 Pipeline Validation
 
 Called at pipeline construction:
 
@@ -1099,7 +1243,7 @@ Called at pipeline construction:
 2. No circular dependencies among detectors
 3. No duplicate IDs across detectors and processors
 
-### 15.2 Config Validation
+### 16.2 Config Validation
 
 Validation is **ParamSpec-driven**: each detector and processor declares
 its own parameters via `config_params() -> list[ParamSpec]`.  Shared
@@ -1129,7 +1273,7 @@ path (e.g. `detectors.clipping.clip_consecutive`) for UI disambiguation.
 
 ---
 
-## 16. CLI App (`sessionprep.py`)
+## 17. CLI App (`sessionprep.py`)
 
 A thin shell (~770 lines) that imports everything from `sessionpreplib`:
 
@@ -1144,12 +1288,12 @@ The CLI contains **zero** analysis, detection, processing, or DSP logic.
 
 ---
 
-## 17. GUI App (`sessionprep-gui.py` / `sessionprepgui/`)
+## 18. GUI App (`sessionprep-gui.py` / `sessionprepgui/`)
 
 The GUI is a PySide6 application split across the `sessionprepgui/` package.
 `sessionprep-gui.py` is a thin entry point that delegates to the package.
 
-### 17.1 Running the GUI
+### 18.1 Running the GUI
 
 ```bash
 uv run python sessionprep-gui.py
@@ -1158,7 +1302,7 @@ uv run python sessionprep-gui.py
 Requires PySide6 and sounddevice (installed via the `gui` optional dependency
 group).
 
-### 17.2 Package Architecture
+### 18.2 Package Architecture
 
 | Module | Responsibility |
 |--------|---------------|
@@ -1174,7 +1318,7 @@ group).
 | `preferences.py` | `PreferencesDialog` — tree-navigated settings dialog, ParamSpec-driven widgets, reset-to-default, HiDPI scaling |
 | `mainwindow.py` | `SessionPrepWindow` (QMainWindow) — orchestrator, UI layout, slot handlers |
 
-### 17.3 Dependency Direction
+### 18.3 Dependency Direction
 
 ```
 settings (leaf) <--  mainwindow
@@ -1191,7 +1335,7 @@ No circular imports. `settings`, `theme`, `helpers`, and `widgets` are pure
 leaves. `preferences` reads `ParamSpec` metadata from detectors and processors.
 `mainwindow` composes all other modules.
 
-### 17.4 Key Design Decisions
+### 18.4 Key Design Decisions
 
 - **BatchEditTableWidget** (`widgets.py`) is a generic `QTableWidget` subclass
   that preserves multi-row selection when a persistent-editor cell widget (e.g.
@@ -1288,7 +1432,7 @@ leaves. `preferences` reads `ParamSpec` metadata from detectors and processors.
 - The GUI contains **zero** analysis, detection, processing, or DSP logic —
   all analysis runs through `sessionpreplib` via `AnalyzeWorker`.
 
-### 17.5 Persistent Configuration (`sessionprep.config.json`)
+### 18.5 Persistent Configuration (`sessionprep.config.json`)
 
 The GUI stores all detector and processor default values in a JSON config
 file in the OS-specific user preferences directory:
@@ -1326,6 +1470,10 @@ file in the OS-specific user preferences directory:
     },
     "processors": {
         "bimodal_normalize": { "target_rms": -18.0, "target_peak": -6.0 }
+    },
+    "daw_processors": {
+        "protools": { "protools_enabled": true },
+        "dawproject": { "dawproject_enabled": true }
     }
 }
 ```
@@ -1336,6 +1484,7 @@ file in the OS-specific user preferences directory:
   defaults (from `ANALYSIS_PARAMS`)
 - **`detectors.<id>`** — per-detector parameters (from each detector's `config_params()`)
 - **`processors.<id>`** — per-processor parameters (from each processor's `config_params()`)
+- **`daw_processors.<id>`** — per-DAW-processor parameters (from each DAW processor's `config_params()`)
 
 Session-specific values (`force_transient`, `force_sustained`, `group`,
 `anchor`) are **not** stored in the config file — they are per-session
@@ -1365,9 +1514,9 @@ The CLI is **not** affected by this file — it continues to use its own
 
 ---
 
-## 18. Migration Notes
+## 19. Migration Notes
 
-### 18.1 Mapping from Original Code to Library
+### 19.1 Mapping from Original Code to Library
 
 | Original (`sessionprep.py`) | Library location |
 |------|-------------|
@@ -1387,7 +1536,7 @@ The CLI is **not** affected by this file — it continues to use its own
 | `protools_sort_key()` | `utils.py` |
 | `db_to_linear()` / `linear_to_db()` / `format_duration()` | `audio.py` |
 
-### 18.2 Dependencies
+### 19.2 Dependencies
 
 | Package | Used by |
 |---------|---------|
@@ -1398,7 +1547,7 @@ The CLI is **not** affected by this file — it continues to use its own
 | `PySide6` | `sessionprepgui` only — optional GUI dependency |
 | `sounddevice` | `sessionprepgui/playback.py` only — optional GUI dependency |
 
-### 18.3 Layer Cake
+### 19.3 Layer Cake
 
 ```
 SessionQueue                          manages N jobs, priority-ordered
@@ -1409,4 +1558,11 @@ SessionQueue                          manages N jobs, priority-ordered
             |-- plan()                -> AudioProcessors (priority-sorted)
             |                         -> Group levelling + fader offsets
             +-- execute()             -> AudioProcessors.apply() + file write
+
+DawProcessor (orchestrated by GUI/CLI, outside Pipeline)
+  |-- check_connectivity()            -> verify DAW is reachable
+  |-- fetch(session)                  -> pull DAW state into session.daw_state
+  |-- transfer(session)               -> full push (builds + executes DawCommands)
+  |-- sync(session)                   -> incremental delta push
+  +-- execute_commands(session, cmds)  -> ad-hoc commands from GUI tools
 ```

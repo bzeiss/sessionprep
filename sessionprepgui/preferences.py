@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 from sessionpreplib.config import ANALYSIS_PARAMS, ParamSpec
 from sessionpreplib.detectors import default_detectors
 from sessionpreplib.processors import default_processors
+from sessionpreplib.daw_processors import default_daw_processors
 from .settings import _GUI_DEFAULTS
 from .theme import PT_DEFAULT_COLORS
 
@@ -368,6 +369,7 @@ class PreferencesDialog(QDialog):
         self._build_analysis_page()
         self._build_detector_pages()
         self._build_processor_pages()
+        self._build_daw_processor_pages()
         self._build_colors_page()
         self._build_groups_page()
 
@@ -578,6 +580,29 @@ class PreferencesDialog(QDialog):
             values = proc_sections.get(proc.id, {})
             page, widgets = _build_param_page(params, values)
             self._widgets[f"processors.{proc.id}"] = widgets
+            self._add_page(child, page)
+
+    def _build_daw_processor_pages(self):
+        parent_item = QTreeWidgetItem(self._tree, ["DAW Processors"])
+        parent_item.setFont(0, QFont("", -1, QFont.Bold))
+
+        parent_page = QWidget()
+        pl = QVBoxLayout(parent_page)
+        pl.setContentsMargins(12, 12, 12, 12)
+        pl.addWidget(QLabel(
+            "Select a DAW processor from the tree to configure it."))
+        pl.addStretch()
+        self._add_page(parent_item, parent_page)
+
+        dp_sections = self._config.get("daw_processors", {})
+        for dp in default_daw_processors():
+            params = dp.config_params()
+            if not params:
+                continue
+            child = QTreeWidgetItem(parent_item, [dp.name])
+            values = dp_sections.get(dp.id, {})
+            page, widgets = _build_param_page(params, values)
+            self._widgets[f"daw_processors.{dp.id}"] = widgets
             self._add_page(child, page)
 
     # ── Colors page ────────────────────────────────────────────────────
@@ -1060,6 +1085,16 @@ class PreferencesDialog(QDialog):
             if wkey not in self._widgets:
                 continue
             section = processors.setdefault(proc.id, {})
+            for key, widget in self._widgets[wkey]:
+                section[key] = _read_widget(widget)
+
+        # DAW Processors
+        daw_procs = self._config.setdefault("daw_processors", {})
+        for dp in default_daw_processors():
+            wkey = f"daw_processors.{dp.id}"
+            if wkey not in self._widgets:
+                continue
+            section = daw_procs.setdefault(dp.id, {})
             for key, widget in self._widgets[wkey]:
                 section[key] = _read_widget(widget)
 

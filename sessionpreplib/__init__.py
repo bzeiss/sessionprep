@@ -3,8 +3,8 @@ from .models import (
     Severity,
     DetectorResult,
     ProcessorResult,
-    DawAction,
-    DawActionResult,
+    DawCommand,
+    DawCommandResult,
     TrackContext,
     SessionContext,
     SessionResult,
@@ -28,6 +28,8 @@ from .config import (
     ANALYSIS_PARAMS,
 )
 from .reports import generate_report, save_json, build_warnings
+from .daw_processor import DawProcessor
+from .daw_processors import default_daw_processors
 from .events import EventBus
 
 __all__ = [
@@ -35,8 +37,10 @@ __all__ = [
     "Severity",
     "DetectorResult",
     "ProcessorResult",
-    "DawAction",
-    "DawActionResult",
+    "DawCommand",
+    "DawCommandResult",
+    "DawProcessor",
+    "default_daw_processors",
     "TrackContext",
     "SessionContext",
     "SessionResult",
