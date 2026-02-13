@@ -288,6 +288,7 @@ sudo dnf install gcc patchelf ccache libatomic-static
 | `rich` | Runtime | `sessionprep.py` (CLI rendering: tables, panels, progress) |
 | `PySide6` | Optional (gui) | `sessionprepgui` (Qt widgets, main window, waveform) |
 | `sounddevice` | Optional (gui) | `sessionprepgui/playback.py` (audio playback via PortAudio) |
+| `py-ptsl` | Optional (gui) | `sessionpreplib/daw_processors/protools.py` (Pro Tools Scripting SDK gRPC client) |
 | `pytest` | Dev | Test runner |
 | `pytest-cov` | Dev | Coverage reporting |
 | `pyinstaller` | Dev | Standalone executable builds |
@@ -335,6 +336,9 @@ sessionpreplib/
     processors/
         __init__.py              # Exports all processors; provides default_processors()
         bimodal_normalize.py     # BimodalNormalizeProcessor
+    daw_processors/
+        __init__.py              # Exports all DAW processors; provides default_daw_processors()
+        protools.py              # ProToolsDawProcessor — Pro Tools integration via py-ptsl gRPC SDK
 
 sessionprepgui/                  # GUI package (PySide6)
     __init__.py                  # Exports main()
@@ -342,7 +346,7 @@ sessionprepgui/                  # GUI package (PySide6)
     settings.py                  # Persistent config (load/save/validate, OS paths)
     theme.py                     # Colors, FILE_COLOR_* constants, dark theme
     helpers.py                   # esc(), track_analysis_label(), fmt_time(), severity maps
-    worker.py                    # AnalyzeWorker (QThread)
+    worker.py                    # QThread workers: AnalyzeWorker, BatchReanalyzeWorker, DawCheckWorker, DawFetchWorker, DawTransferWorker
     report.py                    # HTML report rendering (summary, fader table, track detail)
     waveform.py                  # WaveformWidget (waveform + spectrogram display, dB/freq scales, markers, overlays, keyboard/mouse nav)
     playback.py                  # PlaybackController (sounddevice lifecycle + signals)
@@ -945,10 +949,44 @@ processors:
 
 ```python
 def default_daw_processors() -> list[DawProcessor]:
-    return []
+    return [ProToolsDawProcessor()]
 ```
 
-Empty for now. Concrete processors will be added in `sessionpreplib/daw_processors/`.
+### 8.9 ProToolsDawProcessor (`protools.py`)
+
+Concrete `DawProcessor` for Avid Pro Tools, communicating via the
+[Pro Tools Scripting SDK (PTSL)](https://developer.avid.com/) gRPC interface
+through the `py-ptsl` Python client.
+
+- **ID:** `protools`
+- **Config:** `protools_enabled` (bool, default `True`),
+  `protools_command_delay` (float, default `1.0` s — delay between Pro Tools
+  commands to allow the DAW to settle)
+
+**Lifecycle implementation:**
+
+| Method | Behaviour |
+|--------|-----------|
+| `check_connectivity()` | Opens a `ptsl.Engine`, calls `ptsl.open()`, returns success/failure + Pro Tools session name |
+| `fetch(session)` | Retrieves the folder track hierarchy and stores it in `session.daw_state["protools"]["folders"]`. Populates the GUI folder tree for drag-and-drop track assignment. |
+| `transfer(session)` | Imports audio files into their assigned Pro Tools folders, sets track colors based on group → CIE L\*a\*b\* perceptual matching against the Pro Tools color palette. Accepts a `progress_callback(step, total, message)` for GUI progress reporting. Results are appended to `session.daw_command_log`. |
+| `sync(session)` | Not yet implemented (raises `NotImplementedError`). |
+
+**Color matching:**
+
+The `transfer()` method assigns colors to newly imported tracks based on their
+group. The matching pipeline is:
+
+1. Fetch the Pro Tools color palette via `CId_GetColorPalette`.
+2. For each session group, resolve the group's configured color name to an
+   ARGB hex string (from `session.config["gui"]`).
+3. Convert both the group ARGB and each palette entry to CIE L\*a\*b\* color
+   space (via linearised sRGB → XYZ D65 → L\*a\*b\*).
+4. Find the palette index with the smallest Euclidean distance in L\*a\*b\*
+   (perceptual matching).
+5. Apply `CId_SetTrackColor` with the matched palette index.
+
+Tracks with no group assignment skip colorization.
 
 ---
 
@@ -1311,7 +1349,7 @@ group).
 | `theme.py` | `COLORS` dict, `FILE_COLOR_*` constants, dark palette + stylesheet |
 | `helpers.py` | `esc()`, `track_analysis_label(track, detectors=None)` (filters via `is_relevant()`), `fmt_time()`, severity maps |
 | `widgets.py` | `BatchEditTableWidget`, `BatchComboBox` — reusable batch-edit base classes preserving multi-row selection across cell-widget clicks (zero app imports) |
-| `worker.py` | `AnalyzeWorker` (QThread) — runs pipeline in background thread, thread-safe progress counting (`threading.Lock`), emits real progress (`progress_value`), per-track completion signals (`track_analyzed`, `track_planned`) for incremental table updates. `BatchReanalyzeWorker` (QThread) — re-runs detectors/processors for a subset of tracks asynchronously after batch overrides |
+| `worker.py` | QThread workers: `AnalyzeWorker` (pipeline in background, thread-safe progress, per-track signals), `BatchReanalyzeWorker` (subset re-analysis after batch overrides), `DawCheckWorker` (connectivity check), `DawFetchWorker` (folder fetch), `DawTransferWorker` (transfer with progress + progress_value signals) |
 | `report.py` | HTML rendering: `render_summary_html()`, `render_fader_table_html()`, `render_track_detail_html()` |
 | `waveform.py` | `WaveformWidget` — two display modes (waveform + spectrogram), vectorised NumPy peak/RMS downsampling, mel spectrogram (256 mel bins via `scipy.signal.stft`, configurable FFT/window/dB range/colormap), dB and frequency scales, peak/RMS markers, crosshair mouse guide (dBFS in waveform, Hz in spectrogram), mouse-wheel zoom/pan (Ctrl+wheel h-zoom, Ctrl+Shift+wheel v-zoom, Shift+Alt+wheel freq pan, Shift+wheel scroll), keyboard shortcuts (R/T zoom), detector issue overlays with optional frequency bounds, RMS L/R and RMS AVG envelopes, playback cursor, tooltips |
 | `playback.py` | `PlaybackController` — sounddevice OutputStream lifecycle, QTimer cursor updates, signal-based API |
@@ -1429,6 +1467,19 @@ leaves. `preferences` reads `ParamSpec` metadata from detectors and processors.
 - **HiDPI scaling** is applied via `QT_SCALE_FACTOR` environment variable,
   read directly from the JSON config file before `QApplication` is created
   (bypassing the validate-and-merge path to avoid side effects).
+- **DAW integration** — the Session Setup tab provides a toolbar with
+  Connect/Check, Fetch, Transfer, and Sync actions. A combo box selects the
+  active DAW processor. The folder tree (right side of a splitter) supports
+  drag-and-drop assignment of tracks to folders. Transfer runs asynchronously
+  via `DawTransferWorker`, with a progress panel (label + `QProgressBar`)
+  below the tree that auto-hides 2 seconds after completion.
+- **Waveform worker cancellation** — `WaveformLoadWorker` and
+  `SpectrogramRecomputeWorker` carry a `threading.Event` cancellation flag.
+  When the user switches tracks, the old worker is cancelled (flag set)
+  before a new one starts. The `run()` method checks the flag between every
+  expensive phase (channel split, peak finding, per-channel RMS cumsum,
+  spectrogram) and exits early if set, preventing CPU pileup from stacked
+  background threads.
 - The GUI contains **zero** analysis, detection, processing, or DSP logic —
   all analysis runs through `sessionpreplib` via `AnalyzeWorker`.
 
@@ -1472,7 +1523,7 @@ file in the OS-specific user preferences directory:
         "bimodal_normalize": { "target_rms": -18.0, "target_peak": -6.0 }
     },
     "daw_processors": {
-        "protools": { "protools_enabled": true },
+        "protools": { "protools_enabled": true, "protools_command_delay": 1.0 },
         "dawproject": { "dawproject_enabled": true }
     }
 }

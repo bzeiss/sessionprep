@@ -27,9 +27,11 @@
 
 - [x] **Config/Settings/Preferences integration**
 
-- [ ] **Concrete: ProToolsProcessor** (PTSL)
+- [x] **Concrete: ProToolsProcessor** (PTSL) — `ProToolsDawProcessor` in `daw_processors/protools.py`.
+  `check_connectivity()`, `fetch()` (folder hierarchy), `transfer()` (audio import + CIE L*a*b*
+  perceptual color matching). `sync()` not yet implemented. Configurable command delay.
 - [ ] **Concrete: DAWProjectProcessor** (.dawproject files)
-- [ ] **GUI toolbar dropdown** for active DAW processor selection
+- [x] **GUI toolbar dropdown** for active DAW processor selection — combo box + Check/Fetch/Transfer/Sync actions in Session Setup toolbar
 - [ ] **GUI DAW Tools panel** (color picker, etc. → execute_commands)
 - [ ] **Undo execution** (rollback last transfer/sync batch)
 
@@ -427,7 +429,7 @@
 | **6** | Auto-fix capabilities | DC removal, SRC |
 | ~~**7**~~ | ~~Classification v2~~ | ~~Crest improvements~~ → ✅ Done (audio classifier with decay metric) |
 | ~~**7b**~~ | ~~Simplify CLI grouping~~ | ~~Overlap policies, anonymous IDs~~ → ✅ Done (named groups, first-match-wins, no overlap policy) |
-| **8** | DAW scripting | DawProcessor ABC, backends, PTSL integration |
+| **8** | DAW scripting | ~~DawProcessor ABC~~, ~~PTSL integration (check/fetch/transfer)~~, sync, DAWProject backend |
 | **Ongoing** | Low-hanging fruit | Stereo narrowness, Start offset, Name mismatch, `rich` optional |
 
 ---
