@@ -48,34 +48,37 @@ _GUI_DEFAULTS: dict[str, Any] = {
     "default_project_dir": "",
     "invert_scroll": "default",
     "colors": copy.deepcopy(PT_DEFAULT_COLORS),
-    "default_groups": [
-        # Drums
-        {"name": "Kick",    "color": "Guardsman Red",        "gain_linked": True},
-        {"name": "Snare",   "color": "Dodger Blue Light",    "gain_linked": True},
-        {"name": "Toms",    "color": "Tia Maria",            "gain_linked": True},
-        {"name": "HH",      "color": "La Rioja",             "gain_linked": False},
-        {"name": "OH",      "color": "Java",                 "gain_linked": True},
-        {"name": "Room",    "color": "Purple",               "gain_linked": False},
-        {"name": "Perc",    "color": "Corn Harvest",         "gain_linked": False},
-        {"name": "Loops",   "color": "Apricot",              "gain_linked": False},
-        # Bass
-        {"name": "Bass",    "color": "Christi",              "gain_linked": False},
-        # Guitars
-        {"name": "E.Gtr",   "color": "Pizza",               "gain_linked": False},
-        {"name": "A.Gtr",   "color": "Lima Dark",            "gain_linked": False},
-        # Keys & Synths
-        {"name": "Keys",    "color": "Malachite",            "gain_linked": False},
-        {"name": "Synths",  "color": "Electric Violet Light", "gain_linked": False},
-        # Strings & Pads
-        {"name": "Strings", "color": "Eastern Blue",         "gain_linked": False},
-        {"name": "Pads",    "color": "Flirt",                "gain_linked": False},
-        {"name": "Brass",   "color": "Milano Red",           "gain_linked": False},
-        # Vocals
-        {"name": "VOX",     "color": "Dodger Blue Dark",     "gain_linked": False},
-        {"name": "BGs",     "color": "Matisse",              "gain_linked": False},
-        # Effects
-        {"name": "FX",      "color": "Lipstick",             "gain_linked": False},
-    ],
+    "active_group_preset": "Default",
+    "group_presets": {
+        "Default": [
+            # Drums
+            {"name": "Kick",    "color": "Guardsman Red",        "gain_linked": True},
+            {"name": "Snare",   "color": "Dodger Blue Light",    "gain_linked": True},
+            {"name": "Toms",    "color": "Tia Maria",            "gain_linked": True},
+            {"name": "HH",      "color": "La Rioja",             "gain_linked": False},
+            {"name": "OH",      "color": "Java",                 "gain_linked": True},
+            {"name": "Room",    "color": "Purple",               "gain_linked": False},
+            {"name": "Perc",    "color": "Corn Harvest",         "gain_linked": False},
+            {"name": "Loops",   "color": "Apricot",              "gain_linked": False},
+            # Bass
+            {"name": "Bass",    "color": "Christi",              "gain_linked": False},
+            # Guitars
+            {"name": "E.Gtr",   "color": "Pizza",               "gain_linked": False},
+            {"name": "A.Gtr",   "color": "Lima Dark",            "gain_linked": False},
+            # Keys & Synths
+            {"name": "Keys",    "color": "Malachite",            "gain_linked": False},
+            {"name": "Synths",  "color": "Electric Violet Light", "gain_linked": False},
+            # Strings & Pads
+            {"name": "Strings", "color": "Eastern Blue",         "gain_linked": False},
+            {"name": "Pads",    "color": "Flirt",                "gain_linked": False},
+            {"name": "Brass",   "color": "Milano Red",           "gain_linked": False},
+            # Vocals
+            {"name": "VOX",     "color": "Dodger Blue Dark",     "gain_linked": False},
+            {"name": "BGs",     "color": "Matisse",              "gain_linked": False},
+            # Effects
+            {"name": "FX",      "color": "Lipstick",             "gain_linked": False},
+        ],
+    },
 }
 
 
@@ -148,6 +151,9 @@ def load_config() -> dict[str, Any]:
         _backup_corrupt(path)
         save_config(defaults)
         return copy.deepcopy(defaults)
+
+    # -- Migrate legacy default_groups → group_presets --
+    _migrate_default_groups(data)
 
     # -- Merge: defaults ← file overrides (section by section) --
     merged = _merge_structured(defaults, data)
@@ -226,6 +232,41 @@ def _merge_structured(
     merged["gui"] = gui_defaults
 
     return merged
+
+
+def active_group_list(config: dict[str, Any]) -> list[dict]:
+    """Return the group list for the currently active preset.
+
+    Falls back to the built-in Default preset if the active preset is
+    missing or the config uses the legacy ``default_groups`` key.
+    """
+    gui = config.get("gui", {})
+    presets = gui.get("group_presets", _GUI_DEFAULTS.get("group_presets", {}))
+    active = gui.get("active_group_preset", "Default")
+    if active in presets:
+        return presets[active]
+    # Fallback: try "Default", then first available, then built-in
+    if "Default" in presets:
+        return presets["Default"]
+    if presets:
+        return next(iter(presets.values()))
+    return _GUI_DEFAULTS["group_presets"]["Default"]
+
+
+def _migrate_default_groups(data: dict[str, Any]) -> None:
+    """Migrate legacy ``gui.default_groups`` list → ``gui.group_presets`` dict.
+
+    Operates in-place on *data* so the merge step sees the new keys.
+    """
+    gui = data.get("gui")
+    if not isinstance(gui, dict):
+        return
+    if "default_groups" in gui and "group_presets" not in gui:
+        old_groups = gui.pop("default_groups")
+        if isinstance(old_groups, list):
+            gui["group_presets"] = {"Default": old_groups}
+            gui.setdefault("active_group_preset", "Default")
+            log.info("Migrated legacy default_groups → group_presets")
 
 
 def _backup_corrupt(path: str) -> None:

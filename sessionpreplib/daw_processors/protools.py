@@ -231,7 +231,7 @@ class ProToolsDawProcessor(DawProcessor):
         """Return the ARGB hex for *group_name*, or ``None``."""
         if not group_name:
             return None
-        groups = session.config.get("gui", {}).get("default_groups", [])
+        groups = session.config.get("gui", {}).get("groups", [])
         color_name: str | None = None
         for g in groups:
             if g.get("name") == group_name:

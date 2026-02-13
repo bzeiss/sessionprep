@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -759,6 +760,37 @@ class PreferencesDialog(QDialog):
         desc.setStyleSheet("color: #888; font-size: 9pt;")
         layout.addWidget(desc)
 
+        # ── Preset toolbar ────────────────────────────────────────────
+        preset_row = QHBoxLayout()
+        preset_row.setContentsMargins(0, 0, 0, 0)
+        preset_row.setSpacing(6)
+
+        preset_row.addWidget(QLabel("Preset:"))
+        self._group_preset_combo = QComboBox()
+        self._group_preset_combo.setMinimumWidth(160)
+        preset_row.addWidget(self._group_preset_combo, 1)
+
+        add_preset_btn = QPushButton("+")
+        add_preset_btn.setFixedWidth(28)
+        add_preset_btn.setToolTip("New preset")
+        add_preset_btn.clicked.connect(self._on_group_preset_add)
+        preset_row.addWidget(add_preset_btn)
+
+        dup_preset_btn = QPushButton("Duplicate")
+        dup_preset_btn.clicked.connect(self._on_group_preset_duplicate)
+        preset_row.addWidget(dup_preset_btn)
+
+        self._rename_preset_btn = QPushButton("Rename")
+        self._rename_preset_btn.clicked.connect(self._on_group_preset_rename)
+        preset_row.addWidget(self._rename_preset_btn)
+
+        self._delete_preset_btn = QPushButton("Delete")
+        self._delete_preset_btn.clicked.connect(self._on_group_preset_delete)
+        preset_row.addWidget(self._delete_preset_btn)
+
+        layout.addLayout(preset_row)
+
+        # ── Groups table ──────────────────────────────────────────────
         self._groups_table = QTableWidget()
         self._groups_table.setColumnCount(3)
         self._groups_table.setHorizontalHeaderLabels(
@@ -778,22 +810,9 @@ class PreferencesDialog(QDialog):
 
         self._groups_table.cellChanged.connect(self._on_group_name_changed)
 
-        # Populate from config
-        groups = self._config.get("gui", {}).get("default_groups", [])
-        self._groups_table.blockSignals(True)
-        self._groups_table.setRowCount(len(groups))
-        for row, entry in enumerate(groups):
-            self._set_group_row(
-                row,
-                entry.get("name", ""),
-                entry.get("color", ""),
-                entry.get("gain_linked", False),
-            )
-        self._groups_table.blockSignals(False)
-
         layout.addWidget(self._groups_table, 1)
 
-        # Buttons
+        # ── Group row buttons ─────────────────────────────────────────
         btn_row = QHBoxLayout()
         btn_row.setContentsMargins(0, 0, 0, 0)
         btn_row.setSpacing(6)
@@ -812,13 +831,168 @@ class PreferencesDialog(QDialog):
 
         btn_row.addStretch()
 
-        az_btn = QPushButton("Sort A→Z")
+        az_btn = QPushButton("Sort A\u2192Z")
         az_btn.clicked.connect(self._on_groups_sort_az)
         btn_row.addWidget(az_btn)
 
         layout.addLayout(btn_row)
 
         self._add_page(item, page)
+
+        # ── Initialise preset data ────────────────────────────────────
+        gui = self._config.get("gui", {})
+        presets = gui.get("group_presets",
+                          _GUI_DEFAULTS.get("group_presets", {}))
+        self._group_presets_data: dict[str, list[dict]] = copy.deepcopy(presets)
+        active = gui.get("active_group_preset", "Default")
+        if active not in self._group_presets_data:
+            active = "Default"
+
+        self._group_preset_combo.blockSignals(True)
+        for name in self._group_presets_data:
+            self._group_preset_combo.addItem(name)
+        idx = self._group_preset_combo.findText(active)
+        if idx >= 0:
+            self._group_preset_combo.setCurrentIndex(idx)
+        self._group_preset_combo.blockSignals(False)
+
+        self._group_preset_combo.currentTextChanged.connect(
+            self._on_group_preset_switched)
+        self._load_groups_for_preset(active)
+        self._update_group_preset_buttons()
+
+    # ── Preset helpers ─────────────────────────────────────────────
+
+    def _load_groups_for_preset(self, preset_name: str):
+        """Load groups from *preset_name* into the groups table."""
+        groups = self._group_presets_data.get(preset_name, [])
+        self._groups_table.blockSignals(True)
+        self._groups_table.setRowCount(0)
+        self._groups_table.setRowCount(len(groups))
+        for row, entry in enumerate(groups):
+            self._set_group_row(
+                row,
+                entry.get("name", ""),
+                entry.get("color", ""),
+                entry.get("gain_linked", False),
+            )
+        self._groups_table.blockSignals(False)
+
+    def _save_current_preset(self):
+        """Save the current groups table state back into _group_presets_data."""
+        name = self._group_preset_combo.currentText()
+        if name:
+            self._group_presets_data[name] = self._read_groups()
+
+    def _update_group_preset_buttons(self):
+        """Enable/disable Rename and Delete based on current preset."""
+        is_default = self._group_preset_combo.currentText() == "Default"
+        self._rename_preset_btn.setEnabled(not is_default)
+        self._delete_preset_btn.setEnabled(not is_default)
+
+    def _on_group_preset_switched(self, text: str):
+        """Save current table state, load newly selected preset."""
+        # Save previous preset before switching
+        prev = getattr(self, "_prev_group_preset", None)
+        if prev and prev in self._group_presets_data:
+            self._group_presets_data[prev] = self._read_groups()
+        self._prev_group_preset = text
+        self._load_groups_for_preset(text)
+        self._update_group_preset_buttons()
+
+    def _on_group_preset_add(self):
+        """Create a new empty preset."""
+        name, ok = QInputDialog.getText(
+            self, "New Group Preset", "Preset name:")
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        if name in self._group_presets_data:
+            QMessageBox.warning(
+                self, "Duplicate Name",
+                f"A preset named \u201c{name}\u201d already exists.")
+            return
+        self._save_current_preset()
+        self._group_presets_data[name] = []
+        self._group_preset_combo.blockSignals(True)
+        self._group_preset_combo.addItem(name)
+        self._group_preset_combo.setCurrentText(name)
+        self._group_preset_combo.blockSignals(False)
+        self._prev_group_preset = name
+        self._load_groups_for_preset(name)
+        self._update_group_preset_buttons()
+
+    def _on_group_preset_duplicate(self):
+        """Duplicate the current preset under a new name."""
+        current = self._group_preset_combo.currentText()
+        name, ok = QInputDialog.getText(
+            self, "Duplicate Group Preset", "New preset name:",
+            text=f"{current} Copy")
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        if name in self._group_presets_data:
+            QMessageBox.warning(
+                self, "Duplicate Name",
+                f"A preset named \u201c{name}\u201d already exists.")
+            return
+        self._save_current_preset()
+        self._group_presets_data[name] = copy.deepcopy(
+            self._group_presets_data.get(current, []))
+        self._group_preset_combo.blockSignals(True)
+        self._group_preset_combo.addItem(name)
+        self._group_preset_combo.setCurrentText(name)
+        self._group_preset_combo.blockSignals(False)
+        self._prev_group_preset = name
+        self._load_groups_for_preset(name)
+        self._update_group_preset_buttons()
+
+    def _on_group_preset_rename(self):
+        """Rename the current preset (not allowed for Default)."""
+        current = self._group_preset_combo.currentText()
+        if current == "Default":
+            return
+        name, ok = QInputDialog.getText(
+            self, "Rename Group Preset", "New name:", text=current)
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        if name == current:
+            return
+        if name in self._group_presets_data:
+            QMessageBox.warning(
+                self, "Duplicate Name",
+                f"A preset named \u201c{name}\u201d already exists.")
+            return
+        self._save_current_preset()
+        self._group_presets_data[name] = self._group_presets_data.pop(current)
+        idx = self._group_preset_combo.findText(current)
+        self._group_preset_combo.blockSignals(True)
+        self._group_preset_combo.setItemText(idx, name)
+        self._group_preset_combo.blockSignals(False)
+        self._prev_group_preset = name
+        self._update_group_preset_buttons()
+
+    def _on_group_preset_delete(self):
+        """Delete the current preset (not allowed for Default)."""
+        current = self._group_preset_combo.currentText()
+        if current == "Default":
+            return
+        reply = QMessageBox.question(
+            self, "Delete Preset",
+            f"Delete the preset \u201c{current}\u201d?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+        self._group_presets_data.pop(current, None)
+        idx = self._group_preset_combo.findText(current)
+        self._group_preset_combo.blockSignals(True)
+        self._group_preset_combo.removeItem(idx)
+        self._group_preset_combo.setCurrentText("Default")
+        self._group_preset_combo.blockSignals(False)
+        self._prev_group_preset = "Default"
+        self._load_groups_for_preset("Default")
+        self._update_group_preset_buttons()
 
     def _color_names(self) -> list[str]:
         """Return the list of color names currently in the colors table."""
@@ -988,7 +1162,8 @@ class PreferencesDialog(QDialog):
         self._groups_table.blockSignals(False)
 
     def _on_groups_reset(self):
-        defaults = _GUI_DEFAULTS.get("default_groups", [])
+        builtin = _GUI_DEFAULTS.get("group_presets", {}).get("Default", [])
+        defaults = copy.deepcopy(builtin)
         self._groups_table.blockSignals(True)
         self._groups_table.setRowCount(0)
         self._groups_table.setRowCount(len(defaults))
@@ -1101,8 +1276,11 @@ class PreferencesDialog(QDialog):
         # Colors
         gui["colors"] = self._read_colors()
 
-        # Groups
-        gui["default_groups"] = self._read_groups()
+        # Groups — save current table into presets data, then persist all presets
+        self._save_current_preset()
+        gui["group_presets"] = copy.deepcopy(self._group_presets_data)
+        gui["active_group_preset"] = self._group_preset_combo.currentText()
+        gui.pop("default_groups", None)  # remove legacy key if present
 
         self._saved = True
         self.accept()

@@ -50,7 +50,7 @@ from sessionpreplib.detector import TrackDetector
 from sessionpreplib.detectors import detector_help_map
 from sessionpreplib.utils import protools_sort_key
 
-from .settings import load_config, config_path, _GUI_DEFAULTS
+from .settings import load_config, config_path, active_group_list, _GUI_DEFAULTS
 from .theme import (
     COLORS,
     FILE_COLOR_OK,
@@ -484,6 +484,33 @@ class SessionPrepWindow(QMainWindow):
         self._analyze_action.triggered.connect(self._on_analyze)
         self._analysis_toolbar.addAction(self._analyze_action)
 
+        self._analysis_toolbar.addSeparator()
+
+        self._analysis_toolbar.addWidget(QLabel("  Groups:"))
+        self._group_preset_combo = QComboBox()
+        self._group_preset_combo.setMinimumWidth(120)
+        self._populate_group_preset_combo()
+        self._group_preset_combo.currentTextChanged.connect(
+            self._on_group_preset_changed)
+        self._analysis_toolbar.addWidget(self._group_preset_combo)
+
+    def _populate_group_preset_combo(self):
+        """Fill the group-preset combo from config, preserving the current selection."""
+        gui = self._config.get("gui", {})
+        presets = gui.get("group_presets",
+                          _GUI_DEFAULTS.get("group_presets", {}))
+        active = gui.get("active_group_preset", "Default")
+        self._group_preset_combo.blockSignals(True)
+        self._group_preset_combo.clear()
+        for name in presets:
+            self._group_preset_combo.addItem(name)
+        idx = self._group_preset_combo.findText(active)
+        if idx >= 0:
+            self._group_preset_combo.setCurrentIndex(idx)
+        elif self._group_preset_combo.count() > 0:
+            self._group_preset_combo.setCurrentIndex(0)
+        self._group_preset_combo.blockSignals(False)
+
     def _build_setup_page(self) -> QWidget:
         """Build the Session Setup phase page with its own toolbar."""
         page = QWidget()
@@ -748,7 +775,7 @@ class SessionPrepWindow(QMainWindow):
         self._transfer_progress_panel.setVisible(True)
         # Inject GUI config (groups + colors) into session.config so
         # transfer() can resolve group → color ARGB
-        self._session.config.setdefault("gui", {})["default_groups"] = list(
+        self._session.config.setdefault("gui", {})["groups"] = list(
             self._session_groups)
         colors = self._config.get("gui", {}).get("colors", PT_DEFAULT_COLORS)
         self._session.config["gui"]["colors"] = colors
@@ -1574,12 +1601,37 @@ class SessionPrepWindow(QMainWindow):
         self._refresh_group_combos()
 
     def _on_groups_tab_reset(self):
-        """Reset session groups to the defaults from preferences."""
-        defaults = self._config.get("gui", {}).get(
-            "default_groups", _GUI_DEFAULTS.get("default_groups", []))
-        self._session_groups = copy.deepcopy(defaults)
+        """Reset session groups to the active preset from preferences."""
+        self._session_groups = copy.deepcopy(active_group_list(self._config))
         self._populate_groups_tab()
         self._refresh_group_combos()
+
+    # ── Group preset switching (Analysis toolbar) ─────────────────────
+
+    @Slot(str)
+    def _on_group_preset_changed(self, preset_name: str):
+        """Switch the active group preset from the Analysis toolbar combo."""
+        gui = self._config.setdefault("gui", {})
+        presets = gui.get("group_presets",
+                          _GUI_DEFAULTS.get("group_presets", {}))
+        if preset_name not in presets:
+            return
+        gui["active_group_preset"] = preset_name
+
+        new_groups = copy.deepcopy(presets[preset_name])
+        new_names = {g["name"].strip().lower() for g in new_groups}
+
+        # Name-match existing track assignments (case-insensitive)
+        if self._session:
+            for track in self._session.tracks:
+                if track.group is not None:
+                    if track.group.strip().lower() not in new_names:
+                        track.group = None
+
+        self._session_groups = new_groups
+        self._populate_groups_tab()
+        self._refresh_group_combos()
+        self._populate_setup_table()
 
     def _make_report_browser(self) -> QTextBrowser:
         """Create a consistently styled QTextBrowser for reports."""
@@ -1834,10 +1886,8 @@ class SessionPrepWindow(QMainWindow):
         self._analyze_action.setEnabled(True)
         self._worker = None
 
-        # Prefill session groups from config defaults
-        defaults = self._config.get("gui", {}).get(
-            "default_groups", _GUI_DEFAULTS.get("default_groups", []))
-        self._session_groups = copy.deepcopy(defaults)
+        # Prefill session groups from the active group preset
+        self._session_groups = copy.deepcopy(active_group_list(self._config))
         self._populate_groups_tab()
 
         self._populate_table(session)
@@ -3135,6 +3185,9 @@ class SessionPrepWindow(QMainWindow):
             self._status_bar.showMessage("Preferences saved.")
             self._waveform.set_invert_scroll(
                 self._config.get("gui", {}).get("invert_scroll", "default"))
+
+            # Refresh group preset combo (presets may have been added/removed/renamed)
+            self._populate_group_preset_combo()
 
             # Re-configure DAW processors (enabled flag may have changed)
             self._configure_daw_processors()
