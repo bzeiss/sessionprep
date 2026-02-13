@@ -57,6 +57,7 @@ _GUI_DEFAULTS: dict[str, Any] = {
         {"name": "OH",      "color": "Java",                 "gain_linked": True},
         {"name": "Room",    "color": "Purple",               "gain_linked": False},
         {"name": "Perc",    "color": "Corn Harvest",         "gain_linked": False},
+        {"name": "Loops",   "color": "Apricot",              "gain_linked": False},
         # Bass
         {"name": "Bass",    "color": "Christi",              "gain_linked": False},
         # Guitars
