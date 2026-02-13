@@ -229,6 +229,7 @@ class _FolderDropTree(QTreeWidget):
         self.setDragEnabled(True)
         self.setDragDropMode(QTreeWidget.DragDrop)
         self.setDefaultDropAction(Qt.MoveAction)
+        self.setDropIndicatorShown(True)
 
     # -- MIME production (for internal drag of track items) -----------------
 
@@ -241,7 +242,7 @@ class _FolderDropTree(QTreeWidget):
             if it.data(0, Qt.UserRole + 1) == "track"
         ]
         if not filenames:
-            return super().mimeData(items)
+            return None  # block drag of non-track items (folders)
         mime = QMimeData()
         mime.setData(_MIME_TRACKS, json.dumps(filenames).encode())
         return mime
@@ -251,50 +252,70 @@ class _FolderDropTree(QTreeWidget):
 
     # -- Drop handling -----------------------------------------------------
 
-    def dragEnterEvent(self, event):
-        if event.mimeData().hasFormat(_MIME_TRACKS):
-            event.acceptProposedAction()
-        else:
-            super().dragEnterEvent(event)
+    def _is_valid_mime(self, mimeData) -> bool:
+        """Check that the MIME payload is our JSON, not Qt internal data."""
+        if not mimeData.hasFormat(_MIME_TRACKS):
+            return False
+        try:
+            bytes(mimeData.data(_MIME_TRACKS)).decode("utf-8")
+            return True
+        except (UnicodeDecodeError, ValueError):
+            return False
 
-    def dragMoveEvent(self, event):
-        if event.mimeData().hasFormat(_MIME_TRACKS):
-            item = self.itemAt(event.position().toPoint())
-            if item:
-                kind = item.data(0, Qt.UserRole + 1)
-                if kind in ("folder", "track"):
-                    event.acceptProposedAction()
-                    return
-            event.ignore()
-        else:
-            super().dragMoveEvent(event)
+    def _resolve_drop(self, pos):
+        """Return (folder_pt_id, insert_index) for a drop at *pos*.
 
-    def dropEvent(self, event):
-        if not event.mimeData().hasFormat(_MIME_TRACKS):
-            super().dropEvent(event)
-            return
-        item = self.itemAt(event.position().toPoint())
+        Uses the item geometry to decide above / on / below placement.
+        Returns (None, -1) if the drop target is invalid.
+        """
+        item = self.itemAt(pos)
         if not item:
-            event.ignore()
-            return
-        data = bytes(event.mimeData().data(_MIME_TRACKS)).decode()
-        filenames = json.loads(data)
+            return None, -1
         kind = item.data(0, Qt.UserRole + 1)
         if kind == "folder":
-            folder_id = item.data(0, Qt.UserRole)
-            self.tracks_dropped.emit(filenames, folder_id, -1)
-            event.acceptProposedAction()
-        elif kind == "track":
+            return item.data(0, Qt.UserRole), -1
+        if kind == "track":
             parent = item.parent()
-            if parent and parent.data(0, Qt.UserRole + 1) == "folder":
-                folder_id = parent.data(0, Qt.UserRole)
-                idx = parent.indexOfChild(item)
-                self.tracks_dropped.emit(filenames, folder_id, idx)
-                event.acceptProposedAction()
-            else:
-                event.ignore()
+            if not parent or parent.data(0, Qt.UserRole + 1) != "folder":
+                return None, -1
+            folder_id = parent.data(0, Qt.UserRole)
+            idx = parent.indexOfChild(item)
+            rect = self.visualItemRect(item)
+            mid = rect.top() + rect.height() // 2
+            if pos.y() > mid:
+                idx += 1  # drop below → insert after
+            return folder_id, idx
+        return None, -1
+
+    def dragEnterEvent(self, event):
+        if self._is_valid_mime(event.mimeData()):
+            event.acceptProposedAction()
         else:
             event.ignore()
+
+    def dragMoveEvent(self, event):
+        if not self._is_valid_mime(event.mimeData()):
+            event.ignore()
+            return
+        folder_id, _ = self._resolve_drop(event.position().toPoint())
+        if folder_id is not None:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        if not self._is_valid_mime(event.mimeData()):
+            event.ignore()
+            return
+        pos = event.position().toPoint()
+        folder_id, idx = self._resolve_drop(pos)
+        if folder_id is None:
+            event.ignore()
+            return
+        data = bytes(event.mimeData().data(_MIME_TRACKS)).decode("utf-8")
+        filenames = json.loads(data)
+        self.tracks_dropped.emit(filenames, folder_id, idx)
+        event.acceptProposedAction()
 
     # -- Delete to unassign ------------------------------------------------
 
@@ -566,10 +587,13 @@ class SessionPrepWindow(QMainWindow):
         self._folder_tree.setHeaderLabels(["Folder / Track"])
         self._folder_tree.setSelectionMode(QTreeWidget.ExtendedSelection)
         self._folder_tree.setAlternatingRowColors(True)
-        # Match visual size to the setup table
+        # Match visual size to the setup table; semi-transparent selection
         self._folder_tree.setStyleSheet(
             "QTreeWidget { font-size: 10pt; }"
             "QTreeWidget::item { min-height: 22px; }"
+            "QTreeWidget::item:selected {"
+            "  background-color: rgba(42, 109, 181, 128);"
+            "}"
         )
         self._folder_tree.tracks_dropped.connect(self._assign_tracks_to_folder)
         self._folder_tree.tracks_unassigned.connect(self._unassign_tracks)
@@ -740,7 +764,8 @@ class SessionPrepWindow(QMainWindow):
             else:
                 item.setIcon(0, basic_icon)
             item.setFlags(
-                item.flags() | Qt.ItemIsDropEnabled)
+                (item.flags() | Qt.ItemIsDropEnabled)
+                & ~Qt.ItemIsDragEnabled)
 
             # Add assigned tracks as children
             for fname in folder_tracks.get(folder["pt_id"], []):
@@ -751,12 +776,12 @@ class SessionPrepWindow(QMainWindow):
                 track_item.setFlags(
                     (track_item.flags() | Qt.ItemIsDragEnabled)
                     & ~Qt.ItemIsDropEnabled)
-                # Color by group
+                # Row background from group color (matches table tint)
                 tc = track_map.get(fname)
                 if tc and tc.group:
-                    argb = gcm.get(tc.group)
-                    if argb:
-                        track_item.setForeground(0, _argb_to_qcolor(argb))
+                    tint = self._tint_group_color(tc.group, gcm)
+                    if tint:
+                        track_item.setBackground(0, tint)
 
             # Recurse into child folders
             for child in children_map.get(folder["pt_id"], []):
