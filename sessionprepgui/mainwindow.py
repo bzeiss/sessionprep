@@ -390,7 +390,7 @@ class SessionPrepWindow(QMainWindow):
         header.resizeSection(3, 120)
         header.resizeSection(4, 90)
         header.resizeSection(5, 100)
-        header.resizeSection(6, 110)
+        header.resizeSection(6, 140)
 
         self._track_table.cellClicked.connect(self._on_row_clicked)
         self._track_table.currentCellChanged.connect(self._on_current_cell_changed)
@@ -1233,6 +1233,8 @@ class SessionPrepWindow(QMainWindow):
             # Row background from group color
             self._apply_row_group_color(row, track.group)
 
+        self._auto_fit_group_column()
+
     @Slot(object, object)
     def _on_analyze_done(self, session, summary):
         self._session = session
@@ -1637,6 +1639,7 @@ class SessionPrepWindow(QMainWindow):
         self._track_table.resizeColumnsToContents()
         for col in (2, 3, 4, 5, 6):
             header.setSectionResizeMode(col, QHeaderView.Interactive)
+        self._auto_fit_group_column()
 
     def _populate_setup_table(self):
         """Refresh the Session Setup track table from the current session."""
@@ -1649,6 +1652,7 @@ class SessionPrepWindow(QMainWindow):
         self._setup_table.setRowCount(len(ok_tracks))
         gcm = self._group_color_map()
         gcm_rank = self._group_rank_map()
+        glm = self._gain_linked_map()
 
         for row, track in enumerate(ok_tracks):
             pr = (
@@ -1679,8 +1683,8 @@ class SessionPrepWindow(QMainWindow):
             fg_item.setForeground(QColor(COLORS["text"]))
             self._setup_table.setItem(row, 3, fg_item)
 
-            # Column 4: group (read-only)
-            grp_label = track.group or ""
+            # Column 4: group (read-only, with link indicator)
+            grp_label = self._group_display_name(track.group, glm) if track.group else ""
             grp_rank = gcm_rank.get(track.group, len(gcm_rank)) if track.group else len(gcm_rank)
             grp_item = _SortableItem(grp_label, grp_rank)
             grp_item.setForeground(QColor(COLORS["text"]))
@@ -1961,11 +1965,26 @@ class SessionPrepWindow(QMainWindow):
     # ── Group column (col 6) ────────────────────────────────────────────
 
     _GROUP_NONE_LABEL = "(None)"
+    _LINK_INDICATOR = " 🔗"
 
     def _group_combo_items(self) -> list[str]:
         """Return the items list for Group combo boxes."""
         return [self._GROUP_NONE_LABEL] + [
             g["name"] for g in self._session_groups]
+
+    def _gain_linked_map(self) -> dict[str, bool]:
+        """Return {group_name: gain_linked} for all session groups."""
+        return {g["name"]: g.get("gain_linked", False)
+                for g in self._session_groups}
+
+    def _group_display_name(self, name: str,
+                            glm: dict[str, bool] | None = None) -> str:
+        """Return display name with link indicator if gain-linked."""
+        if glm is None:
+            glm = self._gain_linked_map()
+        if glm.get(name, False):
+            return name + self._LINK_INDICATOR
+        return name
 
     def _group_rank_map(self) -> dict[str, int]:
         """Return {group_name: position_index} for sort-by-rank ordering."""
@@ -2010,24 +2029,32 @@ class SessionPrepWindow(QMainWindow):
 
     def _create_group_combo(self, row: int, track):
         """Create and install a Group combo in column 6."""
-        current = track.group or self._GROUP_NONE_LABEL
+        glm = self._gain_linked_map()
+        display = self._group_display_name(track.group, glm) if track.group else self._GROUP_NONE_LABEL
         grm = self._group_rank_map()
         rank = grm.get(track.group, len(grm)) if track.group else len(grm)
-        sort_item = _SortableItem(current, rank)
+        sort_item = _SortableItem(display, rank)
         self._track_table.setItem(row, 6, sort_item)
 
         combo = BatchComboBox()
         combo.setIconSize(QSize(16, 16))
         gcm = self._group_color_map()
         combo.addItem(self._GROUP_NONE_LABEL)
-        for gname in [g["name"] for g in self._session_groups]:
+        combo.setItemData(0, None, Qt.UserRole)
+        for i, gname in enumerate([g["name"] for g in self._session_groups]):
+            disp = self._group_display_name(gname, glm)
             argb = gcm.get(gname)
             if argb:
-                combo.addItem(self._color_swatch_icon(argb), gname)
+                combo.addItem(self._color_swatch_icon(argb), disp)
             else:
-                combo.addItem(gname)
+                combo.addItem(disp)
+            combo.setItemData(i + 1, gname, Qt.UserRole)
         combo.blockSignals(True)
-        combo.setCurrentText(current)
+        # Find item by UserRole (clean name)
+        for ci in range(combo.count()):
+            if combo.itemData(ci, Qt.UserRole) == track.group:
+                combo.setCurrentIndex(ci)
+                break
         combo.blockSignals(False)
         combo.setProperty("track_filename", track.filename)
         combo.setStyleSheet(
@@ -2035,6 +2062,21 @@ class SessionPrepWindow(QMainWindow):
         )
         combo.textActivated.connect(self._on_group_changed)
         self._track_table.setCellWidget(row, 6, combo)
+
+    def _auto_fit_group_column(self):
+        """Resize the Group column (6) to fit the widest current combo text."""
+        max_w = 0
+        for row in range(self._track_table.rowCount()):
+            w = self._track_table.cellWidget(row, 6)
+            if isinstance(w, BatchComboBox):
+                fm = w.fontMetrics()
+                tw = fm.horizontalAdvance(w.currentText())
+                max_w = max(max_w, tw)
+        if max_w > 0:
+            # icon (16) + icon gap (4) + text + dropdown arrow (~24) + margins (16)
+            needed = 16 + 4 + max_w + 24 + 16
+            header = self._track_table.horizontalHeader()
+            header.resizeSection(6, max(needed, 100))
 
     @Slot(str)
     def _on_group_changed(self, text: str):
@@ -2051,7 +2093,9 @@ class SessionPrepWindow(QMainWindow):
         if not track:
             return
 
-        new_group = text if text != self._GROUP_NONE_LABEL else None
+        # Read clean group name from UserRole
+        new_group = combo.currentData(Qt.UserRole)
+        display = text  # display text (with link indicator)
 
         # Batch path: synchronous — no reanalysis needed
         if getattr(combo, 'batch_mode', False):
@@ -2073,15 +2117,20 @@ class SessionPrepWindow(QMainWindow):
                     w = self._track_table.cellWidget(row, 6)
                     if isinstance(w, BatchComboBox):
                         w.blockSignals(True)
-                        w.setCurrentText(text)
+                        # Find matching item by UserRole
+                        for ci in range(w.count()):
+                            if w.itemData(ci, Qt.UserRole) == new_group:
+                                w.setCurrentIndex(ci)
+                                break
                         w.blockSignals(False)
                     sort_item = self._track_table.item(row, 6)
                     if sort_item:
-                        sort_item.setText(text)
+                        sort_item.setText(display)
                         sort_item._sort_key = rank
                     self._apply_row_group_color(row, new_group, gcm)
             self._track_table.setSortingEnabled(True)
             self._track_table.restore_selection(batch_keys)
+            self._auto_fit_group_column()
             self._populate_setup_table()
         else:
             if track.group == new_group:
@@ -2094,34 +2143,45 @@ class SessionPrepWindow(QMainWindow):
             if row >= 0:
                 sort_item = self._track_table.item(row, 6)
                 if sort_item:
-                    sort_item.setText(text)
+                    sort_item.setText(display)
                     sort_item._sort_key = rank
                 self._apply_row_group_color(row, new_group)
+            self._auto_fit_group_column()
             self._populate_setup_table()
 
     def _refresh_group_combos(self):
         """Refresh the items in all Group combo boxes from _session_groups."""
         gcm = self._group_color_map()
         grm = self._group_rank_map()
+        glm = self._gain_linked_map()
         for row in range(self._track_table.rowCount()):
             w = self._track_table.cellWidget(row, 6)
             if isinstance(w, BatchComboBox):
-                current = w.currentText()
+                # Read clean group name via UserRole
+                old_group = w.currentData(Qt.UserRole)
                 w.blockSignals(True)
                 w.clear()
                 w.setIconSize(QSize(16, 16))
                 w.addItem(self._GROUP_NONE_LABEL)
-                for gname in [g["name"] for g in self._session_groups]:
+                w.setItemData(0, None, Qt.UserRole)
+                for i, gname in enumerate(
+                        [g["name"] for g in self._session_groups]):
+                    disp = self._group_display_name(gname, glm)
                     argb = gcm.get(gname)
                     if argb:
-                        w.addItem(self._color_swatch_icon(argb), gname)
+                        w.addItem(self._color_swatch_icon(argb), disp)
                     else:
-                        w.addItem(gname)
-                # Restore selection; if the group was removed, fall back to None
-                idx = w.findText(current)
-                if idx >= 0:
-                    w.setCurrentIndex(idx)
-                else:
+                        w.addItem(disp)
+                    w.setItemData(i + 1, gname, Qt.UserRole)
+                # Restore selection by UserRole match
+                restored = False
+                if old_group is not None:
+                    for ci in range(w.count()):
+                        if w.itemData(ci, Qt.UserRole) == old_group:
+                            w.setCurrentIndex(ci)
+                            restored = True
+                            break
+                if not restored:
                     w.setCurrentIndex(0)  # (None)
                     # Also clear the track's group assignment
                     fname = w.property("track_filename")
@@ -2132,15 +2192,16 @@ class SessionPrepWindow(QMainWindow):
                         if track:
                             track.group = None
                 w.blockSignals(False)
-                # Update sort key + row color
-                effective = w.currentText()
-                gname = effective if effective != self._GROUP_NONE_LABEL else None
+                # Update sort key, display text + row color
+                gname = w.currentData(Qt.UserRole)
                 sort_item = self._track_table.item(row, 6)
                 if sort_item:
                     rank = grm.get(gname, len(grm)) if gname else len(grm)
                     sort_item._sort_key = rank
+                    sort_item.setText(w.currentText())
                 self._apply_row_group_color(row, gname, gcm)
 
+        self._auto_fit_group_column()
         self._populate_setup_table()
 
     def _reanalyze_single_track(self, track):
