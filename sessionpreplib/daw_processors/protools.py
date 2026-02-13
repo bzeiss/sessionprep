@@ -94,6 +94,57 @@ class ProToolsDawProcessor(DawProcessor):
                     pass
 
     def fetch(self, session: SessionContext) -> SessionContext:
+        try:
+            from ptsl import Engine
+            from ptsl import PTSL_pb2 as pt
+        except ImportError:
+            return session
+
+        engine = None
+        try:
+            address = f"{self._host}:{self._port}"
+            engine = Engine(
+                company_name=self._company_name,
+                application_name=self._application_name,
+                address=address,
+            )
+            all_tracks = engine.track_list()
+            folders: list[dict[str, Any]] = []
+            for track in all_tracks:
+                if track.type in (pt.TrackType.RoutingFolder, pt.TrackType.BasicFolder):
+                    folder_type = (
+                        "routing" if track.type == pt.TrackType.RoutingFolder
+                        else "basic"
+                    )
+                    folders.append({
+                        "pt_id": track.id,
+                        "name": track.name,
+                        "folder_type": folder_type,
+                        "index": track.index,
+                        "parent_id": track.parent_folder_id or None,
+                    })
+
+            # Preserve existing assignments where folder IDs still match
+            pt_state = session.daw_state.get(self.id, {})
+            old_assignments: dict[str, str] = pt_state.get("assignments", {})
+            valid_ids = {f["pt_id"] for f in folders}
+            assignments = {
+                fname: fid for fname, fid in old_assignments.items()
+                if fid in valid_ids
+            }
+
+            session.daw_state[self.id] = {
+                "folders": folders,
+                "assignments": assignments,
+            }
+        except Exception:
+            raise
+        finally:
+            if engine is not None:
+                try:
+                    engine.close()
+                except Exception:
+                    pass
         return session
 
     def transfer(self, session: SessionContext) -> list[DawCommandResult]:

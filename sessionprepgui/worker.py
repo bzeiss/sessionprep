@@ -32,6 +32,24 @@ class DawCheckWorker(QThread):
             self.result.emit(False, str(e))
 
 
+class DawFetchWorker(QThread):
+    """Runs DawProcessor.fetch() off the main thread."""
+
+    result = Signal(bool, str, object)  # (ok, message, session_or_none)
+
+    def __init__(self, processor: DawProcessor, session):
+        super().__init__()
+        self._processor = processor
+        self._session = session
+
+    def run(self):
+        try:
+            session = self._processor.fetch(self._session)
+            self.result.emit(True, "Fetch complete", session)
+        except Exception as e:
+            self.result.emit(False, str(e), None)
+
+
 class AnalyzeWorker(QThread):
     """Runs pipeline analysis in a background thread."""
 

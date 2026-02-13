@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 import sys
 
-from PySide6.QtCore import Qt, Slot, QSize, QTimer, QUrl, QMimeData
-from PySide6.QtGui import QAction, QActionGroup, QFont, QColor, QIcon, QKeySequence, QPixmap, QShortcut
+from PySide6.QtCore import Qt, Signal, Slot, QSize, QTimer, QUrl, QMimeData, QPoint
+from PySide6.QtGui import (
+    QAction, QActionGroup, QDrag, QFont, QColor, QIcon, QKeySequence,
+    QPainter, QPen, QPixmap, QShortcut,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -32,6 +36,8 @@ from PySide6.QtWidgets import (
     QTextBrowser,
     QToolBar,
     QToolButton,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QStatusBar,
     QWidget,
@@ -59,7 +65,7 @@ from .helpers import track_analysis_label, esc, fmt_time
 from .preferences import PreferencesDialog, _argb_to_qcolor
 from .report import render_summary_html, render_track_detail_html
 from .widgets import BatchEditTableWidget, BatchComboBox
-from .worker import AnalyzeWorker, BatchReanalyzeWorker, DawCheckWorker
+from .worker import AnalyzeWorker, BatchReanalyzeWorker, DawCheckWorker, DawFetchWorker
 from .waveform import WaveformWidget, WaveformLoadWorker
 from sessionpreplib.audio import AUDIO_EXTENSIONS
 from .playback import PlaybackController
@@ -73,6 +79,9 @@ _PAGE_TABS = 1
 
 _PHASE_ANALYSIS = 0
 _PHASE_SETUP = 1
+
+_SETUP_RIGHT_PLACEHOLDER = 0
+_SETUP_RIGHT_TREE = 1
 
 _SEVERITY_SORT = {"PROBLEMS": 0, "Error": 0, "ATTENTION": 1, "OK": 2, "": 3}
 
@@ -137,6 +146,170 @@ class _DraggableTrackTable(BatchEditTableWidget):
         return Qt.CopyAction
 
 
+_MIME_TRACKS = "application/x-sessionprep-tracks"
+
+
+class _SetupDragTable(BatchEditTableWidget):
+    """BatchEditTableWidget that produces custom MIME for internal drag."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setDefaultDropAction(Qt.CopyAction)
+
+    def mimeTypes(self):
+        return [_MIME_TRACKS]
+
+    def mimeData(self, items):
+        filenames: set[str] = set()
+        for item in items:
+            if item.column() == 1 and item.text():  # col 1 = File
+                filenames.add(item.text())
+        if not filenames:
+            return super().mimeData(items)
+        mime = QMimeData()
+        mime.setData(_MIME_TRACKS, json.dumps(sorted(filenames)).encode())
+        return mime
+
+    def supportedDragActions(self):
+        return Qt.CopyAction
+
+    def startDrag(self, supportedActions):
+        items = self.selectedItems()
+        mime = self.mimeData(items)
+        if mime is None:
+            return
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        # Build a compact, semi-transparent label listing dragged filenames
+        filenames = sorted({
+            it.text() for it in items if it.column() == 1 and it.text()})
+        if not filenames:
+            return
+        label = "\n".join(filenames[:8])
+        if len(filenames) > 8:
+            label += f"\n… +{len(filenames) - 8} more"
+        fm = self.fontMetrics()
+        lines = label.split("\n")
+        line_h = fm.height() + 2
+        w = max(fm.horizontalAdvance(ln) for ln in lines) + 12
+        h = line_h * len(lines) + 6
+        pix = QPixmap(w, h)
+        pix.fill(Qt.transparent)
+        painter = QPainter(pix)
+        painter.setOpacity(0.75)
+        painter.fillRect(pix.rect(), QColor(COLORS["accent"]))
+        painter.setOpacity(1.0)
+        painter.setPen(QColor(COLORS["text"]))
+        painter.setFont(self.font())
+        y = 3 + fm.ascent()
+        for ln in lines:
+            painter.drawText(6, y, ln)
+            y += line_h
+        painter.end()
+        drag.setPixmap(pix)
+        drag.setHotSpot(QPoint(0, 0))
+        drag.exec(Qt.CopyAction)
+
+
+class _FolderDropTree(QTreeWidget):
+    """QTreeWidget that accepts track drops onto folder items.
+
+    Supports external drops from the setup table and internal
+    drag-and-drop to reorder tracks within / across folders.
+    """
+
+    # (filenames, folder_pt_id, insert_index)  -1 = append
+    tracks_dropped = Signal(list, str, int)
+    tracks_unassigned = Signal(list)  # [filenames]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setDragEnabled(True)
+        self.setDragDropMode(QTreeWidget.DragDrop)
+        self.setDefaultDropAction(Qt.MoveAction)
+
+    # -- MIME production (for internal drag of track items) -----------------
+
+    def mimeTypes(self):
+        return [_MIME_TRACKS]
+
+    def mimeData(self, items):
+        filenames = [
+            it.data(0, Qt.UserRole) for it in items
+            if it.data(0, Qt.UserRole + 1) == "track"
+        ]
+        if not filenames:
+            return super().mimeData(items)
+        mime = QMimeData()
+        mime.setData(_MIME_TRACKS, json.dumps(filenames).encode())
+        return mime
+
+    def supportedDropActions(self):
+        return Qt.CopyAction | Qt.MoveAction
+
+    # -- Drop handling -----------------------------------------------------
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(_MIME_TRACKS):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasFormat(_MIME_TRACKS):
+            item = self.itemAt(event.position().toPoint())
+            if item:
+                kind = item.data(0, Qt.UserRole + 1)
+                if kind in ("folder", "track"):
+                    event.acceptProposedAction()
+                    return
+            event.ignore()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if not event.mimeData().hasFormat(_MIME_TRACKS):
+            super().dropEvent(event)
+            return
+        item = self.itemAt(event.position().toPoint())
+        if not item:
+            event.ignore()
+            return
+        data = bytes(event.mimeData().data(_MIME_TRACKS)).decode()
+        filenames = json.loads(data)
+        kind = item.data(0, Qt.UserRole + 1)
+        if kind == "folder":
+            folder_id = item.data(0, Qt.UserRole)
+            self.tracks_dropped.emit(filenames, folder_id, -1)
+            event.acceptProposedAction()
+        elif kind == "track":
+            parent = item.parent()
+            if parent and parent.data(0, Qt.UserRole + 1) == "folder":
+                folder_id = parent.data(0, Qt.UserRole)
+                idx = parent.indexOfChild(item)
+                self.tracks_dropped.emit(filenames, folder_id, idx)
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+        else:
+            event.ignore()
+
+    # -- Delete to unassign ------------------------------------------------
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+            filenames = []
+            for item in self.selectedItems():
+                if item.data(0, Qt.UserRole + 1) == "track":
+                    filenames.append(item.data(0, Qt.UserRole))
+            if filenames:
+                self.tracks_unassigned.emit(filenames)
+            return
+        super().keyPressEvent(event)
+
+
 class _SortableItem(QTableWidgetItem):
     """QTableWidgetItem with a custom sort key."""
 
@@ -181,6 +354,7 @@ class SessionPrepWindow(QMainWindow):
         self._session_groups: list[dict] = []
         self._detector_help = detector_help_map()
         self._daw_check_worker: DawCheckWorker | None = None
+        self._daw_fetch_worker: DawFetchWorker | None = None
 
         # Load persistent GUI configuration
         self._config = load_config()
@@ -320,6 +494,7 @@ class SessionPrepWindow(QMainWindow):
         # ── Right: lifecycle actions ───────────────────────────────────
         self._fetch_action = QAction("Fetch", self)
         self._fetch_action.setEnabled(False)
+        self._fetch_action.triggered.connect(self._on_daw_fetch)
         self._setup_toolbar.addAction(self._fetch_action)
 
         self._transfer_action = QAction("Transfer", self)
@@ -340,10 +515,10 @@ class SessionPrepWindow(QMainWindow):
         self._setup_splitter = setup_splitter = QSplitter(Qt.Horizontal)
 
         # ── Left: track table ─────────────────────────────────────────────
-        self._setup_table = BatchEditTableWidget()
-        self._setup_table.setColumnCount(5)
+        self._setup_table = _SetupDragTable()
+        self._setup_table.setColumnCount(6)
         self._setup_table.setHorizontalHeaderLabels(
-            ["File", "Ch", "Clip Gain", "Fader Gain", "Group"]
+            ["", "File", "Ch", "Clip Gain", "Fader Gain", "Group"]
         )
         self._setup_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._setup_table.setSelectionMode(QTableWidget.ExtendedSelection)
@@ -356,19 +531,24 @@ class SessionPrepWindow(QMainWindow):
 
         sh = self._setup_table.horizontalHeader()
         sh.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        sh.setSectionResizeMode(0, QHeaderView.Stretch)
-        sh.setSectionResizeMode(1, QHeaderView.Fixed)
-        sh.setSectionResizeMode(2, QHeaderView.Interactive)
+        sh.setSectionResizeMode(0, QHeaderView.Fixed)
+        sh.resizeSection(0, 24)
+        sh.setSectionResizeMode(1, QHeaderView.Stretch)
+        sh.setSectionResizeMode(2, QHeaderView.Fixed)
         sh.setSectionResizeMode(3, QHeaderView.Interactive)
         sh.setSectionResizeMode(4, QHeaderView.Interactive)
-        sh.resizeSection(1, 30)
-        sh.resizeSection(2, 90)
+        sh.setSectionResizeMode(5, QHeaderView.Interactive)
+        sh.resizeSection(2, 30)
         sh.resizeSection(3, 90)
-        sh.resizeSection(4, 110)
+        sh.resizeSection(4, 90)
+        sh.resizeSection(5, 110)
 
         setup_splitter.addWidget(self._setup_table)
 
-        # ── Right: placeholder ────────────────────────────────────────────
+        # ── Right: stacked widget (placeholder / folder tree) ─────────────
+        self._setup_right_stack = QStackedWidget()
+
+        # Page 0: placeholder
         right_placeholder = QWidget()
         right_layout = QVBoxLayout(right_placeholder)
         right_layout.setContentsMargins(40, 0, 40, 0)
@@ -379,8 +559,25 @@ class SessionPrepWindow(QMainWindow):
             f"color: {COLORS['dim']}; font-size: 13pt;")
         right_layout.addWidget(placeholder_label)
         right_layout.addStretch(3)
+        self._setup_right_stack.addWidget(right_placeholder)
 
-        setup_splitter.addWidget(right_placeholder)
+        # Page 1: folder tree (drop target)
+        self._folder_tree = _FolderDropTree()
+        self._folder_tree.setHeaderLabels(["Folder / Track"])
+        self._folder_tree.setSelectionMode(QTreeWidget.ExtendedSelection)
+        self._folder_tree.setAlternatingRowColors(True)
+        # Match visual size to the setup table
+        self._folder_tree.setStyleSheet(
+            "QTreeWidget { font-size: 10pt; }"
+            "QTreeWidget::item { min-height: 22px; }"
+        )
+        self._folder_tree.tracks_dropped.connect(self._assign_tracks_to_folder)
+        self._folder_tree.tracks_unassigned.connect(self._unassign_tracks)
+        self._setup_right_stack.addWidget(self._folder_tree)
+
+        self._setup_right_stack.setCurrentIndex(_SETUP_RIGHT_PLACEHOLDER)
+
+        setup_splitter.addWidget(self._setup_right_stack)
         setup_splitter.setStretchFactor(0, 3)
         setup_splitter.setStretchFactor(1, 2)
         setup_splitter.setSizes([620, 480])
@@ -452,6 +649,186 @@ class SessionPrepWindow(QMainWindow):
             self._daw_check_label.setText(message)
             self._daw_check_label.setStyleSheet(f"color: {COLORS['problems']};")
         self._update_daw_lifecycle_buttons()
+
+    # ── DAW Fetch + Folder Tree ───────────────────────────────────────────
+
+    @Slot()
+    def _on_daw_fetch(self):
+        if not self._active_daw_processor or not self._session:
+            return
+        self._fetch_action.setEnabled(False)
+        self._status_bar.showMessage("Fetching folder structure\u2026")
+        self._daw_fetch_worker = DawFetchWorker(
+            self._active_daw_processor, self._session)
+        self._daw_fetch_worker.result.connect(self._on_daw_fetch_result)
+        self._daw_fetch_worker.start()
+
+    @Slot(bool, str, object)
+    def _on_daw_fetch_result(self, ok: bool, message: str, session):
+        self._daw_fetch_worker = None
+        self._fetch_action.setEnabled(True)
+        if ok and session is not None:
+            self._session = session
+            self._populate_folder_tree()
+            self._setup_right_stack.setCurrentIndex(_SETUP_RIGHT_TREE)
+            self._populate_setup_table()
+            self._status_bar.showMessage(message)
+        else:
+            self._status_bar.showMessage(f"Fetch failed: {message}")
+
+    def _populate_folder_tree(self):
+        """Build the folder tree from daw_state['protools']['folders']."""
+        self._folder_tree.clear()
+        if not self._session:
+            return
+        pt_state = self._session.daw_state.get("protools", {})
+        folders = pt_state.get("folders", [])
+        assignments = pt_state.get("assignments", {})
+
+        # Build lookup: pt_id -> folder dict
+        folder_map = {f["pt_id"]: f for f in folders}
+        # Build children map: parent_id -> [child folders]
+        children_map: dict[str | None, list] = {}
+        for f in folders:
+            parent = f["parent_id"]
+            children_map.setdefault(parent, []).append(f)
+
+        # Sort children by index
+        for k in children_map:
+            children_map[k].sort(key=lambda f: f["index"])
+
+        # Build inverse assignments: folder_id -> [filenames]
+        # Use track_order for stable ordering, fall back to sorted
+        track_order = pt_state.get("track_order", {})
+        folder_tracks: dict[str, list[str]] = {}
+        for fname, fid in assignments.items():
+            folder_tracks.setdefault(fid, []).append(fname)
+        for fid, fnames in folder_tracks.items():
+            order = track_order.get(fid, [])
+            order_map = {n: i for i, n in enumerate(order)}
+            fnames.sort(key=lambda n: (order_map.get(n, len(order)), n))
+
+        # Group color map for track items
+        gcm = self._group_color_map()
+        track_map = {}
+        if self._session:
+            track_map = {t.filename: t for t in self._session.tracks}
+
+        # Icons – small colored squares to distinguish folder types
+        def _folder_icon(color_hex: str) -> QIcon:
+            sz = 14
+            pix = QPixmap(sz, sz)
+            pix.fill(Qt.transparent)
+            p = QPainter(pix)
+            p.setRenderHint(QPainter.Antialiasing)
+            p.setBrush(QColor(color_hex))
+            p.setPen(QPen(QColor(color_hex).darker(130), 1))
+            p.drawRoundedRect(1, 1, sz - 2, sz - 2, 3, 3)
+            p.end()
+            return QIcon(pix)
+
+        routing_icon = _folder_icon(COLORS["information"])  # blue
+        basic_icon = _folder_icon(COLORS["dim"])             # grey
+
+        def add_folder(parent_widget, folder):
+            item = QTreeWidgetItem(parent_widget)
+            item.setText(0, folder["name"])
+            item.setData(0, Qt.UserRole, folder["pt_id"])
+            item.setData(0, Qt.UserRole + 1, "folder")
+            if folder["folder_type"] == "routing":
+                item.setIcon(0, routing_icon)
+            else:
+                item.setIcon(0, basic_icon)
+            item.setFlags(
+                item.flags() | Qt.ItemIsDropEnabled)
+
+            # Add assigned tracks as children
+            for fname in folder_tracks.get(folder["pt_id"], []):
+                track_item = QTreeWidgetItem(item)
+                track_item.setText(0, fname)
+                track_item.setData(0, Qt.UserRole, fname)
+                track_item.setData(0, Qt.UserRole + 1, "track")
+                track_item.setFlags(
+                    (track_item.flags() | Qt.ItemIsDragEnabled)
+                    & ~Qt.ItemIsDropEnabled)
+                # Color by group
+                tc = track_map.get(fname)
+                if tc and tc.group:
+                    argb = gcm.get(tc.group)
+                    if argb:
+                        track_item.setForeground(0, _argb_to_qcolor(argb))
+
+            # Recurse into child folders
+            for child in children_map.get(folder["pt_id"], []):
+                add_folder(item, child)
+
+            item.setExpanded(True)
+
+        # Top-level folders (no parent)
+        for f in children_map.get(None, []):
+            add_folder(self._folder_tree, f)
+
+        self._folder_tree.expandAll()
+
+    @Slot(list, str, int)
+    def _assign_tracks_to_folder(self, filenames: list[str],
+                                  folder_pt_id: str, insert_index: int = -1):
+        """Assign session tracks to a PT folder in the local data model."""
+        if not self._session:
+            return
+        pt_state = self._session.daw_state.setdefault("protools", {})
+        assignments = pt_state.setdefault("assignments", {})
+        track_order = pt_state.setdefault("track_order", {})
+
+        # Remove tracks from their previous folder order lists
+        for fname in filenames:
+            old_fid = assignments.get(fname)
+            if old_fid and old_fid in track_order:
+                try:
+                    track_order[old_fid].remove(fname)
+                except ValueError:
+                    pass
+
+        # Update assignment mapping
+        for fname in filenames:
+            assignments[fname] = folder_pt_id
+
+        # Insert into track_order for the target folder
+        order = track_order.setdefault(folder_pt_id, [])
+        # Remove duplicates already in the list
+        for fname in filenames:
+            try:
+                order.remove(fname)
+            except ValueError:
+                pass
+        if insert_index < 0 or insert_index >= len(order):
+            order.extend(filenames)
+        else:
+            for i, fname in enumerate(filenames):
+                order.insert(insert_index + i, fname)
+
+        self._populate_folder_tree()
+        self._populate_setup_table()
+
+    @Slot(list)
+    def _unassign_tracks(self, filenames: list[str]):
+        """Remove track-to-folder assignments and refresh UI."""
+        if not self._session:
+            return
+        pt_state = self._session.daw_state.get("protools")
+        if not pt_state:
+            return
+        assignments = pt_state.get("assignments", {})
+        track_order = pt_state.get("track_order", {})
+        for fname in filenames:
+            fid = assignments.pop(fname, None)
+            if fid and fid in track_order:
+                try:
+                    track_order[fid].remove(fname)
+                except ValueError:
+                    pass
+        self._populate_folder_tree()
+        self._populate_setup_table()
 
     def _build_left_panel(self) -> QWidget:
         panel = QWidget()
@@ -1755,41 +2132,54 @@ class SessionPrepWindow(QMainWindow):
         gcm_rank = self._group_rank_map()
         glm = self._gain_linked_map()
 
+        # Determine which tracks are assigned to a PT folder
+        assignments = {}
+        if self._session.daw_state:
+            pt_state = self._session.daw_state.get("protools", {})
+            assignments = pt_state.get("assignments", {})
+
         for row, track in enumerate(ok_tracks):
             pr = (
                 next(iter(track.processor_results.values()), None)
                 if track.processor_results
                 else None
             )
-            # Column 0: filename
+            # Column 0: checkmark (assigned to folder?)
+            assigned = track.filename in assignments
+            chk_item = _SortableItem("✓" if assigned else "", int(not assigned))
+            if assigned:
+                chk_item.setForeground(QColor(COLORS["clean"]))
+            self._setup_table.setItem(row, 0, chk_item)
+
+            # Column 1: filename
             fname_item = _SortableItem(
                 track.filename, protools_sort_key(track.filename))
             fname_item.setForeground(FILE_COLOR_OK)
-            self._setup_table.setItem(row, 0, fname_item)
+            self._setup_table.setItem(row, 1, fname_item)
 
-            # Column 1: channels
+            # Column 2: channels
             ch_item = _SortableItem(str(track.channels), track.channels)
             ch_item.setForeground(QColor(COLORS["dim"]))
-            self._setup_table.setItem(row, 1, ch_item)
+            self._setup_table.setItem(row, 2, ch_item)
 
-            # Column 2: clip gain
+            # Column 3: clip gain
             clip_gain = pr.gain_db if pr else 0.0
             cg_item = _SortableItem(f"{clip_gain:+.1f} dB", clip_gain)
             cg_item.setForeground(QColor(COLORS["text"]))
-            self._setup_table.setItem(row, 2, cg_item)
+            self._setup_table.setItem(row, 3, cg_item)
 
-            # Column 3: fader gain
+            # Column 4: fader gain
             fader_gain = pr.data.get("fader_offset", 0.0) if pr else 0.0
             fg_item = _SortableItem(f"{fader_gain:+.1f} dB", fader_gain)
             fg_item.setForeground(QColor(COLORS["text"]))
-            self._setup_table.setItem(row, 3, fg_item)
+            self._setup_table.setItem(row, 4, fg_item)
 
-            # Column 4: group (read-only, with link indicator)
+            # Column 5: group (read-only, with link indicator)
             grp_label = self._group_display_name(track.group, glm) if track.group else ""
             grp_rank = gcm_rank.get(track.group, len(gcm_rank)) if track.group else len(gcm_rank)
             grp_item = _SortableItem(grp_label, grp_rank)
             grp_item.setForeground(QColor(COLORS["text"]))
-            self._setup_table.setItem(row, 4, grp_item)
+            self._setup_table.setItem(row, 5, grp_item)
 
             # Row background from group color
             self._apply_row_group_color(row, track.group, gcm,
@@ -1802,9 +2192,11 @@ class SessionPrepWindow(QMainWindow):
         for col in range(self._setup_table.columnCount()):
             sh.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         self._setup_table.resizeColumnsToContents()
-        sh.setSectionResizeMode(0, QHeaderView.Stretch)
-        sh.setSectionResizeMode(1, QHeaderView.Fixed)
-        for col in range(2, self._setup_table.columnCount()):
+        sh.setSectionResizeMode(0, QHeaderView.Fixed)
+        sh.resizeSection(0, 24)
+        sh.setSectionResizeMode(1, QHeaderView.Stretch)
+        sh.setSectionResizeMode(2, QHeaderView.Fixed)
+        for col in range(3, self._setup_table.columnCount()):
             sh.setSectionResizeMode(col, QHeaderView.Interactive)
 
     # ── Classification override helpers ───────────────────────────────────
