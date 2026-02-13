@@ -48,6 +48,17 @@ _GUI_DEFAULTS: dict[str, Any] = {
     "default_project_dir": "",
     "invert_scroll": "default",
     "colors": copy.deepcopy(PT_DEFAULT_COLORS),
+    "default_groups": [
+        {"name": "Kick",      "color": "Guardsman Red",  "gain_linked": True},
+        {"name": "Snare",     "color": "Dodger Blue Light", "gain_linked": True},
+        {"name": "Toms",      "color": "Tia Maria",      "gain_linked": True},
+        {"name": "Hi-Hat",    "color": "La Rioja",        "gain_linked": False},
+        {"name": "Overheads", "color": "Java",            "gain_linked": True},
+        {"name": "Room",      "color": "Purple",          "gain_linked": False},
+        {"name": "Bass",      "color": "Christi",         "gain_linked": False},
+        {"name": "Guitar",    "color": "Pizza",           "gain_linked": False},
+        {"name": "Vocals",    "color": "Dodger Blue Dark", "gain_linked": False},
+    ],
 }
 
 

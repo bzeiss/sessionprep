@@ -6,8 +6,8 @@ import copy
 from decimal import Decimal
 from typing import Any
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QColor, QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
@@ -368,6 +368,7 @@ class PreferencesDialog(QDialog):
         self._build_detector_pages()
         self._build_processor_pages()
         self._build_colors_page()
+        self._build_groups_page()
 
         # Select first item
         self._tree.expandAll()
@@ -713,6 +714,168 @@ class PreferencesDialog(QDialog):
                 colors.append({"name": name, "argb": argb})
         return colors
 
+    # ── Groups page ──────────────────────────────────────────────────
+
+    def _build_groups_page(self):
+        item = QTreeWidgetItem(self._tree, ["Groups"])
+        item.setFont(0, QFont("", -1, QFont.Bold))
+
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        desc = QLabel(
+            "Default track groups used when analyzing a session. "
+            "Groups reference colors from the Colors page."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #888; font-size: 9pt;")
+        layout.addWidget(desc)
+
+        self._groups_table = QTableWidget()
+        self._groups_table.setColumnCount(3)
+        self._groups_table.setHorizontalHeaderLabels(
+            ["Name", "Color", "Gain-Linked"])
+        self._groups_table.verticalHeader().setVisible(False)
+        self._groups_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._groups_table.setSelectionMode(QTableWidget.SingleSelection)
+        gh = self._groups_table.horizontalHeader()
+        gh.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        gh.setSectionResizeMode(0, QHeaderView.Stretch)
+        gh.setSectionResizeMode(1, QHeaderView.Fixed)
+        gh.resizeSection(1, 160)
+        gh.setSectionResizeMode(2, QHeaderView.Fixed)
+        gh.resizeSection(2, 80)
+
+        # Populate from config
+        groups = self._config.get("gui", {}).get("default_groups", [])
+        self._groups_table.setRowCount(len(groups))
+        for row, entry in enumerate(groups):
+            self._set_group_row(
+                row,
+                entry.get("name", ""),
+                entry.get("color", ""),
+                entry.get("gain_linked", False),
+            )
+
+        layout.addWidget(self._groups_table, 1)
+
+        # Buttons
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.setSpacing(6)
+
+        add_btn = QPushButton("Add")
+        add_btn.clicked.connect(self._on_group_add)
+        btn_row.addWidget(add_btn)
+
+        remove_btn = QPushButton("Remove")
+        remove_btn.clicked.connect(self._on_group_remove)
+        btn_row.addWidget(remove_btn)
+
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        self._add_page(item, page)
+
+    def _color_names(self) -> list[str]:
+        """Return the list of color names currently in the colors table."""
+        names = []
+        for row in range(self._colors_table.rowCount()):
+            item = self._colors_table.item(row, 1)
+            if item:
+                name = item.text().strip()
+                if name:
+                    names.append(name)
+        return names
+
+    @staticmethod
+    def _color_swatch_icon(argb: str, size: int = 16) -> QIcon:
+        """Create a small square QIcon filled with the given ARGB color."""
+        pm = QPixmap(size, size)
+        pm.fill(_argb_to_qcolor(argb))
+        return QIcon(pm)
+
+    def _color_argb_for_name(self, name: str) -> str | None:
+        """Look up an ARGB value by color name from the colors table."""
+        for row in range(self._colors_table.rowCount()):
+            item = self._colors_table.item(row, 1)
+            if item and item.text().strip() == name:
+                swatch = self._colors_table.item(row, 2)
+                if swatch:
+                    return swatch.data(Qt.UserRole)
+        return None
+
+    def _set_group_row(self, row: int, name: str, color: str,
+                       gain_linked: bool):
+        """Populate a single row in the groups table."""
+        name_item = QTableWidgetItem(name)
+        self._groups_table.setItem(row, 0, name_item)
+
+        # Color dropdown
+        color_combo = QComboBox()
+        color_combo.setIconSize(QSize(16, 16))
+        color_names = self._color_names()
+        for cn in color_names:
+            argb = self._color_argb_for_name(cn)
+            icon = self._color_swatch_icon(argb) if argb else QIcon()
+            color_combo.addItem(icon, cn)
+        # Select the matching color
+        ci = color_combo.findText(color)
+        if ci >= 0:
+            color_combo.setCurrentIndex(ci)
+        self._groups_table.setCellWidget(row, 1, color_combo)
+
+        # Gain-linked checkbox
+        chk = QCheckBox()
+        chk.setChecked(gain_linked)
+        chk_container = QWidget()
+        chk_layout = QHBoxLayout(chk_container)
+        chk_layout.setContentsMargins(0, 0, 0, 0)
+        chk_layout.setAlignment(Qt.AlignCenter)
+        chk_layout.addWidget(chk)
+        self._groups_table.setCellWidget(row, 2, chk_container)
+
+    def _on_group_add(self):
+        row = self._groups_table.rowCount()
+        self._groups_table.insertRow(row)
+        color_names = self._color_names()
+        default_color = color_names[0] if color_names else ""
+        self._set_group_row(row, "New Group", default_color, False)
+        self._groups_table.scrollToBottom()
+        self._groups_table.editItem(self._groups_table.item(row, 0))
+
+    def _on_group_remove(self):
+        row = self._groups_table.currentRow()
+        if row >= 0:
+            self._groups_table.removeRow(row)
+
+    def _read_groups(self) -> list[dict[str, Any]]:
+        """Read the groups table into a list of dicts."""
+        groups: list[dict[str, Any]] = []
+        for row in range(self._groups_table.rowCount()):
+            name_item = self._groups_table.item(row, 0)
+            if not name_item:
+                continue
+            name = name_item.text().strip()
+            if not name:
+                continue
+            color_combo = self._groups_table.cellWidget(row, 1)
+            color = color_combo.currentText() if color_combo else ""
+            chk_container = self._groups_table.cellWidget(row, 2)
+            gain_linked = False
+            if chk_container:
+                chk = chk_container.findChild(QCheckBox)
+                if chk:
+                    gain_linked = chk.isChecked()
+            groups.append({
+                "name": name,
+                "color": color,
+                "gain_linked": gain_linked,
+            })
+        return groups
+
     # ── Helpers ────────────────────────────────────────────────────────
 
     def _browse_project_dir(self, line_edit: QLineEdit):
@@ -777,6 +940,9 @@ class PreferencesDialog(QDialog):
 
         # Colors
         gui["colors"] = self._read_colors()
+
+        # Groups
+        gui["default_groups"] = self._read_groups()
 
         self._saved = True
         self.accept()
