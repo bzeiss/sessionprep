@@ -7,7 +7,7 @@ import os
 import sys
 
 from PySide6.QtCore import Qt, Slot, QSize, QTimer, QUrl, QMimeData
-from PySide6.QtGui import QAction, QActionGroup, QBrush, QFont, QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
+from PySide6.QtGui import QAction, QActionGroup, QFont, QColor, QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -26,8 +26,6 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStackedWidget,
     QStyle,
-    QStyledItemDelegate,
-    QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -102,42 +100,6 @@ class _HelpBrowser(QTextBrowser):
             from PySide6.QtWidgets import QToolTip
             QToolTip.hideText()
         super().mouseMoveEvent(event)
-
-
-_SELECTION_COLOR = QColor(42, 109, 181, 160)  # semi-transparent blue
-
-
-class _GroupTintDelegate(QStyledItemDelegate):
-    """Delegate that blends selection highlight with group background
-    so the group color shows through when selected.
-
-    Qt's style engine uses ``QPalette::Highlight`` when
-    ``State_Selected`` is set, ignoring ``backgroundBrush``.
-    We therefore *remove* ``State_Selected`` and feed the correct
-    pre-blended colour via ``backgroundBrush`` instead.
-    """
-
-    def initStyleOption(self, option, index):
-        super().initStyleOption(option, index)
-        bg = index.data(Qt.BackgroundRole)
-        has_group = (bg is not None and isinstance(bg, QBrush)
-                     and bg.style() != Qt.NoBrush)
-        selected = bool(option.state & QStyle.State_Selected)
-
-        if selected:
-            # Remove the flag so the style won't use palette Highlight
-            option.state &= ~QStyle.State_Selected
-            if has_group:
-                gc = bg.color()
-                sc = _SELECTION_COLOR
-                a = sc.alphaF()
-                option.backgroundBrush = QBrush(QColor(
-                    int(sc.red() * a + gc.red() * (1.0 - a)),
-                    int(sc.green() * a + gc.green() * (1.0 - a)),
-                    int(sc.blue() * a + gc.blue() * (1.0 - a)),
-                ))
-            else:
-                option.backgroundBrush = QBrush(QColor(42, 109, 181))
 
 
 class _DraggableTrackTable(BatchEditTableWidget):
@@ -263,6 +225,7 @@ class SessionPrepWindow(QMainWindow):
         # Tab 1 — Session Setup (placeholder)
         self._phase_tabs.addTab(self._build_setup_page(), "Session Setup")
         self._phase_tabs.setTabEnabled(_PHASE_SETUP, False)
+        self._phase_tabs.currentChanged.connect(self._on_phase_tab_changed)
 
         self.setCentralWidget(self._phase_tabs)
 
@@ -339,13 +302,13 @@ class SessionPrepWindow(QMainWindow):
         layout.addWidget(self._setup_toolbar)
 
         # Splitter: track table (left) + routing panel placeholder (right)
-        setup_splitter = QSplitter(Qt.Horizontal)
+        self._setup_splitter = setup_splitter = QSplitter(Qt.Horizontal)
 
         # ── Left: track table ─────────────────────────────────────────────
         self._setup_table = BatchEditTableWidget()
-        self._setup_table.setColumnCount(4)
+        self._setup_table.setColumnCount(5)
         self._setup_table.setHorizontalHeaderLabels(
-            ["File", "Ch", "Clip Gain", "Fader Gain"]
+            ["File", "Ch", "Clip Gain", "Fader Gain", "Group"]
         )
         self._setup_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._setup_table.setSelectionMode(QTableWidget.ExtendedSelection)
@@ -362,9 +325,11 @@ class SessionPrepWindow(QMainWindow):
         sh.setSectionResizeMode(1, QHeaderView.Fixed)
         sh.setSectionResizeMode(2, QHeaderView.Interactive)
         sh.setSectionResizeMode(3, QHeaderView.Interactive)
+        sh.setSectionResizeMode(4, QHeaderView.Interactive)
         sh.resizeSection(1, 30)
         sh.resizeSection(2, 90)
         sh.resizeSection(3, 90)
+        sh.resizeSection(4, 110)
 
         setup_splitter.addWidget(self._setup_table)
 
@@ -410,7 +375,6 @@ class SessionPrepWindow(QMainWindow):
         self._track_table.setShowGrid(True)
         self._track_table.setAlternatingRowColors(True)
         self._track_table.setSortingEnabled(True)
-        self._track_table.setItemDelegate(_GroupTintDelegate(self._track_table))
 
         header = self._track_table.horizontalHeader()
         header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -979,6 +943,21 @@ class SessionPrepWindow(QMainWindow):
         font.setStyleHint(QFont.Monospace)
         browser.setFont(font)
         return browser
+
+    # ── Slots: phase tabs ─────────────────────────────────────────────────
+
+    @Slot(int)
+    def _on_phase_tab_changed(self, index: int):
+        if index == _PHASE_SETUP:
+            self._setup_table.resizeColumnsToContents()
+            # Shrink the splitter's left pane to fit the table content
+            total = sum(
+                self._setup_table.columnWidth(c)
+                for c in range(self._setup_table.columnCount())
+            ) + self._setup_table.verticalHeader().width() + 30  # margin
+            remaining = self._setup_splitter.width() - total
+            if remaining > 0:
+                self._setup_splitter.setSizes([total, remaining])
 
     # ── Slots: file / analysis ────────────────────────────────────────────
 
@@ -1614,6 +1593,7 @@ class SessionPrepWindow(QMainWindow):
 
         ok_tracks = [t for t in self._session.tracks if t.status == "OK"]
         self._setup_table.setRowCount(len(ok_tracks))
+        gcm = self._group_color_map()
 
         for row, track in enumerate(ok_tracks):
             pr = (
@@ -1644,7 +1624,27 @@ class SessionPrepWindow(QMainWindow):
             fg_item.setForeground(QColor(COLORS["text"]))
             self._setup_table.setItem(row, 3, fg_item)
 
+            # Column 4: group (read-only)
+            grp_label = track.group or ""
+            grp_item = _SortableItem(grp_label, grp_label.lower())
+            grp_item.setForeground(QColor(COLORS["text"]))
+            self._setup_table.setItem(row, 4, grp_item)
+
+            # Row background from group color
+            self._apply_row_group_color(row, track.group, gcm,
+                                        table=self._setup_table)
+
         self._setup_table.setSortingEnabled(True)
+
+        # Auto-fit columns to content
+        sh = self._setup_table.horizontalHeader()
+        for col in range(self._setup_table.columnCount()):
+            sh.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        self._setup_table.resizeColumnsToContents()
+        sh.setSectionResizeMode(0, QHeaderView.Stretch)
+        sh.setSectionResizeMode(1, QHeaderView.Fixed)
+        for col in range(2, self._setup_table.columnCount()):
+            sh.setSectionResizeMode(col, QHeaderView.Interactive)
 
     # ── Classification override helpers ───────────────────────────────────
 
@@ -1921,58 +1921,32 @@ class SessionPrepWindow(QMainWindow):
                 result[g["name"]] = argb
         return result
 
-    def _apply_row_group_color(self, row: int, group_name: str | None,
-                               gcm: dict[str, str] | None = None):
-        """Set background color on all cells in *row* based on *group_name*.
+    _TINT_FACTOR = 0.15  # fraction of source alpha → subtle wash
 
-        *gcm* is an optional pre-computed group-color map to avoid
-        repeated lookups when coloring many rows.
-        """
+    def _tint_group_color(self, group_name: str | None,
+                          gcm: dict[str, str] | None = None) -> QColor | None:
+        """Return a pre-blended tint QColor for *group_name*, or None."""
         if gcm is None:
             gcm = self._group_color_map()
-        _TINT_FACTOR = 0.15  # fraction of source alpha used for blending
         argb = gcm.get(group_name) if group_name else None
-        if argb:
-            qc = _argb_to_qcolor(argb)
-            # Pre-blend with dark background so the result is the same
-            # solid color on both table items and cell widgets.
-            a = (qc.alpha() / 255.0) * _TINT_FACTOR
-            bg_r, bg_g, bg_b = 0x1e, 0x1e, 0x1e  # COLORS["bg"]
-            r = int(qc.red() * a + bg_r * (1 - a))
-            g = int(qc.green() * a + bg_g * (1 - a))
-            b = int(qc.blue() * a + bg_b * (1 - a))
-            blended = QColor(r, g, b)
-            brush = QBrush(blended)
-            rgba = f"rgb({r}, {g}, {b})"
-        else:
-            brush = QBrush()
-            rgba = None
+        if not argb:
+            return None
+        qc = _argb_to_qcolor(argb)
+        a = (qc.alpha() / 255.0) * self._TINT_FACTOR
+        bg_r, bg_g, bg_b = 0x1e, 0x1e, 0x1e  # COLORS["bg"]
+        return QColor(
+            int(qc.red() * a + bg_r * (1 - a)),
+            int(qc.green() * a + bg_g * (1 - a)),
+            int(qc.blue() * a + bg_b * (1 - a)),
+        )
 
-        # Background on QTableWidgetItems (cols 0–6)
-        for col in range(self._track_table.columnCount()):
-            item = self._track_table.item(row, col)
-            if item:
-                item.setBackground(brush)
-
-        # Background on cell widgets — merge into existing stylesheet
-        for col in (3, 4, 5, 6):
-            w = self._track_table.cellWidget(row, col)
-            if w is None:
-                continue
-            ss = w.styleSheet()
-            # Strip any previous background-color rule we injected
-            lines = [ln for ln in ss.split(";")
-                     if "background-color" not in ln]
-            base = ";".join(ln for ln in lines if ln.strip())
-            if rgba:
-                # Insert background-color before the closing brace
-                if base:
-                    base = base.rstrip().rstrip("}")
-                    base += f"; background-color: {rgba}; }}"
-                else:
-                    wtype = type(w).__name__
-                    base = f"{wtype} {{ background-color: {rgba}; }}"
-            w.setStyleSheet(base)
+    def _apply_row_group_color(self, row: int, group_name: str | None,
+                               gcm: dict[str, str] | None = None,
+                               table=None):
+        """Set tinted group background on *row* of *table* (default: track table)."""
+        if table is None:
+            table = self._track_table
+        table.apply_row_color(row, self._tint_group_color(group_name, gcm))
 
     def _create_group_combo(self, row: int, track):
         """Create and install a Group combo in column 6."""
@@ -2044,6 +2018,7 @@ class SessionPrepWindow(QMainWindow):
                     self._apply_row_group_color(row, new_group, gcm)
             self._track_table.setSortingEnabled(True)
             self._track_table.restore_selection(batch_keys)
+            self._populate_setup_table()
         else:
             if track.group == new_group:
                 return
@@ -2056,6 +2031,7 @@ class SessionPrepWindow(QMainWindow):
                     sort_item.setText(text)
                     sort_item._sort_key = text.lower()
                 self._apply_row_group_color(row, new_group)
+            self._populate_setup_table()
 
     def _refresh_group_combos(self):
         """Refresh the items in all Group combo boxes from _session_groups."""
@@ -2093,6 +2069,8 @@ class SessionPrepWindow(QMainWindow):
                 effective = w.currentText()
                 gname = effective if effective != self._GROUP_NONE_LABEL else None
                 self._apply_row_group_color(row, gname, gcm)
+
+        self._populate_setup_table()
 
     def _reanalyze_single_track(self, track):
         """Re-run all track detectors + processors for a single track (sync)."""

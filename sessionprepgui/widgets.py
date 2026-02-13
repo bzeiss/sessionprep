@@ -35,7 +35,49 @@ No app-specific dependencies.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QItemSelectionModel
-from PySide6.QtWidgets import QApplication, QComboBox, QTableWidget
+from PySide6.QtGui import QBrush, QColor, QPainter
+from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+    QTableWidget,
+)
+
+
+_SELECTION_COLOR = QColor(42, 109, 181, 160)  # semi-transparent blue
+
+
+class _RowTintDelegate(QStyledItemDelegate):
+    """Item delegate that blends selection highlight with row background.
+
+    Qt's style engine uses ``QPalette::Highlight`` when
+    ``State_Selected`` is set, ignoring ``backgroundBrush``.
+    We therefore *remove* ``State_Selected`` and feed the correct
+    pre-blended colour via ``backgroundBrush`` instead.
+    """
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        bg = index.data(Qt.BackgroundRole)
+        has_bg = (bg is not None and isinstance(bg, QBrush)
+                  and bg.style() != Qt.NoBrush)
+        selected = bool(option.state & QStyle.State_Selected)
+
+        if selected:
+            option.state &= ~QStyle.State_Selected
+            if has_bg:
+                gc = bg.color()
+                sc = _SELECTION_COLOR
+                a = sc.alphaF()
+                option.backgroundBrush = QBrush(QColor(
+                    int(sc.red() * a + gc.red() * (1.0 - a)),
+                    int(sc.green() * a + gc.green() * (1.0 - a)),
+                    int(sc.blue() * a + gc.blue() * (1.0 - a)),
+                ))
+            else:
+                option.backgroundBrush = QBrush(QColor(42, 109, 181))
 
 
 class BatchEditTableWidget(QTableWidget):
@@ -58,7 +100,54 @@ class BatchEditTableWidget(QTableWidget):
     Subclasses automatically get:
       - ``batch_selected_keys(key_column=0)`` → ``set[str]`` of item texts
       - ``restore_selection(keys, key_column=0)`` → re-selects by key
+      - ``apply_row_color(row, color)`` / ``clear_row_color(row)``
+      - Selection-blending delegate (installed automatically)
     """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setItemDelegate(_RowTintDelegate(self))
+
+    # ── Row colouring ──────────────────────────────────────────────────────
+
+    def apply_row_color(self, row: int, color: QColor | None):
+        """Set *color* as the background for every cell in *row*.
+
+        *color* should already be pre-blended / tinted to the desired
+        intensity.  Pass ``None`` to clear the row colour.
+
+        Sets ``BackgroundRole`` on ``QTableWidgetItem`` cells and merges
+        ``background-color`` into existing stylesheets on cell widgets.
+        """
+        if color is not None:
+            brush = QBrush(color)
+            rgb_str = f"rgb({color.red()}, {color.green()}, {color.blue()})"
+        else:
+            brush = QBrush()
+            rgb_str = None
+
+        for col in range(self.columnCount()):
+            item = self.item(row, col)
+            if item:
+                item.setBackground(brush)
+            w = self.cellWidget(row, col)
+            if w is not None:
+                ss = w.styleSheet()
+                lines = [ln for ln in ss.split(";")
+                         if "background-color" not in ln]
+                base = ";".join(ln for ln in lines if ln.strip())
+                if rgb_str:
+                    if base:
+                        base = base.rstrip().rstrip("}")
+                        base += f"; background-color: {rgb_str}; }}"
+                    else:
+                        wtype = type(w).__name__
+                        base = f"{wtype} {{ background-color: {rgb_str}; }}"
+                w.setStyleSheet(base)
+
+    def clear_row_color(self, row: int):
+        """Remove any custom background from *row*."""
+        self.apply_row_color(row, None)
 
     # ── Selection preservation ─────────────────────────────────────────────
 

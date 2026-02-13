@@ -49,15 +49,31 @@ _GUI_DEFAULTS: dict[str, Any] = {
     "invert_scroll": "default",
     "colors": copy.deepcopy(PT_DEFAULT_COLORS),
     "default_groups": [
-        {"name": "Kick",      "color": "Guardsman Red",  "gain_linked": True},
-        {"name": "Snare",     "color": "Dodger Blue Light", "gain_linked": True},
-        {"name": "Toms",      "color": "Tia Maria",      "gain_linked": True},
-        {"name": "Hi-Hat",    "color": "La Rioja",        "gain_linked": False},
-        {"name": "Overheads", "color": "Java",            "gain_linked": True},
-        {"name": "Room",      "color": "Purple",          "gain_linked": False},
-        {"name": "Bass",      "color": "Christi",         "gain_linked": False},
-        {"name": "Guitar",    "color": "Pizza",           "gain_linked": False},
-        {"name": "Vocals",    "color": "Dodger Blue Dark", "gain_linked": False},
+        # Drums
+        {"name": "Kick",    "color": "Guardsman Red",        "gain_linked": True},
+        {"name": "Snare",   "color": "Dodger Blue Light",    "gain_linked": True},
+        {"name": "Toms",    "color": "Tia Maria",            "gain_linked": True},
+        {"name": "HH",      "color": "La Rioja",             "gain_linked": False},
+        {"name": "OH",      "color": "Java",                 "gain_linked": True},
+        {"name": "Room",    "color": "Purple",               "gain_linked": False},
+        {"name": "Perc",    "color": "Corn Harvest",         "gain_linked": False},
+        # Bass
+        {"name": "Bass",    "color": "Christi",              "gain_linked": False},
+        # Guitars
+        {"name": "E.Gtr",   "color": "Pizza",               "gain_linked": False},
+        {"name": "A.Gtr",   "color": "Lima Dark",            "gain_linked": False},
+        # Keys & Synths
+        {"name": "Keys",    "color": "Malachite",            "gain_linked": False},
+        {"name": "Synths",  "color": "Electric Violet Light", "gain_linked": False},
+        # Strings & Pads
+        {"name": "Strings", "color": "Eastern Blue",         "gain_linked": False},
+        {"name": "Pads",    "color": "Flirt",                "gain_linked": False},
+        {"name": "Brass",   "color": "Milano Red",           "gain_linked": False},
+        # Vocals
+        {"name": "VOX",     "color": "Dodger Blue Dark",     "gain_linked": False},
+        {"name": "BGs",     "color": "Matisse",              "gain_linked": False},
+        # Effects
+        {"name": "FX",      "color": "Lipstick",             "gain_linked": False},
     ],
 }
 
