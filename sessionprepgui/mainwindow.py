@@ -159,15 +159,15 @@ class SessionPrepWindow(QMainWindow):
         screen = QApplication.primaryScreen()
         if screen:
             avail = screen.availableGeometry()
-            w = min(1400, avail.width() - 40)
-            h = min(900, avail.height() - 40)
+            w = min(1600, avail.width() - 40)
+            h = min(950, avail.height() - 40)
             self.resize(w, h)
             self.move(
                 avail.x() + (avail.width() - w) // 2,
                 avail.y() + (avail.height() - h) // 2,
             )
         else:
-            self.resize(1400, 900)
+            self.resize(1600, 950)
 
         self._session = None
         self._summary = None
@@ -216,9 +216,9 @@ class SessionPrepWindow(QMainWindow):
         main_splitter = QSplitter(Qt.Horizontal)
         main_splitter.addWidget(self._build_left_panel())
         main_splitter.addWidget(self._build_right_panel())
-        main_splitter.setStretchFactor(0, 2)
-        main_splitter.setStretchFactor(1, 3)
-        main_splitter.setSizes([420, 580])
+        main_splitter.setStretchFactor(0, 3)
+        main_splitter.setStretchFactor(1, 2)
+        main_splitter.setSizes([620, 480])
         analysis_layout.addWidget(main_splitter, 1)
         self._phase_tabs.addTab(analysis_page, "Analysis")
 
@@ -343,9 +343,9 @@ class SessionPrepWindow(QMainWindow):
         right_layout.addStretch(3)
 
         setup_splitter.addWidget(right_placeholder)
-        setup_splitter.setStretchFactor(0, 2)
-        setup_splitter.setStretchFactor(1, 3)
-        setup_splitter.setSizes([420, 580])
+        setup_splitter.setStretchFactor(0, 3)
+        setup_splitter.setStretchFactor(1, 2)
+        setup_splitter.setSizes([620, 480])
 
         layout.addWidget(setup_splitter, 1)
 
@@ -359,9 +359,10 @@ class SessionPrepWindow(QMainWindow):
 
         # Track table
         self._track_table = _DraggableTrackTable()
-        self._track_table.setColumnCount(6)
+        self._track_table.setColumnCount(7)
         self._track_table.setHorizontalHeaderLabels(
-            ["File", "Ch", "Analysis", "Classification", "Gain", "RMS Anchor"]
+            ["File", "Ch", "Analysis", "Classification", "Gain",
+             "RMS Anchor", "Group"]
         )
         self._track_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._track_table.setSelectionMode(QTableWidget.ExtendedSelection)
@@ -380,11 +381,13 @@ class SessionPrepWindow(QMainWindow):
         header.setSectionResizeMode(3, QHeaderView.Interactive)
         header.setSectionResizeMode(4, QHeaderView.Interactive)
         header.setSectionResizeMode(5, QHeaderView.Interactive)
+        header.setSectionResizeMode(6, QHeaderView.Interactive)
         header.resizeSection(1, 30)
         header.resizeSection(2, 150)
         header.resizeSection(3, 120)
         header.resizeSection(4, 90)
         header.resizeSection(5, 100)
+        header.resizeSection(6, 110)
 
         self._track_table.cellClicked.connect(self._on_row_clicked)
         self._track_table.currentCellChanged.connect(self._on_current_cell_changed)
@@ -777,9 +780,13 @@ class SessionPrepWindow(QMainWindow):
         return [c["name"] for c in colors if c.get("name")]
 
     def _color_argb_by_name(self, name: str) -> str | None:
-        """Look up ARGB hex by color name from config."""
+        """Look up ARGB hex by color name from config, falling back to defaults."""
         colors = self._config.get("gui", {}).get("colors", PT_DEFAULT_COLORS)
         for c in colors:
+            if c.get("name") == name:
+                return c.get("argb")
+        # Fallback: check built-in defaults (handles stale saved configs)
+        for c in PT_DEFAULT_COLORS:
             if c.get("name") == name:
                 return c.get("argb")
         return None
@@ -821,12 +828,14 @@ class SessionPrepWindow(QMainWindow):
 
     def _populate_groups_tab(self):
         """Populate the groups tab table from self._session_groups."""
+        self._groups_tab_table.blockSignals(True)
         self._groups_tab_table.setRowCount(0)
         self._groups_tab_table.setRowCount(len(self._session_groups))
         for row, g in enumerate(self._session_groups):
             self._set_groups_tab_row(
                 row, g["name"], g.get("color", ""), g.get("gain_linked", False)
             )
+        self._groups_tab_table.blockSignals(False)
 
     def _read_session_groups(self) -> list[dict]:
         """Read the session groups table back into a list of dicts."""
@@ -892,6 +901,12 @@ class SessionPrepWindow(QMainWindow):
             self._groups_tab_table.blockSignals(True)
             item.setText(self._unique_session_group_name(name))
             self._groups_tab_table.blockSignals(False)
+        self._sync_session_groups()
+
+    def _sync_session_groups(self):
+        """Read the groups tab table into _session_groups and refresh combos."""
+        self._session_groups = self._read_session_groups()
+        self._refresh_group_combos()
 
     def _on_groups_tab_add(self):
         row = self._groups_tab_table.rowCount()
@@ -902,11 +917,13 @@ class SessionPrepWindow(QMainWindow):
             row, self._unique_session_group_name(), default_color, False)
         self._groups_tab_table.scrollToBottom()
         self._groups_tab_table.editItem(self._groups_tab_table.item(row, 0))
+        self._sync_session_groups()
 
     def _on_groups_tab_remove(self):
         row = self._groups_tab_table.currentRow()
         if row >= 0:
             self._groups_tab_table.removeRow(row)
+            self._sync_session_groups()
 
     def _on_groups_tab_reset(self):
         """Reset session groups to the defaults from preferences."""
@@ -914,6 +931,7 @@ class SessionPrepWindow(QMainWindow):
             "default_groups", _GUI_DEFAULTS.get("default_groups", []))
         self._session_groups = copy.deepcopy(defaults)
         self._populate_groups_tab()
+        self._refresh_group_combos()
 
     def _make_report_browser(self) -> QTextBrowser:
         """Create a consistently styled QTextBrowser for reports."""
@@ -1136,6 +1154,9 @@ class SessionPrepWindow(QMainWindow):
 
             # RMS Anchor combo (column 5)
             self._create_anchor_combo(row, track)
+
+            # Group combo (column 6)
+            self._create_group_combo(row, track)
 
     @Slot(object, object)
     def _on_analyze_done(self, session, summary):
@@ -1521,6 +1542,9 @@ class SessionPrepWindow(QMainWindow):
 
                 # RMS Anchor combo (column 5)
                 self._create_anchor_combo(row, track)
+
+                # Group combo (column 6)
+                self._create_group_combo(row, track)
             else:
                 cls_item = _SortableItem("", "zzz")
                 self._track_table.setItem(row, 3, cls_item)
@@ -1528,12 +1552,12 @@ class SessionPrepWindow(QMainWindow):
                 self._track_table.setItem(row, 4, gain_item)
         self._track_table.setSortingEnabled(True)
 
-        # Auto-fit columns 2–5 to content, File column stays Stretch, Ch stays Fixed
+        # Auto-fit columns 2–6 to content, File column stays Stretch, Ch stays Fixed
         header = self._track_table.horizontalHeader()
-        for col in (2, 3, 4, 5):
+        for col in (2, 3, 4, 5, 6):
             header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         self._track_table.resizeColumnsToContents()
-        for col in (2, 3, 4, 5):
+        for col in (2, 3, 4, 5, 6):
             header.setSectionResizeMode(col, QHeaderView.Interactive)
 
     def _populate_setup_table(self):
@@ -1832,6 +1856,138 @@ class SessionPrepWindow(QMainWindow):
                 return
             track.rms_anchor_override = new_override
             self._reanalyze_single_track(track)
+
+    # ── Group column (col 6) ────────────────────────────────────────────
+
+    _GROUP_NONE_LABEL = "(None)"
+
+    def _group_combo_items(self) -> list[str]:
+        """Return the items list for Group combo boxes."""
+        return [self._GROUP_NONE_LABEL] + [
+            g["name"] for g in self._session_groups]
+
+    def _group_color_map(self) -> dict[str, str]:
+        """Return {group_name: argb_hex} for all session groups."""
+        result: dict[str, str] = {}
+        for g in self._session_groups:
+            color_name = g.get("color", "")
+            argb = self._color_argb_by_name(color_name)
+            if argb:
+                result[g["name"]] = argb
+        return result
+
+    def _create_group_combo(self, row: int, track):
+        """Create and install a Group combo in column 6."""
+        current = track.group or self._GROUP_NONE_LABEL
+        sort_item = _SortableItem(current, current.lower())
+        self._track_table.setItem(row, 6, sort_item)
+
+        combo = BatchComboBox()
+        combo.setIconSize(QSize(16, 16))
+        gcm = self._group_color_map()
+        combo.addItem(self._GROUP_NONE_LABEL)
+        for gname in [g["name"] for g in self._session_groups]:
+            argb = gcm.get(gname)
+            if argb:
+                combo.addItem(self._color_swatch_icon(argb), gname)
+            else:
+                combo.addItem(gname)
+        combo.blockSignals(True)
+        combo.setCurrentText(current)
+        combo.blockSignals(False)
+        combo.setProperty("track_filename", track.filename)
+        combo.setStyleSheet(
+            f"QComboBox {{ color: {COLORS['text']}; }}"
+        )
+        combo.textActivated.connect(self._on_group_changed)
+        self._track_table.setCellWidget(row, 6, combo)
+
+    @Slot(str)
+    def _on_group_changed(self, text: str):
+        """Handle user changing the Group dropdown."""
+        combo = self.sender()
+        if not combo or not self._session:
+            return
+        fname = combo.property("track_filename")
+        if not fname:
+            return
+        track = next(
+            (t for t in self._session.tracks if t.filename == fname), None
+        )
+        if not track:
+            return
+
+        new_group = text if text != self._GROUP_NONE_LABEL else None
+
+        # Batch path: synchronous — no reanalysis needed
+        if getattr(combo, 'batch_mode', False):
+            combo.batch_mode = False
+            track.group = new_group
+            batch_keys = self._track_table.batch_selected_keys()
+            track_map = {t.filename: t for t in self._session.tracks}
+            self._track_table.setSortingEnabled(False)
+            for bfname in batch_keys:
+                bt = track_map.get(bfname)
+                if not bt or bt.status != "OK":
+                    continue
+                bt.group = new_group
+                row = self._find_table_row(bfname)
+                if row >= 0:
+                    w = self._track_table.cellWidget(row, 6)
+                    if isinstance(w, BatchComboBox):
+                        w.blockSignals(True)
+                        w.setCurrentText(text)
+                        w.blockSignals(False)
+                    sort_item = self._track_table.item(row, 6)
+                    if sort_item:
+                        sort_item.setText(text)
+                        sort_item._sort_key = text.lower()
+            self._track_table.setSortingEnabled(True)
+            self._track_table.restore_selection(batch_keys)
+        else:
+            if track.group == new_group:
+                return
+            track.group = new_group
+            # Update sort item
+            row = self._find_table_row(fname)
+            if row >= 0:
+                sort_item = self._track_table.item(row, 6)
+                if sort_item:
+                    sort_item.setText(text)
+                    sort_item._sort_key = text.lower()
+
+    def _refresh_group_combos(self):
+        """Refresh the items in all Group combo boxes from _session_groups."""
+        gcm = self._group_color_map()
+        for row in range(self._track_table.rowCount()):
+            w = self._track_table.cellWidget(row, 6)
+            if isinstance(w, BatchComboBox):
+                current = w.currentText()
+                w.blockSignals(True)
+                w.clear()
+                w.setIconSize(QSize(16, 16))
+                w.addItem(self._GROUP_NONE_LABEL)
+                for gname in [g["name"] for g in self._session_groups]:
+                    argb = gcm.get(gname)
+                    if argb:
+                        w.addItem(self._color_swatch_icon(argb), gname)
+                    else:
+                        w.addItem(gname)
+                # Restore selection; if the group was removed, fall back to None
+                idx = w.findText(current)
+                if idx >= 0:
+                    w.setCurrentIndex(idx)
+                else:
+                    w.setCurrentIndex(0)  # (None)
+                    # Also clear the track's group assignment
+                    fname = w.property("track_filename")
+                    if fname and self._session:
+                        track = next(
+                            (t for t in self._session.tracks
+                             if t.filename == fname), None)
+                        if track:
+                            track.group = None
+                w.blockSignals(False)
 
     def _reanalyze_single_track(self, track):
         """Re-run all track detectors + processors for a single track (sync)."""

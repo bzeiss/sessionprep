@@ -753,6 +753,7 @@ class PreferencesDialog(QDialog):
 
         # Populate from config
         groups = self._config.get("gui", {}).get("default_groups", [])
+        self._groups_table.blockSignals(True)
         self._groups_table.setRowCount(len(groups))
         for row, entry in enumerate(groups):
             self._set_group_row(
@@ -761,6 +762,7 @@ class PreferencesDialog(QDialog):
                 entry.get("color", ""),
                 entry.get("gain_linked", False),
             )
+        self._groups_table.blockSignals(False)
 
         layout.addWidget(self._groups_table, 1)
 
@@ -901,6 +903,7 @@ class PreferencesDialog(QDialog):
 
     def _on_groups_reset(self):
         defaults = _GUI_DEFAULTS.get("default_groups", [])
+        self._groups_table.blockSignals(True)
         self._groups_table.setRowCount(0)
         self._groups_table.setRowCount(len(defaults))
         for row, entry in enumerate(defaults):
@@ -910,6 +913,7 @@ class PreferencesDialog(QDialog):
                 entry["color"],
                 entry["gain_linked"],
             )
+        self._groups_table.blockSignals(False)
 
     def _read_groups(self) -> list[dict[str, Any]]:
         """Read the groups table into a list of dicts."""
