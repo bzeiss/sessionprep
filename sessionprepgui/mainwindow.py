@@ -378,6 +378,7 @@ class SessionPrepWindow(QMainWindow):
         self._session_groups: list[dict] = []
         self._detector_help = detector_help_map()
         self._daw_check_worker: DawCheckWorker | None = None
+        self._pending_after_check = None
         self._daw_fetch_worker: DawFetchWorker | None = None
         self._daw_transfer_worker: DawTransferWorker | None = None
 
@@ -524,15 +525,10 @@ class SessionPrepWindow(QMainWindow):
         self._setup_toolbar.setMovable(False)
         self._setup_toolbar.setFloatable(False)
 
-        # ── Left: DAW processor selection + check ──────────────────────
+        # ── Left: DAW processor selection + status label ────────────────
         self._daw_combo = QComboBox()
         self._daw_combo.setMinimumWidth(140)
         self._setup_toolbar.addWidget(self._daw_combo)
-
-        self._daw_check_btn = QPushButton("Check")
-        self._daw_check_btn.setEnabled(False)
-        self._daw_check_btn.clicked.connect(self._on_daw_check)
-        self._setup_toolbar.addWidget(self._daw_check_btn)
 
         self._daw_check_label = QLabel("")
         self._daw_check_label.setContentsMargins(6, 0, 0, 0)
@@ -694,17 +690,16 @@ class SessionPrepWindow(QMainWindow):
 
     def _update_daw_lifecycle_buttons(self):
         """Enable/disable Fetch/Transfer/Sync based on active processor state."""
-        dp = self._active_daw_processor
-        connected = dp is not None and dp.connected
-        self._fetch_action.setEnabled(connected)
+        has_processor = self._active_daw_processor is not None
+        self._fetch_action.setEnabled(has_processor)
         pt_state = (
             self._session.daw_state.get("protools", {})
             if self._session else {}
         )
         has_folders = bool(pt_state.get("folders"))
         has_assignments = bool(pt_state.get("assignments"))
-        self._auto_assign_action.setEnabled(connected and has_folders)
-        self._transfer_action.setEnabled(connected and has_assignments)
+        self._auto_assign_action.setEnabled(has_folders)
+        self._transfer_action.setEnabled(has_processor and has_assignments)
         self._sync_action.setEnabled(False)
 
     @Slot(int)
@@ -715,15 +710,14 @@ class SessionPrepWindow(QMainWindow):
             proc_idx = self._daw_combo.itemData(index)
             self._active_daw_processor = self._daw_processors[proc_idx]
         self._daw_check_label.setText("")
-        self._daw_check_btn.setEnabled(self._daw_combo.count() > 0)
         self._update_daw_lifecycle_buttons()
 
-    @Slot()
-    def _on_daw_check(self):
+    def _run_daw_check_then(self, on_success):
+        """Run a connectivity check; on success call *on_success*."""
         if not self._active_daw_processor:
             return
-        self._daw_check_btn.setEnabled(False)
-        self._daw_check_label.setText("Checking\u2026")
+        self._pending_after_check = on_success
+        self._daw_check_label.setText("Connecting\u2026")
         self._daw_check_label.setStyleSheet(f"color: {COLORS['dim']};")
         self._daw_check_worker = DawCheckWorker(self._active_daw_processor)
         self._daw_check_worker.result.connect(self._on_daw_check_result)
@@ -732,13 +726,17 @@ class SessionPrepWindow(QMainWindow):
     @Slot(bool, str)
     def _on_daw_check_result(self, ok: bool, message: str):
         self._daw_check_worker = None
-        self._daw_check_btn.setEnabled(True)
         if ok:
             self._daw_check_label.setText(message)
             self._daw_check_label.setStyleSheet(f"color: {COLORS['clean']};")
+            cb = self._pending_after_check
+            self._pending_after_check = None
+            if cb:
+                cb()
         else:
             self._daw_check_label.setText(message)
             self._daw_check_label.setStyleSheet(f"color: {COLORS['problems']};")
+            self._pending_after_check = None
         self._update_daw_lifecycle_buttons()
 
     # ── DAW Fetch + Folder Tree ───────────────────────────────────────────
@@ -748,6 +746,10 @@ class SessionPrepWindow(QMainWindow):
         if not self._active_daw_processor or not self._session:
             return
         self._fetch_action.setEnabled(False)
+        self._run_daw_check_then(self._do_daw_fetch)
+
+    def _do_daw_fetch(self):
+        """Actually start the fetch (called after successful connectivity check)."""
         self._status_bar.showMessage("Fetching folder structure\u2026")
         self._daw_fetch_worker = DawFetchWorker(
             self._active_daw_processor, self._session)
@@ -776,6 +778,10 @@ class SessionPrepWindow(QMainWindow):
             return
         self._transfer_action.setEnabled(False)
         self._fetch_action.setEnabled(False)
+        self._run_daw_check_then(self._do_daw_transfer)
+
+    def _do_daw_transfer(self):
+        """Actually start the transfer (called after successful connectivity check)."""
         self._status_bar.showMessage("Transferring to Pro Tools\u2026")
         # Show progress panel
         self._transfer_progress_bar.setValue(0)
