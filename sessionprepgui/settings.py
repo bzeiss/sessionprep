@@ -5,12 +5,13 @@ directory with all built-in defaults.  On subsequent launches it is validated,
 loaded, and merged with the current defaults so that newly added keys always
 receive a value.
 
-The config file uses a **structured** JSON format organised by section::
+The config file uses a four-section JSON format::
 
     {
-        "analysis":   { ... },          # shared analysis + global defaults
-        "detectors":  { "<id>": {...}, ... },
-        "processors": { "<id>": {...}, ... },
+        "app":            { ... },          # application-level settings
+        "colors":         [ ... ],          # global color palette
+        "config_presets":  { "Default": {...}, ... },
+        "group_presets":   { "Default": [...], ... },
     }
 
 Locations:
@@ -30,7 +31,9 @@ import platform
 from typing import Any
 
 from sessionpreplib.config import (
+    PRESENTATION_PARAMS,
     build_structured_defaults,
+    flatten_structured_config,
     validate_structured_config,
 )
 from .theme import PT_DEFAULT_COLORS
@@ -39,47 +42,102 @@ log = logging.getLogger(__name__)
 
 CONFIG_FILENAME = "sessionprep.config.json"
 
-_GUI_DEFAULTS: dict[str, Any] = {
+# ---------------------------------------------------------------------------
+# Presentation defaults  (config-preset-scoped)
+# ---------------------------------------------------------------------------
+
+_PRESENTATION_DEFAULTS: dict[str, Any] = {
+    p.key: p.default for p in PRESENTATION_PARAMS
+}
+
+# ---------------------------------------------------------------------------
+# Application defaults  (global, never per-session)
+# ---------------------------------------------------------------------------
+
+_APP_DEFAULTS: dict[str, Any] = {
     "scale_factor": 1.0,
-    "show_clean_detectors": False,
     "report_verbosity": "normal",
     "output_folder": "processed",
     "spectrogram_colormap": "magma",
     "default_project_dir": "",
     "invert_scroll": "default",
-    "colors": copy.deepcopy(PT_DEFAULT_COLORS),
+    "active_config_preset": "Default",
     "active_group_preset": "Default",
-    "group_presets": {
-        "Default": [
-            # Drums
-            {"name": "Kick",    "color": "Guardsman Red",        "gain_linked": True,  "daw_target": ""},
-            {"name": "Snare",   "color": "Dodger Blue Light",    "gain_linked": True,  "daw_target": ""},
-            {"name": "Toms",    "color": "Tia Maria",            "gain_linked": True,  "daw_target": ""},
-            {"name": "HH",      "color": "La Rioja",             "gain_linked": False, "daw_target": ""},
-            {"name": "OH",      "color": "Java",                 "gain_linked": True,  "daw_target": ""},
-            {"name": "Room",    "color": "Purple",               "gain_linked": False, "daw_target": ""},
-            {"name": "Perc",    "color": "Corn Harvest",         "gain_linked": False, "daw_target": ""},
-            {"name": "Loops",   "color": "Apricot",              "gain_linked": False, "daw_target": ""},
-            # Bass
-            {"name": "Bass",    "color": "Christi",              "gain_linked": False, "daw_target": ""},
-            # Guitars
-            {"name": "E.Gtr",   "color": "Pizza",               "gain_linked": False, "daw_target": ""},
-            {"name": "A.Gtr",   "color": "Lima Dark",            "gain_linked": False, "daw_target": ""},
-            # Keys & Synths
-            {"name": "Keys",    "color": "Malachite",            "gain_linked": False, "daw_target": ""},
-            {"name": "Synths",  "color": "Electric Violet Light", "gain_linked": False, "daw_target": ""},
-            # Strings & Pads
-            {"name": "Strings", "color": "Eastern Blue",         "gain_linked": False, "daw_target": ""},
-            {"name": "Pads",    "color": "Flirt",                "gain_linked": False, "daw_target": ""},
-            {"name": "Brass",   "color": "Milano Red",           "gain_linked": False, "daw_target": ""},
-            # Vocals
-            {"name": "VOX",     "color": "Dodger Blue Dark",     "gain_linked": False, "daw_target": ""},
-            {"name": "BGs",     "color": "Matisse",              "gain_linked": False, "daw_target": ""},
-            # Effects
-            {"name": "FX",      "color": "Lipstick",             "gain_linked": False, "daw_target": ""},
-        ],
-    },
 }
+
+# ---------------------------------------------------------------------------
+# Default group presets
+# ---------------------------------------------------------------------------
+
+_DEFAULT_GROUPS: list[dict[str, Any]] = [
+    # Drums
+    {"name": "Kick",    "color": "Guardsman Red",        "gain_linked": True,  "daw_target": ""},
+    {"name": "Snare",   "color": "Dodger Blue Light",    "gain_linked": True,  "daw_target": ""},
+    {"name": "Toms",    "color": "Tia Maria",            "gain_linked": True,  "daw_target": ""},
+    {"name": "HH",      "color": "La Rioja",             "gain_linked": False, "daw_target": ""},
+    {"name": "OH",      "color": "Java",                 "gain_linked": True,  "daw_target": ""},
+    {"name": "Room",    "color": "Purple",               "gain_linked": False, "daw_target": ""},
+    {"name": "Perc",    "color": "Corn Harvest",         "gain_linked": False, "daw_target": ""},
+    {"name": "Loops",   "color": "Apricot",              "gain_linked": False, "daw_target": ""},
+    # Bass
+    {"name": "Bass",    "color": "Christi",              "gain_linked": False, "daw_target": ""},
+    # Guitars
+    {"name": "E.Gtr",   "color": "Pizza",               "gain_linked": False, "daw_target": ""},
+    {"name": "A.Gtr",   "color": "Lima Dark",            "gain_linked": False, "daw_target": ""},
+    # Keys & Synths
+    {"name": "Keys",    "color": "Malachite",            "gain_linked": False, "daw_target": ""},
+    {"name": "Synths",  "color": "Electric Violet Light", "gain_linked": False, "daw_target": ""},
+    # Strings & Pads
+    {"name": "Strings", "color": "Eastern Blue",         "gain_linked": False, "daw_target": ""},
+    {"name": "Pads",    "color": "Flirt",                "gain_linked": False, "daw_target": ""},
+    {"name": "Brass",   "color": "Milano Red",           "gain_linked": False, "daw_target": ""},
+    # Vocals
+    {"name": "VOX",     "color": "Dodger Blue Dark",     "gain_linked": False, "daw_target": ""},
+    {"name": "BGs",     "color": "Matisse",              "gain_linked": False, "daw_target": ""},
+    # Effects
+    {"name": "FX",      "color": "Lipstick",             "gain_linked": False, "daw_target": ""},
+]
+
+
+def _build_default_config_preset() -> dict[str, Any]:
+    """Build the "Default" config preset from lib defaults + presentation."""
+    preset = build_structured_defaults()
+    preset["presentation"] = copy.deepcopy(_PRESENTATION_DEFAULTS)
+    return preset
+
+
+def build_defaults() -> dict[str, Any]:
+    """Build the full default config with four top-level sections."""
+    return {
+        "app": copy.deepcopy(_APP_DEFAULTS),
+        "colors": copy.deepcopy(PT_DEFAULT_COLORS),
+        "config_presets": {
+            "Default": _build_default_config_preset(),
+        },
+        "group_presets": {
+            "Default": copy.deepcopy(_DEFAULT_GROUPS),
+        },
+    }
+
+
+def resolve_config_preset(
+    config: dict[str, Any],
+    preset_name: str,
+) -> dict[str, Any]:
+    """Resolve a config preset by name into a structured dict.
+
+    Returns a dict with keys ``analysis``, ``detectors``, ``processors``,
+    ``daw_processors`` — the same shape that
+    :func:`~sessionpreplib.config.flatten_structured_config` expects.
+    Falls back to "Default", then built-in defaults.
+    """
+    presets = config.get("config_presets", {})
+    preset = presets.get(preset_name)
+    if preset is None:
+        preset = presets.get("Default")
+    if preset is None:
+        preset = _build_default_config_preset()
+    return copy.deepcopy(preset)
 
 
 # ---------------------------------------------------------------------------
@@ -118,17 +176,16 @@ def config_path() -> str:
 # ---------------------------------------------------------------------------
 
 def load_config() -> dict[str, Any]:
-    """Load the structured GUI config, creating it with defaults if needed.
+    """Load the four-section GUI config, creating it with defaults if needed.
 
-    Returns a **structured** config dict (analysis / detectors / processors /
-    session).  Missing sections or keys are filled from built-in defaults.
+    Returns a config dict with keys ``app``, ``colors``,
+    ``config_presets``, ``group_presets``.
 
     If the file is corrupt or fails validation it is backed up as
     ``*.bak`` and recreated from defaults.
     """
     path = config_path()
-    defaults = build_structured_defaults()
-    defaults.setdefault("gui", _GUI_DEFAULTS.copy())
+    defaults = build_defaults()
 
     if not os.path.isfile(path):
         log.info("Config file not found — creating %s", path)
@@ -152,22 +209,30 @@ def load_config() -> dict[str, Any]:
         save_config(defaults)
         return copy.deepcopy(defaults)
 
-    # -- Migrate legacy default_groups → group_presets --
-    _migrate_default_groups(data)
+    # -- Migrate old flat config if needed --
+    if "gui" in data or ("analysis" in data and "config_presets" not in data):
+        data = _migrate_legacy_config(data)
 
-    # -- Merge: defaults ← file overrides (section by section) --
+    # -- Merge: defaults ← file overrides --
     merged = _merge_structured(defaults, data)
 
-    # -- Validate --
-    errors = validate_structured_config(merged)
-    if errors:
-        msgs = "; ".join(e.message for e in errors)
-        log.warning("Config validation failed (%s) — resetting invalid sections",
-                     msgs)
+    # -- Validate each config preset --
+    valid = True
+    for name, preset in merged.get("config_presets", {}).items():
+        errors = validate_structured_config(preset)
+        if errors:
+            msgs = "; ".join(e.message for e in errors)
+            log.warning("Config preset %r validation failed (%s) — resetting",
+                         name, msgs)
+            valid = False
+            break
+
+    if not valid:
         _backup_corrupt(path)
-        # Reset analysis/detectors/processors to defaults but keep gui
-        gui_section = copy.deepcopy(merged.get("gui", _GUI_DEFAULTS.copy()))
-        defaults["gui"] = gui_section
+        # Keep app settings and colors, reset presets to defaults
+        defaults["app"] = copy.deepcopy(merged.get("app", _APP_DEFAULTS))
+        defaults["colors"] = copy.deepcopy(
+            merged.get("colors", PT_DEFAULT_COLORS))
         save_config(defaults)
         return copy.deepcopy(defaults)
 
@@ -202,71 +267,138 @@ def _merge_structured(
     defaults: dict[str, Any],
     overrides: dict[str, Any],
 ) -> dict[str, Any]:
-    """Deep-merge *overrides* into *defaults* (two levels deep).
+    """Deep-merge *overrides* into *defaults* for the four-section config.
 
-    Only known top-level sections (``analysis``, ``detectors``,
-    ``processors``) are merged.  Within ``detectors`` and
-    ``processors`` only known sub-section IDs are merged.
+    Sections:
+    - ``app``: flat dict, known keys only
+    - ``colors``: replaced wholesale if present
+    - ``config_presets``: per-preset, per-section merge (same as old pipeline sections)
+    - ``group_presets``: replaced wholesale per preset
     """
     merged = copy.deepcopy(defaults)
 
-    if "analysis" in overrides and isinstance(overrides["analysis"], dict):
-        default_section = merged.get("analysis", {})
-        for k, v in overrides["analysis"].items():
-            if k in default_section:
-                default_section[k] = v
+    # -- app: merge known keys only --
+    if "app" in overrides and isinstance(overrides["app"], dict):
+        app_defaults = merged.get("app", {})
+        for k, v in overrides["app"].items():
+            if k in app_defaults:
+                app_defaults[k] = v
 
-    for section in ("detectors", "processors", "daw_processors"):
-        if section in overrides and isinstance(overrides[section], dict):
-            default_section = merged.get(section, {})
-            for comp_id, comp_vals in overrides[section].items():
-                if comp_id in default_section and isinstance(comp_vals, dict):
-                    for k, v in comp_vals.items():
-                        if k in default_section[comp_id]:
-                            default_section[comp_id][k] = v
+    # -- colors: replace wholesale --
+    if "colors" in overrides and isinstance(overrides["colors"], list):
+        merged["colors"] = copy.deepcopy(overrides["colors"])
 
-    # GUI section — merge overrides into defaults
-    gui_defaults = merged.get("gui", {})
-    if "gui" in overrides and isinstance(overrides["gui"], dict):
-        gui_defaults.update(overrides["gui"])
-    merged["gui"] = gui_defaults
+    # -- config_presets: deep merge per preset --
+    if "config_presets" in overrides and isinstance(overrides["config_presets"], dict):
+        default_presets = merged.get("config_presets", {})
+        for preset_name, preset_data in overrides["config_presets"].items():
+            if not isinstance(preset_data, dict):
+                continue
+            if preset_name not in default_presets:
+                # User-created preset — take as-is
+                default_presets[preset_name] = copy.deepcopy(preset_data)
+                continue
+            # Merge into default preset structure
+            dp = default_presets[preset_name]
+            _merge_config_preset(dp, preset_data)
+
+    # -- group_presets: replace wholesale per preset --
+    if "group_presets" in overrides and isinstance(overrides["group_presets"], dict):
+        merged["group_presets"] = copy.deepcopy(overrides["group_presets"])
 
     return merged
 
 
-def active_group_list(config: dict[str, Any]) -> list[dict]:
-    """Return the group list for the currently active preset.
+def _merge_config_preset(
+    target: dict[str, Any],
+    source: dict[str, Any],
+) -> None:
+    """Merge *source* config preset values into *target* in place.
 
-    Falls back to the built-in Default preset if the active preset is
-    missing or the config uses the legacy ``default_groups`` key.
+    Handles analysis (flat), detectors/processors/daw_processors
+    (two-level), and presentation (flat).
     """
-    gui = config.get("gui", {})
-    presets = gui.get("group_presets", _GUI_DEFAULTS.get("group_presets", {}))
-    active = gui.get("active_group_preset", "Default")
-    if active in presets:
-        return presets[active]
-    # Fallback: try "Default", then first available, then built-in
-    if "Default" in presets:
-        return presets["Default"]
-    if presets:
-        return next(iter(presets.values()))
-    return _GUI_DEFAULTS["group_presets"]["Default"]
+    # analysis — flat merge of known keys
+    if "analysis" in source and isinstance(source["analysis"], dict):
+        t_analysis = target.get("analysis", {})
+        for k, v in source["analysis"].items():
+            if k in t_analysis:
+                t_analysis[k] = v
+
+    # detectors, processors, daw_processors — two-level merge
+    for section in ("detectors", "processors", "daw_processors"):
+        if section in source and isinstance(source[section], dict):
+            t_section = target.get(section, {})
+            for comp_id, comp_vals in source[section].items():
+                if comp_id in t_section and isinstance(comp_vals, dict):
+                    for k, v in comp_vals.items():
+                        if k in t_section[comp_id]:
+                            t_section[comp_id][k] = v
+                elif isinstance(comp_vals, dict):
+                    # Unknown component — keep it (user plugin)
+                    t_section[comp_id] = copy.deepcopy(comp_vals)
+
+    # presentation — flat merge
+    if "presentation" in source and isinstance(source["presentation"], dict):
+        t_pres = target.setdefault("presentation", {})
+        for k, v in source["presentation"].items():
+            t_pres[k] = v
 
 
-def _migrate_default_groups(data: dict[str, Any]) -> None:
-    """Migrate legacy ``gui.default_groups`` list → ``gui.group_presets`` dict.
+def _migrate_legacy_config(data: dict[str, Any]) -> dict[str, Any]:
+    """Convert an old flat-format config to the new four-section structure.
 
-    Operates in-place on *data* so the merge step sees the new keys.
+    Old format had top-level ``gui``, ``analysis``, ``detectors``,
+    ``processors``, ``daw_processors`` keys.  The ``gui`` section contained
+    app settings, colors, group presets, and presentation params mixed together.
     """
-    gui = data.get("gui")
-    if not isinstance(gui, dict):
-        return
-    if "default_groups" in gui and "group_presets" not in gui:
-        old_groups = gui.pop("default_groups")
-        if isinstance(old_groups, list):
-            gui["group_presets"] = {"Default": old_groups}
-            gui.setdefault("active_group_preset", "Default")
-            log.info("Migrated legacy default_groups → group_presets")
+    log.info("Migrating legacy config to four-section format")
+    gui = data.get("gui", {})
+
+    # -- app settings --
+    app: dict[str, Any] = {}
+    for key in _APP_DEFAULTS:
+        if key in gui:
+            app[key] = gui[key]
+    # Migrate active_group_preset from gui
+    if "active_group_preset" in gui:
+        app["active_group_preset"] = gui["active_group_preset"]
+
+    # -- colors --
+    colors = gui.get("colors", [])
+
+    # -- group presets --
+    group_presets = gui.get("group_presets", {})
+
+    # -- config preset: build "Default" from old top-level sections --
+    preset: dict[str, Any] = {}
+    if "analysis" in data and isinstance(data["analysis"], dict):
+        preset["analysis"] = data["analysis"]
+    if "detectors" in data and isinstance(data["detectors"], dict):
+        preset["detectors"] = data["detectors"]
+    if "processors" in data and isinstance(data["processors"], dict):
+        preset["processors"] = data["processors"]
+    if "daw_processors" in data and isinstance(data["daw_processors"], dict):
+        preset["daw_processors"] = data["daw_processors"]
+
+    # Migrate presentation params from gui into preset
+    pres: dict[str, Any] = {}
+    for key in _PRESENTATION_DEFAULTS:
+        if key in gui:
+            pres[key] = gui[key]
+    if pres:
+        preset["presentation"] = pres
+
+    result: dict[str, Any] = {}
+    if app:
+        result["app"] = app
+    if colors:
+        result["colors"] = colors
+    result["config_presets"] = {"Default": preset} if preset else {}
+    if group_presets:
+        result["group_presets"] = group_presets
+
+    return result
 
 
 def _backup_corrupt(path: str) -> None:

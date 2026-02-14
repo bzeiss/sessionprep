@@ -232,6 +232,25 @@ ANALYSIS_PARAMS: list[ParamSpec] = [
 
 
 # ---------------------------------------------------------------------------
+# Presentation parameters  (config-preset-scoped, not analysis-affecting)
+# ---------------------------------------------------------------------------
+
+PRESENTATION_PARAMS: list[ParamSpec] = [
+    ParamSpec(
+        key="show_clean_detectors", type=bool, default=False,
+        presentation_only=True,
+        label="Show clean detector results",
+        description=(
+            "When enabled, detectors that found no issues (OK) are "
+            "shown in the file detail view and summary. Disable to "
+            "reduce clutter and focus on problems, warnings, and "
+            "informational findings only."
+        ),
+    ),
+]
+
+
+# ---------------------------------------------------------------------------
 # Validation  (ParamSpec-driven)
 # ---------------------------------------------------------------------------
 

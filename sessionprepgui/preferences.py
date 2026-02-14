@@ -3,20 +3,16 @@
 from __future__ import annotations
 
 import copy
-from decimal import Decimal
 from typing import Any
 
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QColor, QFont, QIcon, QPixmap
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
-    QCheckBox,
     QColorDialog,
     QComboBox,
     QDialog,
     QDialogButtonBox,
-    QDoubleSpinBox,
     QFileDialog,
-    QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -26,9 +22,9 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSplitter,
-    QSpinBox,
     QStackedWidget,
     QStyle,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QTreeWidget,
@@ -37,280 +33,28 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from sessionpreplib.config import ANALYSIS_PARAMS, ParamSpec
+from sessionpreplib.config import ANALYSIS_PARAMS, PRESENTATION_PARAMS, ParamSpec
 from sessionpreplib.detectors import default_detectors
 from sessionpreplib.processors import default_processors
 from sessionpreplib.daw_processors import default_daw_processors
-from .settings import _GUI_DEFAULTS
+from .param_widgets import (
+    _argb_to_qcolor,
+    _build_param_page,
+    _build_subtext,
+    _build_tooltip,
+    _read_widget,
+    _set_widget_value,
+    GroupsTableWidget,
+    sanitize_output_folder,
+)
+from .settings import (
+    _APP_DEFAULTS,
+    _PRESENTATION_DEFAULTS,
+    _build_default_config_preset,
+    build_defaults,
+)
 from .theme import PT_DEFAULT_COLORS
 
-
-# ---------------------------------------------------------------------------
-# ARGB color helper
-# ---------------------------------------------------------------------------
-
-def _argb_to_qcolor(argb: str) -> QColor:
-    """Parse a ``#AARRGGBB`` hex string into a QColor."""
-    s = argb.lstrip("#")
-    if len(s) == 8:
-        a, r, g, b = int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16), int(s[6:8], 16)
-        return QColor(r, g, b, a)
-    return QColor(argb)
-
-
-# ---------------------------------------------------------------------------
-# Widget builders for ParamSpec
-# ---------------------------------------------------------------------------
-
-def _build_widget(spec: ParamSpec, value: Any) -> QWidget:
-    """Create an appropriate input widget for a ParamSpec and set its value."""
-    if spec.choices is not None:
-        w = QComboBox()
-        for c in spec.choices:
-            w.addItem(str(c), c)
-        idx = w.findData(value)
-        if idx >= 0:
-            w.setCurrentIndex(idx)
-        w._param_spec = spec
-        return w
-
-    if spec.type is bool:
-        w = QCheckBox()
-        w.setChecked(bool(value))
-        w._param_spec = spec
-        return w
-
-    if spec.type is int:
-        w = QSpinBox()
-        w.setMinimum(int(spec.min) if spec.min is not None else -999999)
-        w.setMaximum(int(spec.max) if spec.max is not None else 999999)
-        w.setValue(int(value) if value is not None else int(spec.default))
-        w._param_spec = spec
-        return w
-
-    if spec.type in ((int, float), float):
-        w = QDoubleSpinBox()
-        lo = float(spec.min) if spec.min is not None else -999999.0
-        hi = float(spec.max) if spec.max is not None else 999999.0
-        # Adaptive decimals: enough to represent default and current value
-        decimals = 2
-        for ref in (spec.default, value, lo if spec.min is not None else None):
-            if ref is not None and ref != 0:
-                try:
-                    d = Decimal(str(float(ref)))
-                    # Number of decimal places (negative exponent)
-                    exp = -d.as_tuple().exponent
-                    decimals = max(decimals, exp)
-                except Exception:
-                    pass
-        w.setDecimals(min(decimals, 10))
-        w.setMinimum(lo)
-        w.setMaximum(hi)
-        # Smart step size based on range and precision
-        span = hi - lo
-        if decimals >= 4:
-            w.setSingleStep(10 ** -decimals)
-        elif span <= 5:
-            w.setSingleStep(0.25)
-        elif span <= 20:
-            w.setSingleStep(0.5)
-        elif span <= 200:
-            w.setSingleStep(1.0)
-        else:
-            w.setSingleStep(5.0)
-        w.setValue(float(value) if value is not None else float(spec.default))
-        w._param_spec = spec
-        return w
-
-    if spec.type is list:
-        w = QLineEdit()
-        if isinstance(value, list):
-            w.setText(", ".join(str(x) for x in value))
-        else:
-            w.setText(str(value) if value else "")
-        w.setPlaceholderText("comma-separated values")
-        w._param_spec = spec
-        return w
-
-    # Fallback: string
-    w = QLineEdit()
-    w.setText(str(value) if value is not None else "")
-    w._param_spec = spec
-    return w
-
-
-def _set_widget_value(widget: QWidget, value: Any):
-    """Set a widget's value programmatically."""
-    if isinstance(widget, QComboBox):
-        idx = widget.findData(value)
-        if idx >= 0:
-            widget.setCurrentIndex(idx)
-    elif isinstance(widget, QCheckBox):
-        widget.setChecked(bool(value))
-    elif isinstance(widget, QSpinBox):
-        widget.setValue(int(value))
-    elif isinstance(widget, QDoubleSpinBox):
-        widget.setValue(float(value))
-    elif isinstance(widget, QLineEdit):
-        if isinstance(value, list):
-            widget.setText(", ".join(str(x) for x in value))
-        else:
-            widget.setText(str(value) if value is not None else "")
-
-
-def _build_tooltip(spec: ParamSpec) -> str:
-    """Build a rich tooltip with key, default, and range info."""
-    parts = []
-    parts.append(f"<b>{spec.label}</b>")
-    if spec.description:
-        parts.append(f"<br/>{spec.description}")
-    parts.append(f"<br/><br/>Config key: <code>{spec.key}</code>")
-    parts.append(f"<br/>Default: <b>{spec.default}</b>")
-    if spec.min is not None or spec.max is not None:
-        lo = str(spec.min) if spec.min is not None else "−∞"
-        hi = str(spec.max) if spec.max is not None else "∞"
-        parts.append(f"<br/>Range: {lo} \u2013 {hi}")
-    if spec.choices:
-        parts.append(f"<br/>Choices: {', '.join(str(c) for c in spec.choices)}")
-    return "".join(parts)
-
-
-def _read_widget(widget: QWidget) -> Any:
-    """Read the current value from a widget created by _build_widget."""
-    spec = widget._param_spec
-    if isinstance(widget, QComboBox):
-        return widget.currentData()
-    if isinstance(widget, QCheckBox):
-        return widget.isChecked()
-    if isinstance(widget, QSpinBox):
-        return widget.value()
-    if isinstance(widget, QDoubleSpinBox):
-        return widget.value()
-    if isinstance(widget, QLineEdit):
-        text = widget.text().strip()
-        if spec.type is list:
-            if not text:
-                return []
-            return [s.strip() for s in text.split(",") if s.strip()]
-        return text
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Page builders
-# ---------------------------------------------------------------------------
-
-def _type_label(t) -> str:
-    """Human-readable type name."""
-    if isinstance(t, tuple):
-        return " or ".join(x.__name__ for x in t)
-    return t.__name__
-
-
-def _build_subtext(spec: ParamSpec) -> str:
-    """Build visible subtext with description, type, and range info."""
-    parts = []
-    if spec.description:
-        parts.append(spec.description)
-    meta = []
-    meta.append(f"Type: {_type_label(spec.type)}")
-    if spec.min is not None or spec.max is not None:
-        lo = str(spec.min) if spec.min is not None else "\u2212\u221e"
-        hi = str(spec.max) if spec.max is not None else "\u221e"
-        meta.append(f"Range: {lo} \u2013 {hi}")
-    if spec.choices:
-        meta.append(f"Choices: {', '.join(str(c) for c in spec.choices)}")
-    meta.append(f"Default: {spec.default}")
-    if parts:
-        parts.append("  \u2022  ".join(meta))
-    else:
-        parts.append("  \u2022  ".join(meta))
-    return "\n".join(parts)
-
-
-def _build_param_page(params: list[ParamSpec], values: dict[str, Any]) -> tuple[QWidget, list[tuple[str, QWidget]]]:
-    """Build a form page for a list of ParamSpecs. Returns (page_widget, [(key, widget)])."""
-    page = QWidget()
-    outer = QVBoxLayout(page)
-    outer.setContentsMargins(12, 12, 12, 12)
-    outer.setSpacing(12)
-    widgets = []
-    for spec in params:
-        val = values.get(spec.key, spec.default)
-        w = _build_widget(spec, val)
-        tooltip = _build_tooltip(spec)
-        w.setToolTip(tooltip)
-
-        # Row 1: label + widget + reset button
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
-        name_label = QLabel(f"<b>{spec.label}</b>")
-        name_label.setToolTip(tooltip)
-        row.addWidget(name_label, 1)
-        row.addWidget(w, 0)
-        reset_btn = QPushButton()
-        reset_btn.setIcon(page.style().standardIcon(page.style().StandardPixmap.SP_BrowserReload))
-        reset_btn.setFixedSize(26, 26)
-        reset_btn.setToolTip(f"Reset to default ({spec.default})")
-        _default = spec.default
-        _widget = w
-        reset_btn.clicked.connect(lambda checked=False, ww=_widget, dv=_default: _set_widget_value(ww, dv))
-        row.addWidget(reset_btn)
-
-        # Row 2: subtext (description + type + range)
-        param_box = QVBoxLayout()
-        param_box.setContentsMargins(0, 0, 0, 0)
-        param_box.setSpacing(2)
-        param_box.addLayout(row)
-
-        subtext = _build_subtext(spec)
-        sub_label = QLabel(subtext)
-        sub_label.setWordWrap(True)
-        sub_label.setStyleSheet("color: #888; font-size: 9pt;")
-        sub_label.setToolTip(tooltip)
-        param_box.addWidget(sub_label)
-
-        outer.addLayout(param_box)
-        widgets.append((spec.key, w))
-
-    outer.addStretch()
-    return page, widgets
-
-
-# ---------------------------------------------------------------------------
-# Output folder validation
-# ---------------------------------------------------------------------------
-
-_WINDOWS_RESERVED = frozenset(
-    ["CON", "PRN", "AUX", "NUL"]
-    + [f"COM{i}" for i in range(1, 10)]
-    + [f"LPT{i}" for i in range(1, 10)]
-)
-_ILLEGAL_CHARS = frozenset('<>:"|?*')
-
-
-def sanitize_output_folder(name: str) -> str | None:
-    """Validate and clean an output folder name.
-
-    Returns the stripped name on success, or ``None`` if the name is
-    invalid.  Rejects empty strings, path traversals, path separators,
-    illegal Windows characters, control characters, and reserved names.
-    """
-    name = name.strip()
-    if not name:
-        return None
-    if ".." in name:
-        return None
-    if "/" in name or "\\" in name:
-        return None
-    if any(c in _ILLEGAL_CHARS for c in name):
-        return None
-    if any(ord(c) < 32 for c in name):
-        return None
-    if name.upper() in _WINDOWS_RESERVED:
-        return None
-    return name
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +73,12 @@ class PreferencesDialog(QDialog):
         self._general_widgets: list[tuple[str, QWidget]] = []
         self._saved = False
 
+        # Working copy of config presets  {name: structured_dict}
+        self._config_presets_data: dict[str, dict[str, Any]] = copy.deepcopy(
+            self._config.get("config_presets", {}))
+        if "Default" not in self._config_presets_data:
+            self._config_presets_data["Default"] = _build_default_config_preset()
+
         self._init_ui()
 
     @property
@@ -339,46 +89,138 @@ class PreferencesDialog(QDialog):
         """Return the edited config (only valid after save)."""
         return self._config
 
+    # ── Active config preset helpers ──────────────────────────────────
+
+    def _active_preset(self) -> dict[str, Any]:
+        """Return the structured dict for the currently selected config preset."""
+        name = self._cfg_preset_combo.currentText()
+        return self._config_presets_data.get(
+            name, self._config_presets_data.get("Default", {}))
+
     # ── UI setup ──────────────────────────────────────────────────────
 
     def _init_ui(self):
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(8, 8, 8, 8)
 
-        splitter = QSplitter(Qt.Horizontal)
+        # ── Top-level tabs: Global / Config Presets ───────────────────
+        self._top_tabs = QTabWidget()
+        self._top_tabs.setDocumentMode(True)
+        root_layout.addWidget(self._top_tabs, 1)
 
-        # -- Tree --
-        self._tree = QTreeWidget()
-        self._tree.setHeaderHidden(True)
-        self._tree.setMinimumWidth(180)
-        self._tree.setMaximumWidth(250)
-        self._tree.currentItemChanged.connect(self._on_tree_selection)
-        splitter.addWidget(self._tree)
+        # ── Global tab ────────────────────────────────────────────────
+        self._global_page_index: dict[int, int] = {}
+        global_tab = QWidget()
+        g_layout = QVBoxLayout(global_tab)
+        g_layout.setContentsMargins(0, 4, 0, 0)
+        g_splitter = QSplitter(Qt.Horizontal)
 
-        # -- Stacked pages --
-        self._stack = QStackedWidget()
-        splitter.addWidget(self._stack)
+        self._global_tree = QTreeWidget()
+        self._global_tree.setHeaderHidden(True)
+        self._global_tree.setMinimumWidth(140)
+        self._global_tree.setMaximumWidth(200)
+        self._global_tree.currentItemChanged.connect(
+            self._on_global_tree_selection)
+        g_splitter.addWidget(self._global_tree)
 
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
+        self._global_stack = QStackedWidget()
+        g_splitter.addWidget(self._global_stack)
+        g_splitter.setStretchFactor(0, 0)
+        g_splitter.setStretchFactor(1, 1)
+        g_layout.addWidget(g_splitter, 1)
+        self._top_tabs.addTab(global_tab, "Global")
 
-        root_layout.addWidget(splitter, 1)
+        # ── Config Presets tab ────────────────────────────────────────
+        self._preset_page_index: dict[int, int] = {}
+        preset_tab = QWidget()
+        p_layout = QVBoxLayout(preset_tab)
+        p_layout.setContentsMargins(0, 4, 0, 0)
 
-        # -- Build pages --
-        self._page_index: dict[int, int] = {}  # tree item id -> stack index
+        # Config preset toolbar
+        cfg_preset_row = QHBoxLayout()
+        cfg_preset_row.setContentsMargins(0, 0, 0, 4)
+        cfg_preset_row.setSpacing(6)
+
+        cfg_preset_row.addWidget(QLabel("Config Preset:"))
+        self._cfg_preset_combo = QComboBox()
+        self._cfg_preset_combo.setMinimumWidth(180)
+        cfg_preset_row.addWidget(self._cfg_preset_combo, 1)
+
+        add_btn = QPushButton("+")
+        add_btn.setFixedWidth(36)
+        add_btn.setToolTip("New config preset")
+        add_btn.clicked.connect(self._on_cfg_preset_add)
+        cfg_preset_row.addWidget(add_btn)
+
+        dup_btn = QPushButton("Duplicate")
+        dup_btn.clicked.connect(self._on_cfg_preset_duplicate)
+        cfg_preset_row.addWidget(dup_btn)
+
+        self._cfg_rename_btn = QPushButton("Rename")
+        self._cfg_rename_btn.clicked.connect(self._on_cfg_preset_rename)
+        cfg_preset_row.addWidget(self._cfg_rename_btn)
+
+        self._cfg_delete_btn = QPushButton("Delete")
+        self._cfg_delete_btn.clicked.connect(self._on_cfg_preset_delete)
+        cfg_preset_row.addWidget(self._cfg_delete_btn)
+
+        p_layout.addLayout(cfg_preset_row)
+
+        # Populate config preset combo
+        self._cfg_preset_combo.blockSignals(True)
+        for name in self._config_presets_data:
+            self._cfg_preset_combo.addItem(name)
+        active = self._config.get("app", {}).get(
+            "active_config_preset", "Default")
+        idx = self._cfg_preset_combo.findText(active)
+        if idx >= 0:
+            self._cfg_preset_combo.setCurrentIndex(idx)
+        self._cfg_preset_combo.blockSignals(False)
+        self._prev_cfg_preset: str | None = self._cfg_preset_combo.currentText()
+        self._update_cfg_preset_buttons()
+
+        p_splitter = QSplitter(Qt.Horizontal)
+
+        self._preset_tree = QTreeWidget()
+        self._preset_tree.setHeaderHidden(True)
+        self._preset_tree.setMinimumWidth(180)
+        self._preset_tree.setMaximumWidth(250)
+        self._preset_tree.currentItemChanged.connect(
+            self._on_preset_tree_selection)
+        p_splitter.addWidget(self._preset_tree)
+
+        self._preset_stack = QStackedWidget()
+        p_splitter.addWidget(self._preset_stack)
+        p_splitter.setStretchFactor(0, 0)
+        p_splitter.setStretchFactor(1, 1)
+
+        p_layout.addWidget(p_splitter, 1)
+        self._top_tabs.addTab(preset_tab, "Config Presets")
+
+        # ── Build pages ───────────────────────────────────────────────
         self._build_general_page()
+        self._build_colors_page()
+        self._build_groups_page()
+
         self._build_analysis_page()
         self._build_detector_pages()
         self._build_processor_pages()
         self._build_daw_processor_pages()
-        self._build_colors_page()
-        self._build_groups_page()
 
-        # Select first item
-        self._tree.expandAll()
-        first = self._tree.topLevelItem(0)
-        if first:
-            self._tree.setCurrentItem(first)
+        # Select first items
+        self._global_tree.expandAll()
+        first_g = self._global_tree.topLevelItem(0)
+        if first_g:
+            self._global_tree.setCurrentItem(first_g)
+
+        self._preset_tree.expandAll()
+        first_p = self._preset_tree.topLevelItem(0)
+        if first_p:
+            self._preset_tree.setCurrentItem(first_p)
+
+        # Connect config preset switching (after pages are built)
+        self._cfg_preset_combo.currentTextChanged.connect(
+            self._on_cfg_preset_switched)
 
         # -- Buttons --
         btn_box = QDialogButtonBox(
@@ -389,28 +231,43 @@ class PreferencesDialog(QDialog):
         btn_box.rejected.connect(self.reject)
         root_layout.addWidget(btn_box)
 
-    def _add_page(self, tree_item: QTreeWidgetItem, page: QWidget):
+    def _add_global_page(self, tree_item: QTreeWidgetItem, page: QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
         scroll.setWidget(page)
-        idx = self._stack.addWidget(scroll)
-        self._page_index[id(tree_item)] = idx
+        idx = self._global_stack.addWidget(scroll)
+        self._global_page_index[id(tree_item)] = idx
 
-    def _on_tree_selection(self, current, _previous):
+    def _add_preset_page(self, tree_item: QTreeWidgetItem, page: QWidget):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setWidget(page)
+        idx = self._preset_stack.addWidget(scroll)
+        self._preset_page_index[id(tree_item)] = idx
+
+    def _on_global_tree_selection(self, current, _previous):
         if current is None:
             return
-        idx = self._page_index.get(id(current))
+        idx = self._global_page_index.get(id(current))
         if idx is not None:
-            self._stack.setCurrentIndex(idx)
+            self._global_stack.setCurrentIndex(idx)
+
+    def _on_preset_tree_selection(self, current, _previous):
+        if current is None:
+            return
+        idx = self._preset_page_index.get(id(current))
+        if idx is not None:
+            self._preset_stack.setCurrentIndex(idx)
 
     # ── General page ──────────────────────────────────────────────────
 
     def _build_general_page(self):
-        item = QTreeWidgetItem(self._tree, ["General"])
+        item = QTreeWidgetItem(self._global_tree, ["General"])
         item.setFont(0, QFont("", -1, QFont.Bold))
 
-        gui_params = [
+        app_params = [
             ParamSpec(
                 key="scale_factor", type=(int, float), default=1.0,
                 min=0.5, max=4.0,
@@ -454,8 +311,8 @@ class PreferencesDialog(QDialog):
                 ),
             ),
         ]
-        values = self._config.get("gui", {})
-        page, widgets = _build_param_page(gui_params, values)
+        values = self._config.get("app", {})
+        page, widgets = _build_param_page(app_params, values)
 
         # --- Default project directory (custom row with browse button) ---
         dir_spec = ParamSpec(
@@ -511,44 +368,35 @@ class PreferencesDialog(QDialog):
 
         widgets.append(("default_project_dir", dir_edit))
         self._general_widgets = widgets
-        self._add_page(item, page)
+        self._add_global_page(item, page)
 
     # ── Analysis page ─────────────────────────────────────────────────
 
     def _build_analysis_page(self):
-        item = QTreeWidgetItem(self._tree, ["Analysis"])
+        item = QTreeWidgetItem(self._preset_tree, ["Analysis"])
         item.setFont(0, QFont("", -1, QFont.Bold))
 
-        values = self._config.get("analysis", {})
+        preset = self._active_preset()
+        values = preset.get("analysis", {})
         page, widgets = _build_param_page(ANALYSIS_PARAMS, values)
         self._widgets["analysis"] = widgets
-        self._add_page(item, page)
+        self._add_preset_page(item, page)
 
     # ── Detector pages ────────────────────────────────────────────────
 
     def _build_detector_pages(self):
-        parent_item = QTreeWidgetItem(self._tree, ["Detectors"])
+        parent_item = QTreeWidgetItem(self._preset_tree, ["Detectors"])
         parent_item.setFont(0, QFont("", -1, QFont.Bold))
 
-        # Parent page: general detector display settings
-        det_gui_params = [
-            ParamSpec(
-                key="show_clean_detectors", type=bool, default=False,
-                label="Show clean detector results",
-                description=(
-                    "When enabled, detectors that found no issues (OK) are "
-                    "shown in the file detail view and summary. Disable to "
-                    "reduce clutter and focus on problems, warnings, and "
-                    "informational findings only."
-                ),
-            ),
-        ]
-        gui_values = self._config.get("gui", {})
-        parent_page, det_gui_widgets = _build_param_page(det_gui_params, gui_values)
-        self._widgets["_det_gui"] = det_gui_widgets
-        self._add_page(parent_item, parent_page)
+        # Parent page: presentation params (config-preset-scoped)
+        preset = self._active_preset()
+        pres_values = preset.get("presentation", {})
+        parent_page, pres_widgets = _build_param_page(
+            PRESENTATION_PARAMS, pres_values)
+        self._widgets["_presentation"] = pres_widgets
+        self._add_preset_page(parent_item, parent_page)
 
-        det_sections = self._config.get("detectors", {})
+        det_sections = preset.get("detectors", {})
         for det in default_detectors():
             params = det.config_params()
             if not params:
@@ -557,12 +405,12 @@ class PreferencesDialog(QDialog):
             values = det_sections.get(det.id, {})
             page, widgets = _build_param_page(params, values)
             self._widgets[f"detectors.{det.id}"] = widgets
-            self._add_page(child, page)
+            self._add_preset_page(child, page)
 
     # ── Processor pages ───────────────────────────────────────────────
 
     def _build_processor_pages(self):
-        parent_item = QTreeWidgetItem(self._tree, ["Processors"])
+        parent_item = QTreeWidgetItem(self._preset_tree, ["Processors"])
         parent_item.setFont(0, QFont("", -1, QFont.Bold))
 
         parent_page = QWidget()
@@ -570,9 +418,10 @@ class PreferencesDialog(QDialog):
         pl.setContentsMargins(12, 12, 12, 12)
         pl.addWidget(QLabel("Select a processor from the tree to configure it."))
         pl.addStretch()
-        self._add_page(parent_item, parent_page)
+        self._add_preset_page(parent_item, parent_page)
 
-        proc_sections = self._config.get("processors", {})
+        preset = self._active_preset()
+        proc_sections = preset.get("processors", {})
         for proc in default_processors():
             params = proc.config_params()
             if not params:
@@ -581,10 +430,10 @@ class PreferencesDialog(QDialog):
             values = proc_sections.get(proc.id, {})
             page, widgets = _build_param_page(params, values)
             self._widgets[f"processors.{proc.id}"] = widgets
-            self._add_page(child, page)
+            self._add_preset_page(child, page)
 
     def _build_daw_processor_pages(self):
-        parent_item = QTreeWidgetItem(self._tree, ["DAW Processors"])
+        parent_item = QTreeWidgetItem(self._preset_tree, ["DAW Processors"])
         parent_item.setFont(0, QFont("", -1, QFont.Bold))
 
         parent_page = QWidget()
@@ -593,9 +442,10 @@ class PreferencesDialog(QDialog):
         pl.addWidget(QLabel(
             "Select a DAW processor from the tree to configure it."))
         pl.addStretch()
-        self._add_page(parent_item, parent_page)
+        self._add_preset_page(parent_item, parent_page)
 
-        dp_sections = self._config.get("daw_processors", {})
+        preset = self._active_preset()
+        dp_sections = preset.get("daw_processors", {})
         for dp in default_daw_processors():
             params = dp.config_params()
             if not params:
@@ -604,12 +454,12 @@ class PreferencesDialog(QDialog):
             values = dp_sections.get(dp.id, {})
             page, widgets = _build_param_page(params, values)
             self._widgets[f"daw_processors.{dp.id}"] = widgets
-            self._add_page(child, page)
+            self._add_preset_page(child, page)
 
     # ── Colors page ────────────────────────────────────────────────────
 
     def _build_colors_page(self):
-        item = QTreeWidgetItem(self._tree, ["Colors"])
+        item = QTreeWidgetItem(self._global_tree, ["Colors"])
         item.setFont(0, QFont("", -1, QFont.Bold))
 
         page = QWidget()
@@ -643,7 +493,7 @@ class PreferencesDialog(QDialog):
             self._on_color_swatch_dbl_click)
 
         # Populate from config
-        colors = self._config.get("gui", {}).get("colors", [])
+        colors = self._config.get("colors", [])
         if not colors:
             colors = copy.deepcopy(PT_DEFAULT_COLORS)
         self._colors_table.setRowCount(len(colors))
@@ -672,7 +522,7 @@ class PreferencesDialog(QDialog):
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
-        self._add_page(item, page)
+        self._add_global_page(item, page)
 
     def _set_color_row(self, row: int, name: str, argb: str):
         """Populate a single row in the colors table."""
@@ -744,7 +594,7 @@ class PreferencesDialog(QDialog):
     # ── Groups page ──────────────────────────────────────────────────
 
     def _build_groups_page(self):
-        item = QTreeWidgetItem(self._tree, ["Groups"])
+        item = QTreeWidgetItem(self._global_tree, ["Groups"])
         item.setFont(0, QFont("", -1, QFont.Bold))
 
         page = QWidget()
@@ -771,7 +621,7 @@ class PreferencesDialog(QDialog):
         preset_row.addWidget(self._group_preset_combo, 1)
 
         add_preset_btn = QPushButton("+")
-        add_preset_btn.setFixedWidth(28)
+        add_preset_btn.setFixedWidth(36)
         add_preset_btn.setToolTip("New preset")
         add_preset_btn.clicked.connect(self._on_group_preset_add)
         preset_row.addWidget(add_preset_btn)
@@ -790,63 +640,20 @@ class PreferencesDialog(QDialog):
 
         layout.addLayout(preset_row)
 
-        # ── Groups table ──────────────────────────────────────────────
-        self._groups_table = QTableWidget()
-        self._groups_table.setColumnCount(4)
-        self._groups_table.setHorizontalHeaderLabels(
-            ["Name", "Color", "Gain-Linked", "DAW Target"])
-        vh = self._groups_table.verticalHeader()
-        vh.setSectionsMovable(True)
-        vh.sectionMoved.connect(self._on_group_row_moved)
-        self._groups_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self._groups_table.setSelectionMode(QTableWidget.SingleSelection)
-        gh = self._groups_table.horizontalHeader()
-        gh.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        gh.setSectionResizeMode(0, QHeaderView.Stretch)
-        gh.setSectionResizeMode(1, QHeaderView.Fixed)
-        gh.resizeSection(1, 160)
-        gh.setSectionResizeMode(2, QHeaderView.Fixed)
-        gh.resizeSection(2, 80)
-        gh.setSectionResizeMode(3, QHeaderView.Interactive)
-        gh.resizeSection(3, 140)
+        # ── Groups table (reusable widget) ───────────────────────────
+        self._groups_widget = GroupsTableWidget(
+            color_provider=self._group_color_provider)
+        layout.addWidget(self._groups_widget, 1)
 
-        self._groups_table.cellChanged.connect(self._on_group_name_changed)
-
-        layout.addWidget(self._groups_table, 1)
-
-        # ── Group row buttons ─────────────────────────────────────────
-        btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(0, 0, 0, 0)
-        btn_row.setSpacing(6)
-
-        add_btn = QPushButton("Add")
-        add_btn.clicked.connect(self._on_group_add)
-        btn_row.addWidget(add_btn)
-
-        remove_btn = QPushButton("Remove")
-        remove_btn.clicked.connect(self._on_group_remove)
-        btn_row.addWidget(remove_btn)
-
-        reset_btn = QPushButton("Reset to Defaults")
-        reset_btn.clicked.connect(self._on_groups_reset)
-        btn_row.addWidget(reset_btn)
-
-        btn_row.addStretch()
-
-        az_btn = QPushButton("Sort A\u2192Z")
-        az_btn.clicked.connect(self._on_groups_sort_az)
-        btn_row.addWidget(az_btn)
-
-        layout.addLayout(btn_row)
-
-        self._add_page(item, page)
+        self._add_global_page(item, page)
 
         # ── Initialise preset data ────────────────────────────────────
-        gui = self._config.get("gui", {})
-        presets = gui.get("group_presets",
-                          _GUI_DEFAULTS.get("group_presets", {}))
+        defaults = build_defaults()
+        presets = self._config.get("group_presets",
+                                   defaults.get("group_presets", {}))
         self._group_presets_data: dict[str, list[dict]] = copy.deepcopy(presets)
-        active = gui.get("active_group_preset", "Default")
+        active = self._config.get("app", {}).get(
+            "active_group_preset", "Default")
         if active not in self._group_presets_data:
             active = "Default"
 
@@ -865,27 +672,20 @@ class PreferencesDialog(QDialog):
 
     # ── Preset helpers ─────────────────────────────────────────────
 
+    def _group_color_provider(self):
+        """Color provider callable for GroupsTableWidget."""
+        return self._color_names(), self._color_argb_for_name
+
     def _load_groups_for_preset(self, preset_name: str):
         """Load groups from *preset_name* into the groups table."""
         groups = self._group_presets_data.get(preset_name, [])
-        self._groups_table.blockSignals(True)
-        self._groups_table.setRowCount(0)
-        self._groups_table.setRowCount(len(groups))
-        for row, entry in enumerate(groups):
-            self._set_group_row(
-                row,
-                entry.get("name", ""),
-                entry.get("color", ""),
-                entry.get("gain_linked", False),
-                entry.get("daw_target", ""),
-            )
-        self._groups_table.blockSignals(False)
+        self._groups_widget.set_groups(groups)
 
     def _save_current_preset(self):
         """Save the current groups table state back into _group_presets_data."""
         name = self._group_preset_combo.currentText()
         if name:
-            self._group_presets_data[name] = self._read_groups()
+            self._group_presets_data[name] = self._groups_widget.get_groups()
 
     def _update_group_preset_buttons(self):
         """Enable/disable Rename and Delete based on current preset."""
@@ -898,7 +698,7 @@ class PreferencesDialog(QDialog):
         # Save previous preset before switching
         prev = getattr(self, "_prev_group_preset", None)
         if prev and prev in self._group_presets_data:
-            self._group_presets_data[prev] = self._read_groups()
+            self._group_presets_data[prev] = self._groups_widget.get_groups()
         self._prev_group_preset = text
         self._load_groups_for_preset(text)
         self._update_group_preset_buttons()
@@ -997,6 +797,215 @@ class PreferencesDialog(QDialog):
         self._load_groups_for_preset("Default")
         self._update_group_preset_buttons()
 
+    # ── Config preset helpers ──────────────────────────────────────
+
+    def _save_cfg_preset_widgets(self):
+        """Save current pipeline widget values into the active config preset."""
+        name = self._cfg_preset_combo.currentText()
+        if not name:
+            return
+        preset = self._config_presets_data.setdefault(name, {})
+
+        # Analysis
+        analysis = preset.setdefault("analysis", {})
+        for key, widget in self._widgets.get("analysis", []):
+            analysis[key] = _read_widget(widget)
+
+        # Detectors
+        detectors = preset.setdefault("detectors", {})
+        for det in default_detectors():
+            wkey = f"detectors.{det.id}"
+            if wkey not in self._widgets:
+                continue
+            section = detectors.setdefault(det.id, {})
+            for key, widget in self._widgets[wkey]:
+                section[key] = _read_widget(widget)
+
+        # Processors
+        processors = preset.setdefault("processors", {})
+        for proc in default_processors():
+            wkey = f"processors.{proc.id}"
+            if wkey not in self._widgets:
+                continue
+            section = processors.setdefault(proc.id, {})
+            for key, widget in self._widgets[wkey]:
+                section[key] = _read_widget(widget)
+
+        # DAW Processors
+        daw_procs = preset.setdefault("daw_processors", {})
+        for dp in default_daw_processors():
+            wkey = f"daw_processors.{dp.id}"
+            if wkey not in self._widgets:
+                continue
+            section = daw_procs.setdefault(dp.id, {})
+            for key, widget in self._widgets[wkey]:
+                section[key] = _read_widget(widget)
+
+        # Presentation
+        presentation = preset.setdefault("presentation", {})
+        for key, widget in self._widgets.get("_presentation", []):
+            presentation[key] = _read_widget(widget)
+
+    def _load_cfg_preset_widgets(self, preset_name: str):
+        """Load config preset values into pipeline widgets."""
+        preset = self._config_presets_data.get(preset_name, {})
+
+        # Analysis
+        analysis = preset.get("analysis", {})
+        for key, widget in self._widgets.get("analysis", []):
+            if key in analysis:
+                _set_widget_value(widget, analysis[key])
+
+        # Detectors
+        det_sections = preset.get("detectors", {})
+        for det in default_detectors():
+            wkey = f"detectors.{det.id}"
+            if wkey not in self._widgets:
+                continue
+            values = det_sections.get(det.id, {})
+            for key, widget in self._widgets[wkey]:
+                if key in values:
+                    _set_widget_value(widget, values[key])
+
+        # Processors
+        proc_sections = preset.get("processors", {})
+        for proc in default_processors():
+            wkey = f"processors.{proc.id}"
+            if wkey not in self._widgets:
+                continue
+            values = proc_sections.get(proc.id, {})
+            for key, widget in self._widgets[wkey]:
+                if key in values:
+                    _set_widget_value(widget, values[key])
+
+        # DAW Processors
+        dp_sections = preset.get("daw_processors", {})
+        for dp in default_daw_processors():
+            wkey = f"daw_processors.{dp.id}"
+            if wkey not in self._widgets:
+                continue
+            values = dp_sections.get(dp.id, {})
+            for key, widget in self._widgets[wkey]:
+                if key in values:
+                    _set_widget_value(widget, values[key])
+
+        # Presentation
+        pres = preset.get("presentation", {})
+        for key, widget in self._widgets.get("_presentation", []):
+            if key in pres:
+                _set_widget_value(widget, pres[key])
+
+    def _update_cfg_preset_buttons(self):
+        """Enable/disable Rename and Delete for config presets."""
+        is_default = self._cfg_preset_combo.currentText() == "Default"
+        self._cfg_rename_btn.setEnabled(not is_default)
+        self._cfg_delete_btn.setEnabled(not is_default)
+
+    def _on_cfg_preset_switched(self, text: str):
+        """Save current widgets, load newly selected config preset."""
+        prev = self._prev_cfg_preset
+        if prev and prev in self._config_presets_data:
+            self._save_cfg_preset_widgets()
+        self._prev_cfg_preset = text
+        self._load_cfg_preset_widgets(text)
+        self._update_cfg_preset_buttons()
+
+    def _on_cfg_preset_add(self):
+        """Create a new config preset from built-in defaults."""
+        name, ok = QInputDialog.getText(
+            self, "New Config Preset", "Preset name:")
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        if name in self._config_presets_data:
+            QMessageBox.warning(
+                self, "Duplicate Name",
+                f"A preset named \u201c{name}\u201d already exists.")
+            return
+        self._save_cfg_preset_widgets()
+        self._config_presets_data[name] = _build_default_config_preset()
+        self._cfg_preset_combo.blockSignals(True)
+        self._cfg_preset_combo.addItem(name)
+        self._cfg_preset_combo.setCurrentText(name)
+        self._cfg_preset_combo.blockSignals(False)
+        self._prev_cfg_preset = name
+        self._load_cfg_preset_widgets(name)
+        self._update_cfg_preset_buttons()
+
+    def _on_cfg_preset_duplicate(self):
+        """Duplicate the current config preset under a new name."""
+        current = self._cfg_preset_combo.currentText()
+        name, ok = QInputDialog.getText(
+            self, "Duplicate Config Preset", "New preset name:",
+            text=f"{current} Copy")
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        if name in self._config_presets_data:
+            QMessageBox.warning(
+                self, "Duplicate Name",
+                f"A preset named \u201c{name}\u201d already exists.")
+            return
+        self._save_cfg_preset_widgets()
+        self._config_presets_data[name] = copy.deepcopy(
+            self._config_presets_data.get(current, {}))
+        self._cfg_preset_combo.blockSignals(True)
+        self._cfg_preset_combo.addItem(name)
+        self._cfg_preset_combo.setCurrentText(name)
+        self._cfg_preset_combo.blockSignals(False)
+        self._prev_cfg_preset = name
+        self._load_cfg_preset_widgets(name)
+        self._update_cfg_preset_buttons()
+
+    def _on_cfg_preset_rename(self):
+        """Rename the current config preset (not allowed for Default)."""
+        current = self._cfg_preset_combo.currentText()
+        if current == "Default":
+            return
+        name, ok = QInputDialog.getText(
+            self, "Rename Config Preset", "New name:", text=current)
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        if name == current:
+            return
+        if name in self._config_presets_data:
+            QMessageBox.warning(
+                self, "Duplicate Name",
+                f"A preset named \u201c{name}\u201d already exists.")
+            return
+        self._save_cfg_preset_widgets()
+        self._config_presets_data[name] = self._config_presets_data.pop(current)
+        idx = self._cfg_preset_combo.findText(current)
+        self._cfg_preset_combo.blockSignals(True)
+        self._cfg_preset_combo.setItemText(idx, name)
+        self._cfg_preset_combo.blockSignals(False)
+        self._prev_cfg_preset = name
+        self._update_cfg_preset_buttons()
+
+    def _on_cfg_preset_delete(self):
+        """Delete the current config preset (not allowed for Default)."""
+        current = self._cfg_preset_combo.currentText()
+        if current == "Default":
+            return
+        reply = QMessageBox.question(
+            self, "Delete Config Preset",
+            f"Delete the config preset \u201c{current}\u201d?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+        self._config_presets_data.pop(current, None)
+        idx = self._cfg_preset_combo.findText(current)
+        self._cfg_preset_combo.blockSignals(True)
+        self._cfg_preset_combo.removeItem(idx)
+        self._cfg_preset_combo.setCurrentText("Default")
+        self._cfg_preset_combo.blockSignals(False)
+        self._prev_cfg_preset = "Default"
+        self._load_cfg_preset_widgets("Default")
+        self._update_cfg_preset_buttons()
+
+    # ── Color helpers ─────────────────────────────────────────────────
+
     def _color_names(self) -> list[str]:
         """Return the list of color names currently in the colors table."""
         names = []
@@ -1008,13 +1017,6 @@ class PreferencesDialog(QDialog):
                     names.append(name)
         return names
 
-    @staticmethod
-    def _color_swatch_icon(argb: str, size: int = 16) -> QIcon:
-        """Create a small square QIcon filled with the given ARGB color."""
-        pm = QPixmap(size, size)
-        pm.fill(_argb_to_qcolor(argb))
-        return QIcon(pm)
-
     def _color_argb_for_name(self, name: str) -> str | None:
         """Look up an ARGB value by color name from the colors table."""
         for row in range(self._colors_table.rowCount()):
@@ -1024,198 +1026,6 @@ class PreferencesDialog(QDialog):
                 if swatch:
                     return swatch.data(Qt.UserRole)
         return None
-
-    def _set_group_row(self, row: int, name: str, color: str,
-                       gain_linked: bool, daw_target: str = ""):
-        """Populate a single row in the groups table."""
-        name_item = QTableWidgetItem(name)
-        self._groups_table.setItem(row, 0, name_item)
-
-        # Color dropdown
-        color_combo = QComboBox()
-        color_combo.setIconSize(QSize(16, 16))
-        color_names = self._color_names()
-        for cn in color_names:
-            argb = self._color_argb_for_name(cn)
-            icon = self._color_swatch_icon(argb) if argb else QIcon()
-            color_combo.addItem(icon, cn)
-        # Select the matching color
-        ci = color_combo.findText(color)
-        if ci >= 0:
-            color_combo.setCurrentIndex(ci)
-        self._groups_table.setCellWidget(row, 1, color_combo)
-
-        # Gain-linked checkbox
-        chk = QCheckBox()
-        chk.setChecked(gain_linked)
-        chk_container = QWidget()
-        chk_layout = QHBoxLayout(chk_container)
-        chk_layout.setContentsMargins(0, 0, 0, 0)
-        chk_layout.setAlignment(Qt.AlignCenter)
-        chk_layout.addWidget(chk)
-        self._groups_table.setCellWidget(row, 2, chk_container)
-
-        # DAW Target name
-        daw_item = QTableWidgetItem(daw_target)
-        self._groups_table.setItem(row, 3, daw_item)
-
-    def _unique_group_name(self, base: str = "New Group") -> str:
-        """Generate a unique group name for the groups table."""
-        existing = self._group_names_in_table(self._groups_table)
-        if base not in existing:
-            return base
-        n = 2
-        while f"{base} {n}" in existing:
-            n += 1
-        return f"{base} {n}"
-
-    @staticmethod
-    def _group_names_in_table(table: QTableWidget,
-                              exclude_row: int = -1) -> set[str]:
-        """Collect all group names from a table, optionally excluding one row."""
-        names: set[str] = set()
-        for r in range(table.rowCount()):
-            if r == exclude_row:
-                continue
-            item = table.item(r, 0)
-            if item:
-                n = item.text().strip()
-                if n:
-                    names.add(n)
-        return names
-
-    def _on_group_name_changed(self, row: int, col: int):
-        """Revert a group name edit if it creates a duplicate."""
-        if col != 0:
-            return
-        item = self._groups_table.item(row, 0)
-        if not item:
-            return
-        name = item.text().strip()
-        others = self._group_names_in_table(self._groups_table,
-                                            exclude_row=row)
-        if name in others:
-            # Block signals to avoid recursion, revert to unique name
-            self._groups_table.blockSignals(True)
-            item.setText(self._unique_group_name(name))
-            self._groups_table.blockSignals(False)
-
-    def _on_group_add(self):
-        row = self._groups_table.rowCount()
-        self._groups_table.insertRow(row)
-        color_names = self._color_names()
-        default_color = color_names[0] if color_names else ""
-        self._set_group_row(row, self._unique_group_name(), default_color, False)
-        self._groups_table.scrollToBottom()
-        self._groups_table.editItem(self._groups_table.item(row, 0))
-
-    def _on_group_remove(self):
-        row = self._groups_table.currentRow()
-        if row >= 0:
-            self._groups_table.removeRow(row)
-
-    def _on_group_row_moved(self, logical: int, old_visual: int,
-                            new_visual: int):
-        """Handle drag-and-drop row reorder on the groups table."""
-        # Read all rows in the current visual order
-        vh = self._groups_table.verticalHeader()
-        ordered = self._read_groups_visual_order()
-        # Reset visual mapping, repopulate in new order
-        vh.blockSignals(True)
-        self._groups_table.blockSignals(True)
-        for i in range(self._groups_table.rowCount()):
-            vh.moveSection(vh.visualIndex(i), i)
-        self._groups_table.setRowCount(0)
-        self._groups_table.setRowCount(len(ordered))
-        for row, entry in enumerate(ordered):
-            self._set_group_row(
-                row, entry["name"], entry["color"],
-                entry["gain_linked"], entry.get("daw_target", ""))
-        self._groups_table.blockSignals(False)
-        vh.blockSignals(False)
-
-    def _read_groups_visual_order(self) -> list[dict[str, Any]]:
-        """Read groups table data in current visual (display) order."""
-        vh = self._groups_table.verticalHeader()
-        n = self._groups_table.rowCount()
-        visual_to_logical = sorted(range(n), key=lambda i: vh.visualIndex(i))
-        groups: list[dict[str, Any]] = []
-        for logical in visual_to_logical:
-            name_item = self._groups_table.item(logical, 0)
-            if not name_item:
-                continue
-            name = name_item.text().strip()
-            if not name:
-                continue
-            cc = self._groups_table.cellWidget(logical, 1)
-            color = cc.currentText() if cc else ""
-            chk_c = self._groups_table.cellWidget(logical, 2)
-            gl = False
-            if chk_c:
-                chk = chk_c.findChild(QCheckBox)
-                if chk:
-                    gl = chk.isChecked()
-            daw_item = self._groups_table.item(logical, 3)
-            dt = daw_item.text().strip() if daw_item else ""
-            groups.append({"name": name, "color": color,
-                           "gain_linked": gl, "daw_target": dt})
-        return groups
-
-    def _on_groups_sort_az(self):
-        groups = self._read_groups()
-        groups.sort(key=lambda g: g["name"].lower())
-        self._groups_table.blockSignals(True)
-        self._groups_table.setRowCount(0)
-        self._groups_table.setRowCount(len(groups))
-        for row, entry in enumerate(groups):
-            self._set_group_row(
-                row, entry["name"], entry["color"],
-                entry["gain_linked"], entry.get("daw_target", ""))
-        self._groups_table.blockSignals(False)
-
-    def _on_groups_reset(self):
-        builtin = _GUI_DEFAULTS.get("group_presets", {}).get("Default", [])
-        defaults = copy.deepcopy(builtin)
-        self._groups_table.blockSignals(True)
-        self._groups_table.setRowCount(0)
-        self._groups_table.setRowCount(len(defaults))
-        for row, entry in enumerate(defaults):
-            self._set_group_row(
-                row,
-                entry["name"],
-                entry["color"],
-                entry["gain_linked"],
-                entry.get("daw_target", ""),
-            )
-        self._groups_table.blockSignals(False)
-
-    def _read_groups(self) -> list[dict[str, Any]]:
-        """Read the groups table into a list of dicts."""
-        groups: list[dict[str, Any]] = []
-        for row in range(self._groups_table.rowCount()):
-            name_item = self._groups_table.item(row, 0)
-            if not name_item:
-                continue
-            name = name_item.text().strip()
-            if not name:
-                continue
-            color_combo = self._groups_table.cellWidget(row, 1)
-            color = color_combo.currentText() if color_combo else ""
-            chk_container = self._groups_table.cellWidget(row, 2)
-            gain_linked = False
-            if chk_container:
-                chk = chk_container.findChild(QCheckBox)
-                if chk:
-                    gain_linked = chk.isChecked()
-            daw_item = self._groups_table.item(row, 3)
-            daw_target = daw_item.text().strip() if daw_item else ""
-            groups.append({
-                "name": name,
-                "color": color,
-                "gain_linked": gain_linked,
-                "daw_target": daw_target,
-            })
-        return groups
 
     # ── Helpers ────────────────────────────────────────────────────────
 
@@ -1232,13 +1042,13 @@ class PreferencesDialog(QDialog):
     # ── Save ──────────────────────────────────────────────────────────
 
     def _on_save(self):
-        # General
-        gui = self._config.setdefault("gui", {})
+        # ── App settings ──────────────────────────────────────────────
+        app = self._config.setdefault("app", {})
         for key, widget in self._general_widgets:
-            gui[key] = _read_widget(widget)
+            app[key] = _read_widget(widget)
 
         # Validate output folder name
-        raw_folder = gui.get("output_folder", "")
+        raw_folder = app.get("output_folder", "")
         clean_folder = sanitize_output_folder(str(raw_folder))
         if clean_folder is None:
             QMessageBox.warning(
@@ -1248,55 +1058,31 @@ class PreferencesDialog(QDialog):
                 "special characters, or reserved names.",
             )
             return
-        gui["output_folder"] = clean_folder
+        app["output_folder"] = clean_folder
 
-        # Detector display settings (stored in gui section)
-        for key, widget in self._widgets.get("_det_gui", []):
-            gui[key] = _read_widget(widget)
+        # Remember active preset names
+        app["active_config_preset"] = self._cfg_preset_combo.currentText()
+        app["active_group_preset"] = self._group_preset_combo.currentText()
 
-        # Analysis
-        analysis = self._config.setdefault("analysis", {})
-        for key, widget in self._widgets.get("analysis", []):
-            analysis[key] = _read_widget(widget)
+        # ── Config presets ────────────────────────────────────────────
+        self._save_cfg_preset_widgets()
+        self._config["config_presets"] = copy.deepcopy(
+            self._config_presets_data)
 
-        # Detectors
-        detectors = self._config.setdefault("detectors", {})
-        for det in default_detectors():
-            wkey = f"detectors.{det.id}"
-            if wkey not in self._widgets:
-                continue
-            section = detectors.setdefault(det.id, {})
-            for key, widget in self._widgets[wkey]:
-                section[key] = _read_widget(widget)
+        # ── Colors ────────────────────────────────────────────────────
+        self._config["colors"] = self._read_colors()
 
-        # Processors
-        processors = self._config.setdefault("processors", {})
-        for proc in default_processors():
-            wkey = f"processors.{proc.id}"
-            if wkey not in self._widgets:
-                continue
-            section = processors.setdefault(proc.id, {})
-            for key, widget in self._widgets[wkey]:
-                section[key] = _read_widget(widget)
-
-        # DAW Processors
-        daw_procs = self._config.setdefault("daw_processors", {})
-        for dp in default_daw_processors():
-            wkey = f"daw_processors.{dp.id}"
-            if wkey not in self._widgets:
-                continue
-            section = daw_procs.setdefault(dp.id, {})
-            for key, widget in self._widgets[wkey]:
-                section[key] = _read_widget(widget)
-
-        # Colors
-        gui["colors"] = self._read_colors()
-
-        # Groups — save current table into presets data, then persist all presets
+        # ── Group presets ─────────────────────────────────────────────
         self._save_current_preset()
-        gui["group_presets"] = copy.deepcopy(self._group_presets_data)
-        gui["active_group_preset"] = self._group_preset_combo.currentText()
-        gui.pop("default_groups", None)  # remove legacy key if present
+        self._config["group_presets"] = copy.deepcopy(
+            self._group_presets_data)
+
+        # Remove legacy keys if present
+        self._config.pop("gui", None)
+        self._config.pop("analysis", None)
+        self._config.pop("detectors", None)
+        self._config.pop("processors", None)
+        self._config.pop("daw_processors", None)
 
         self._saved = True
         self.accept()

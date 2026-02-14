@@ -44,13 +44,20 @@ from PySide6.QtWidgets import (
 )
 
 from sessionpreplib.audio import get_window_samples
-from sessionpreplib.config import default_config, flatten_structured_config
+from sessionpreplib.config import (
+    ANALYSIS_PARAMS, PRESENTATION_PARAMS, default_config,
+    flatten_structured_config,
+)
 from sessionpreplib.daw_processors import default_daw_processors
 from sessionpreplib.detector import TrackDetector
-from sessionpreplib.detectors import detector_help_map
+from sessionpreplib.detectors import default_detectors, detector_help_map
+from sessionpreplib.processors import default_processors
 from sessionpreplib.utils import protools_sort_key
 
-from .settings import load_config, config_path, _GUI_DEFAULTS
+from .settings import (
+    load_config, config_path, save_config,
+    resolve_config_preset, build_defaults,
+)
 from .theme import (
     COLORS,
     FILE_COLOR_OK,
@@ -62,6 +69,7 @@ from .theme import (
     apply_dark_theme,
 )
 from .helpers import track_analysis_label, esc, fmt_time
+from .param_widgets import _build_param_page, _read_widget, _set_widget_value
 from .preferences import PreferencesDialog, _argb_to_qcolor
 from .report import render_summary_html, render_track_detail_html
 from .widgets import BatchEditTableWidget, BatchComboBox
@@ -76,6 +84,7 @@ from .playback import PlaybackController
 _TAB_SUMMARY = 0
 _TAB_FILE = 1
 _TAB_GROUPS = 2
+_TAB_SESSION = 3
 
 _PAGE_PROGRESS = 0
 _PAGE_TABS = 1
@@ -377,14 +386,18 @@ class SessionPrepWindow(QMainWindow):
         self._current_track = None
         self._session_groups: list[dict] = []
         self._active_session_preset: str = "Default"
+        self._session_config: dict[str, Any] | None = None
+        self._session_widgets: dict[str, list[tuple[str, QWidget]]] = {}
         self._detector_help = detector_help_map()
         self._daw_check_worker: DawCheckWorker | None = None
         self._pending_after_check = None
         self._daw_fetch_worker: DawFetchWorker | None = None
         self._daw_transfer_worker: DawTransferWorker | None = None
 
-        # Load persistent GUI configuration
+        # Load persistent GUI configuration (four-section structure)
         self._config = load_config()
+        self._active_config_preset_name: str = self._config.get(
+            "app", {}).get("active_config_preset", "Default")
 
         # Instantiate and configure DAW processors
         self._daw_processors = default_daw_processors()
@@ -403,6 +416,31 @@ class SessionPrepWindow(QMainWindow):
         # Spacebar toggles play/stop
         self._space_shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
         self._space_shortcut.activated.connect(self._on_toggle_play)
+
+    # ── Config helpers ───────────────────────────────────────────────────
+
+    def _flat_config(self) -> dict[str, Any]:
+        """Return a flat config dict from the active config preset.
+
+        If a session config exists (user edited Session Settings), the
+        current widget values take precedence over the global config preset.
+        """
+        if self._session_config is not None:
+            # Read live widget values so edits take effect immediately
+            structured = self._read_session_config()
+            flat = dict(default_config())
+            flat.update(flatten_structured_config(structured))
+            return flat
+        preset = resolve_config_preset(
+            self._config, self._active_config_preset_name)
+        flat = dict(default_config())
+        flat.update(flatten_structured_config(preset))
+        return flat
+
+    def _active_preset(self) -> dict[str, Any]:
+        """Return the active config preset's structured dict."""
+        return resolve_config_preset(
+            self._config, self._active_config_preset_name)
 
     # ── UI setup ──────────────────────────────────────────────────────────
 
@@ -498,9 +536,8 @@ class SessionPrepWindow(QMainWindow):
 
     def _populate_group_preset_combo(self):
         """Fill the group-preset combo from config, preserving the current selection."""
-        gui = self._config.get("gui", {})
-        presets = gui.get("group_presets",
-                          _GUI_DEFAULTS.get("group_presets", {}))
+        presets = self._config.get("group_presets",
+                                   build_defaults().get("group_presets", {}))
         active = self._active_session_preset
         self._group_preset_combo.blockSignals(True)
         self._group_preset_combo.clear()
@@ -671,8 +708,7 @@ class SessionPrepWindow(QMainWindow):
 
     def _configure_daw_processors(self):
         """Configure all DAW processors from the current flat config."""
-        flat = dict(default_config())
-        flat.update(flatten_structured_config(self._config))
+        flat = self._flat_config()
         for dp in self._daw_processors:
             dp.configure(flat)
 
@@ -792,7 +828,7 @@ class SessionPrepWindow(QMainWindow):
         # transfer() can resolve group → color ARGB
         self._session.config.setdefault("gui", {})["groups"] = list(
             self._session_groups)
-        colors = self._config.get("gui", {}).get("colors", PT_DEFAULT_COLORS)
+        colors = self._config.get("colors", PT_DEFAULT_COLORS)
         self._session.config["gui"]["colors"] = colors
         self._daw_transfer_worker = DawTransferWorker(
             self._active_daw_processor, self._session)
@@ -1148,6 +1184,7 @@ class SessionPrepWindow(QMainWindow):
         # ── Page 1: tabs (Summary / File) ─────────────────────────────────
         self._detail_tabs = QTabWidget()
         self._detail_tabs.setDocumentMode(True)
+        self._detail_tabs.currentChanged.connect(self._on_detail_tab_changed)
 
         # Summary tab — single QTextBrowser
         self._summary_view = self._make_report_browser()
@@ -1162,7 +1199,7 @@ class SessionPrepWindow(QMainWindow):
         self._waveform = WaveformWidget()
         self._waveform.position_clicked.connect(self._on_waveform_seek)
         self._waveform.set_invert_scroll(
-            self._config.get("gui", {}).get("invert_scroll", "default"))
+            self._config.get("app", {}).get("invert_scroll", "default"))
 
 
         # Waveform toolbar + widget container
@@ -1404,12 +1441,26 @@ class SessionPrepWindow(QMainWindow):
         self._detail_tabs.addTab(self._build_groups_tab(), "Groups")
         self._detail_tabs.setTabEnabled(_TAB_GROUPS, False)
 
+        # Session Settings tab — per-session config overrides
+        self._detail_tabs.addTab(
+            self._build_session_settings_tab(), "Session Settings")
+        self._detail_tabs.setTabEnabled(_TAB_SESSION, False)
+
         self._right_stack.addWidget(self._detail_tabs)  # index 1
 
         # Start on the tabs page (summary empty until first analysis)
         self._right_stack.setCurrentIndex(_PAGE_TABS)
 
         return self._right_stack
+
+    @Slot(int)
+    def _on_detail_tab_changed(self, index: int):
+        """Hide the waveform widget when leaving the File tab.
+
+        The waveform uses custom painting that can bleed through other
+        tabs if it remains visible while inactive.
+        """
+        self._waveform.setVisible(index == _TAB_FILE)
 
     # ── Groups tab (session-local group editor) ─────────────────────────
 
@@ -1479,14 +1530,270 @@ class SessionPrepWindow(QMainWindow):
 
         return page
 
+    # ── Session Settings tab ────────────────────────────────────────────
+
+    def _build_session_settings_tab(self) -> QWidget:
+        """Build a tree+stack config editor for per-session overrides."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(4, 4, 4, 4)
+
+        # Header row
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        self._session_preset_label = QLabel("Config Preset: —")
+        self._session_preset_label.setStyleSheet(
+            f"color: {COLORS['dim']}; font-style: italic;")
+        header.addWidget(self._session_preset_label)
+        header.addStretch()
+        reset_btn = QPushButton("Reset to Preset Defaults")
+        reset_btn.setToolTip(
+            "Discard all session-specific changes and reload from the "
+            "global config preset.")
+        reset_btn.clicked.connect(self._on_session_config_reset)
+        header.addWidget(reset_btn)
+        layout.addLayout(header)
+
+        # Tree + Stack
+        splitter = QSplitter(Qt.Horizontal)
+
+        self._session_tree = QTreeWidget()
+        self._session_tree.setHeaderHidden(True)
+        self._session_tree.setMinimumWidth(160)
+        self._session_tree.setMaximumWidth(220)
+        self._session_tree.currentItemChanged.connect(
+            self._on_session_tree_selection)
+        splitter.addWidget(self._session_tree)
+
+        self._session_stack = QStackedWidget()
+        splitter.addWidget(self._session_stack)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+
+        layout.addWidget(splitter, 1)
+
+        # Build initial pages from the active global preset
+        self._session_page_index: dict[int, int] = {}
+        self._build_session_pages()
+
+        self._session_tree.expandAll()
+        first = self._session_tree.topLevelItem(0)
+        if first:
+            self._session_tree.setCurrentItem(first)
+
+        return page
+
+    def _build_session_pages(self):
+        """Populate the session settings tree + stack from the active preset."""
+        preset = self._active_preset()
+
+        # Analysis
+        item = QTreeWidgetItem(self._session_tree, ["Analysis"])
+        values = preset.get("analysis", {})
+        pg, wdg = _build_param_page(ANALYSIS_PARAMS, values)
+        self._session_widgets["analysis"] = wdg
+        idx = self._session_stack.addWidget(pg)
+        self._session_page_index[id(item)] = idx
+
+        # Detectors (parent shows presentation params)
+        det_parent = QTreeWidgetItem(self._session_tree, ["Detectors"])
+        pres_values = preset.get("presentation", {})
+        pg, wdg = _build_param_page(PRESENTATION_PARAMS, pres_values)
+        self._session_widgets["_presentation"] = wdg
+        idx = self._session_stack.addWidget(pg)
+        self._session_page_index[id(det_parent)] = idx
+
+        det_sections = preset.get("detectors", {})
+        for det in default_detectors():
+            params = det.config_params()
+            if not params:
+                continue
+            child = QTreeWidgetItem(det_parent, [det.name])
+            vals = det_sections.get(det.id, {})
+            pg, wdg = _build_param_page(params, vals)
+            self._session_widgets[f"detectors.{det.id}"] = wdg
+            idx = self._session_stack.addWidget(pg)
+            self._session_page_index[id(child)] = idx
+
+        # Processors
+        proc_parent = QTreeWidgetItem(self._session_tree, ["Processors"])
+        placeholder = QWidget()
+        pl = QVBoxLayout(placeholder)
+        pl.setContentsMargins(12, 12, 12, 12)
+        pl.addWidget(QLabel("Select a processor from the tree to configure."))
+        pl.addStretch()
+        idx = self._session_stack.addWidget(placeholder)
+        self._session_page_index[id(proc_parent)] = idx
+
+        proc_sections = preset.get("processors", {})
+        for proc in default_processors():
+            params = proc.config_params()
+            if not params:
+                continue
+            child = QTreeWidgetItem(proc_parent, [proc.name])
+            vals = proc_sections.get(proc.id, {})
+            pg, wdg = _build_param_page(params, vals)
+            self._session_widgets[f"processors.{proc.id}"] = wdg
+            idx = self._session_stack.addWidget(pg)
+            self._session_page_index[id(child)] = idx
+
+        # DAW Processors
+        daw_parent = QTreeWidgetItem(self._session_tree, ["DAW Processors"])
+        placeholder2 = QWidget()
+        pl2 = QVBoxLayout(placeholder2)
+        pl2.setContentsMargins(12, 12, 12, 12)
+        pl2.addWidget(QLabel(
+            "Select a DAW processor from the tree to configure."))
+        pl2.addStretch()
+        idx = self._session_stack.addWidget(placeholder2)
+        self._session_page_index[id(daw_parent)] = idx
+
+        dp_sections = preset.get("daw_processors", {})
+        for dp in default_daw_processors():
+            params = dp.config_params()
+            if not params:
+                continue
+            child = QTreeWidgetItem(daw_parent, [dp.name])
+            vals = dp_sections.get(dp.id, {})
+            pg, wdg = _build_param_page(params, vals)
+            self._session_widgets[f"daw_processors.{dp.id}"] = wdg
+            idx = self._session_stack.addWidget(pg)
+            self._session_page_index[id(child)] = idx
+
+    def _on_session_tree_selection(self, current, _previous):
+        if current is None:
+            return
+        idx = self._session_page_index.get(id(current))
+        if idx is not None:
+            self._session_stack.setCurrentIndex(idx)
+
+    def _init_session_config(self):
+        """Snapshot the active global config preset into session config."""
+        self._session_config = copy.deepcopy(self._active_preset())
+        name = self._active_config_preset_name
+        self._session_preset_label.setText(f"Config Preset: {name}")
+        self._session_preset_label.setStyleSheet("")
+        self._load_session_widgets(self._session_config)
+        self._detail_tabs.setTabEnabled(_TAB_SESSION, True)
+
+    def _load_session_widgets(self, preset: dict[str, Any]):
+        """Load values from a config preset dict into session widgets."""
+        # Analysis
+        analysis = preset.get("analysis", {})
+        for key, widget in self._session_widgets.get("analysis", []):
+            if key in analysis:
+                _set_widget_value(widget, analysis[key])
+
+        # Presentation
+        pres = preset.get("presentation", {})
+        for key, widget in self._session_widgets.get("_presentation", []):
+            if key in pres:
+                _set_widget_value(widget, pres[key])
+
+        # Detectors
+        det_sections = preset.get("detectors", {})
+        for det in default_detectors():
+            wkey = f"detectors.{det.id}"
+            if wkey not in self._session_widgets:
+                continue
+            vals = det_sections.get(det.id, {})
+            for key, widget in self._session_widgets[wkey]:
+                if key in vals:
+                    _set_widget_value(widget, vals[key])
+
+        # Processors
+        proc_sections = preset.get("processors", {})
+        for proc in default_processors():
+            wkey = f"processors.{proc.id}"
+            if wkey not in self._session_widgets:
+                continue
+            vals = proc_sections.get(proc.id, {})
+            for key, widget in self._session_widgets[wkey]:
+                if key in vals:
+                    _set_widget_value(widget, vals[key])
+
+        # DAW Processors
+        dp_sections = preset.get("daw_processors", {})
+        for dp in default_daw_processors():
+            wkey = f"daw_processors.{dp.id}"
+            if wkey not in self._session_widgets:
+                continue
+            vals = dp_sections.get(dp.id, {})
+            for key, widget in self._session_widgets[wkey]:
+                if key in vals:
+                    _set_widget_value(widget, vals[key])
+
+    def _read_session_config(self) -> dict[str, Any]:
+        """Read current session widget values into a structured config dict."""
+        cfg: dict[str, Any] = {}
+
+        # Analysis
+        analysis: dict[str, Any] = {}
+        for key, widget in self._session_widgets.get("analysis", []):
+            analysis[key] = _read_widget(widget)
+        cfg["analysis"] = analysis
+
+        # Presentation
+        presentation: dict[str, Any] = {}
+        for key, widget in self._session_widgets.get("_presentation", []):
+            presentation[key] = _read_widget(widget)
+        cfg["presentation"] = presentation
+
+        # Detectors
+        detectors: dict[str, dict] = {}
+        for det in default_detectors():
+            wkey = f"detectors.{det.id}"
+            if wkey not in self._session_widgets:
+                continue
+            section: dict[str, Any] = {}
+            for key, widget in self._session_widgets[wkey]:
+                section[key] = _read_widget(widget)
+            detectors[det.id] = section
+        cfg["detectors"] = detectors
+
+        # Processors
+        processors: dict[str, dict] = {}
+        for proc in default_processors():
+            wkey = f"processors.{proc.id}"
+            if wkey not in self._session_widgets:
+                continue
+            section = {}
+            for key, widget in self._session_widgets[wkey]:
+                section[key] = _read_widget(widget)
+            processors[proc.id] = section
+        cfg["processors"] = processors
+
+        # DAW Processors
+        daw_procs: dict[str, dict] = {}
+        for dp in default_daw_processors():
+            wkey = f"daw_processors.{dp.id}"
+            if wkey not in self._session_widgets:
+                continue
+            section = {}
+            for key, widget in self._session_widgets[wkey]:
+                section[key] = _read_widget(widget)
+            daw_procs[dp.id] = section
+        cfg["daw_processors"] = daw_procs
+
+        return cfg
+
+    def _on_session_config_reset(self):
+        """Reset session settings to the global config preset defaults."""
+        preset = self._active_preset()
+        self._session_config = copy.deepcopy(preset)
+        self._load_session_widgets(self._session_config)
+        self._status_bar.showMessage("Session settings reset to preset defaults.")
+
+    # ── Color helpers ─────────────────────────────────────────────────────
+
     def _color_names_from_config(self) -> list[str]:
         """Return color names from the current config (or defaults)."""
-        colors = self._config.get("gui", {}).get("colors", PT_DEFAULT_COLORS)
+        colors = self._config.get("colors", PT_DEFAULT_COLORS)
         return [c["name"] for c in colors if c.get("name")]
 
     def _color_argb_by_name(self, name: str) -> str | None:
         """Look up ARGB hex by color name from config, falling back to defaults."""
-        colors = self._config.get("gui", {}).get("colors", PT_DEFAULT_COLORS)
+        colors = self._config.get("colors", PT_DEFAULT_COLORS)
         for c in colors:
             if c.get("name") == name:
                 return c.get("argb")
@@ -1601,7 +1908,11 @@ class SessionPrepWindow(QMainWindow):
         return f"{base} {n}"
 
     def _on_groups_tab_name_changed(self, row: int, col: int):
-        """Revert a group name edit if it creates a duplicate."""
+        """Handle cell edits in the groups tab (name or DAW target)."""
+        if col == 3:
+            # DAW Target changed — sync groups so auto-assign picks it up
+            self._sync_session_groups()
+            return
         if col != 0:
             return
         item = self._groups_tab_table.item(row, 0)
@@ -1695,9 +2006,8 @@ class SessionPrepWindow(QMainWindow):
 
     def _merge_groups_from_preset(self):
         """Replace session groups with the active preset and name-match tracks."""
-        gui = self._config.get("gui", {})
-        presets = gui.get("group_presets",
-                          _GUI_DEFAULTS.get("group_presets", {}))
+        presets = self._config.get("group_presets",
+                                   build_defaults().get("group_presets", {}))
         preset = presets.get(self._active_session_preset,
                              presets.get("Default", []))
         new_groups = copy.deepcopy(preset)
@@ -1719,9 +2029,8 @@ class SessionPrepWindow(QMainWindow):
     @Slot(str)
     def _on_group_preset_changed(self, preset_name: str):
         """Switch the active group preset from the Analysis toolbar combo."""
-        gui = self._config.get("gui", {})
-        presets = gui.get("group_presets",
-                          _GUI_DEFAULTS.get("group_presets", {}))
+        presets = self._config.get("group_presets",
+                                   build_defaults().get("group_presets", {}))
         if preset_name not in presets:
             return
         self._active_session_preset = preset_name
@@ -1754,7 +2063,7 @@ class SessionPrepWindow(QMainWindow):
 
     @Slot()
     def _on_open_path(self):
-        start_dir = self._config.get("gui", {}).get("default_project_dir", "") or ""
+        start_dir = self._config.get("app", {}).get("default_project_dir", "") or ""
         path = QFileDialog.getExistingDirectory(
             self, "Select Session Directory", start_dir,
             QFileDialog.ShowDirsOnly,
@@ -1781,8 +2090,10 @@ class SessionPrepWindow(QMainWindow):
         self._stop_btn.setEnabled(False)
         self._detail_tabs.setTabEnabled(_TAB_FILE, False)
         self._detail_tabs.setTabEnabled(_TAB_GROUPS, False)
+        self._detail_tabs.setTabEnabled(_TAB_SESSION, False)
         self._detail_tabs.setCurrentIndex(_TAB_SUMMARY)
         self._right_stack.setCurrentIndex(_PAGE_TABS)
+        self._session_config = None  # reset session overrides for new directory
         self._session_groups = []
         self._groups_tab_table.setRowCount(0)
 
@@ -1826,12 +2137,16 @@ class SessionPrepWindow(QMainWindow):
         self._current_track = None
         self._detail_tabs.setTabEnabled(_TAB_FILE, False)
 
+        # Initialise session config from global preset (first analysis)
+        # or keep existing session config (re-analysis with user edits)
+        if self._session_config is None:
+            self._init_session_config()
+
         # Show progress page
         self._progress_label.setText("Analyzing…")
         self._right_stack.setCurrentIndex(_PAGE_PROGRESS)
 
-        config = dict(default_config())
-        config.update(flatten_structured_config(self._config))
+        config = self._flat_config()
         config["_source_dir"] = self._source_dir
 
         self._progress_bar.setRange(0, 0)  # indeterminate until first value
@@ -1992,6 +2307,7 @@ class SessionPrepWindow(QMainWindow):
         self._right_stack.setCurrentIndex(_PAGE_TABS)
         self._detail_tabs.setCurrentIndex(_TAB_SUMMARY)
         self._detail_tabs.setTabEnabled(_TAB_GROUPS, True)
+        self._detail_tabs.setTabEnabled(_TAB_SESSION, True)
 
         # Enable Session Setup phase now that analysis is available
         self._phase_tabs.setTabEnabled(_PHASE_SETUP, True)
@@ -2044,11 +2360,16 @@ class SessionPrepWindow(QMainWindow):
 
     @property
     def _show_clean(self) -> bool:
-        return self._config.get("gui", {}).get("show_clean_detectors", True)
+        if self._session_config is not None:
+            cfg = self._read_session_config()
+            return cfg.get("presentation", {}).get(
+                "show_clean_detectors", False)
+        preset = self._active_preset()
+        return preset.get("presentation", {}).get("show_clean_detectors", False)
 
     @property
     def _verbose(self) -> bool:
-        return self._config.get("gui", {}).get("report_verbosity", "normal") == "verbose"
+        return self._config.get("app", {}).get("report_verbosity", "normal") == "verbose"
 
     def _render_summary(self):
         """Render the diagnostic summary into the Summary tab."""
@@ -2103,7 +2424,7 @@ class SessionPrepWindow(QMainWindow):
             self._play_btn.setEnabled(False)
             self._update_time_label(0)
 
-            flat_cfg = flatten_structured_config(self._config)
+            flat_cfg = self._flat_config()
             win_ms = flat_cfg.get("window", 400)
             ws = get_window_samples(track, win_ms)
 
@@ -2132,7 +2453,7 @@ class SessionPrepWindow(QMainWindow):
             return
 
         self._waveform.set_precomputed(result)
-        cmap = self._config.get("gui", {}).get("spectrogram_colormap", "magma")
+        cmap = self._config.get("app", {}).get("spectrogram_colormap", "magma")
         self._waveform.set_colormap(cmap)
         # Sync colormap dropdown with preference
         for act in self._cmap_group.actions():
@@ -3267,19 +3588,19 @@ class SessionPrepWindow(QMainWindow):
 
     @Slot()
     def _on_preferences(self):
-        old_scale = self._config.get("gui", {}).get("scale_factor", 1.0)
-        _PIPELINE_KEYS = ("analysis", "detectors", "processors", "session")
-        old_pipeline = {k: self._config.get(k) for k in _PIPELINE_KEYS}
+        old_scale = self._config.get("app", {}).get("scale_factor", 1.0)
+        old_preset = copy.deepcopy(self._active_preset())
 
         dlg = PreferencesDialog(self._config, parent=self)
         dlg.exec()
         if dlg.saved:
-            from .settings import save_config
             self._config = dlg.result_config()
             save_config(self._config)
+            self._active_config_preset_name = self._config.get(
+                "app", {}).get("active_config_preset", "Default")
             self._status_bar.showMessage("Preferences saved.")
             self._waveform.set_invert_scroll(
-                self._config.get("gui", {}).get("invert_scroll", "default"))
+                self._config.get("app", {}).get("invert_scroll", "default"))
 
             # Refresh group preset combo (presets may have been added/removed/renamed)
             self._populate_group_preset_combo()
@@ -3287,9 +3608,8 @@ class SessionPrepWindow(QMainWindow):
             # Offer to merge if the session's active preset was modified
             if self._session:
                 preset_name = self._active_session_preset
-                gui = self._config.get("gui", {})
-                presets = gui.get("group_presets",
-                                  _GUI_DEFAULTS.get("group_presets", {}))
+                presets = self._config.get("group_presets",
+                                          build_defaults().get("group_presets", {}))
                 if preset_name in presets:
                     preset_groups = presets[preset_name]
                     if preset_groups != self._session_groups:
@@ -3319,18 +3639,18 @@ class SessionPrepWindow(QMainWindow):
 
             if self._source_dir:
                 from sessionpreplib.config import strip_presentation_keys
-                new_pipeline = {k: self._config.get(k) for k in _PIPELINE_KEYS}
-                old_stripped = strip_presentation_keys(old_pipeline)
-                new_stripped = strip_presentation_keys(new_pipeline)
+                new_preset = self._active_preset()
+                old_stripped = strip_presentation_keys(old_preset)
+                new_stripped = strip_presentation_keys(new_preset)
                 if new_stripped != old_stripped:
                     self._on_analyze()
-                elif new_pipeline != old_pipeline:
+                elif new_preset != old_preset:
                     # Only presentation keys changed — lightweight refresh
                     self._refresh_presentation()
                 else:
                     # GUI-only change — just refresh reports and colormap
                     self._render_summary()
-                    cmap = self._config.get("gui", {}).get(
+                    cmap = self._config.get("app", {}).get(
                         "spectrogram_colormap", "magma")
                     self._waveform.set_colormap(cmap)
                     if self._current_track:
@@ -3341,7 +3661,7 @@ class SessionPrepWindow(QMainWindow):
                         self._file_report.setHtml(self._wrap_html(html))
 
             # Prompt restart if scale factor changed
-            new_scale = self._config.get("gui", {}).get("scale_factor", 1.0)
+            new_scale = self._config.get("app", {}).get("scale_factor", 1.0)
             if new_scale != old_scale:
                 QMessageBox.information(
                     self, "Restart required",
@@ -3360,8 +3680,7 @@ class SessionPrepWindow(QMainWindow):
             return
 
         # 1. Reconfigure detector instances with updated flat config
-        flat = dict(default_config())
-        flat.update(flatten_structured_config(self._config))
+        flat = self._flat_config()
         for d in self._session.detectors:
             d.configure(flat)
 
@@ -3390,7 +3709,7 @@ class SessionPrepWindow(QMainWindow):
             self._update_overlay_menu(all_issues)
 
         # 7. Apply any concurrent GUI-only changes
-        cmap = self._config.get("gui", {}).get("spectrogram_colormap", "magma")
+        cmap = self._config.get("app", {}).get("spectrogram_colormap", "magma")
         self._waveform.set_colormap(cmap)
 
         self._status_bar.showMessage("Preferences saved (display refreshed).")
