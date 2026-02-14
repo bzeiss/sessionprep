@@ -50,7 +50,7 @@ from sessionpreplib.detector import TrackDetector
 from sessionpreplib.detectors import detector_help_map
 from sessionpreplib.utils import protools_sort_key
 
-from .settings import load_config, config_path, active_group_list, _GUI_DEFAULTS
+from .settings import load_config, config_path, _GUI_DEFAULTS
 from .theme import (
     COLORS,
     FILE_COLOR_OK,
@@ -376,6 +376,7 @@ class SessionPrepWindow(QMainWindow):
         self._wf_worker: WaveformLoadWorker | None = None
         self._current_track = None
         self._session_groups: list[dict] = []
+        self._active_session_preset: str = "Default"
         self._detector_help = detector_help_map()
         self._daw_check_worker: DawCheckWorker | None = None
         self._pending_after_check = None
@@ -500,7 +501,7 @@ class SessionPrepWindow(QMainWindow):
         gui = self._config.get("gui", {})
         presets = gui.get("group_presets",
                           _GUI_DEFAULTS.get("group_presets", {}))
-        active = gui.get("active_group_preset", "Default")
+        active = self._active_session_preset
         self._group_preset_combo.blockSignals(True)
         self._group_preset_combo.clear()
         for name in presets:
@@ -1464,7 +1465,7 @@ class SessionPrepWindow(QMainWindow):
         remove_btn.clicked.connect(self._on_groups_tab_remove)
         btn_row.addWidget(remove_btn)
 
-        reset_btn = QPushButton("Reset to Defaults")
+        reset_btn = QPushButton("Reset from Preset")
         reset_btn.clicked.connect(self._on_groups_tab_reset)
         btn_row.addWidget(reset_btn)
 
@@ -1690,26 +1691,18 @@ class SessionPrepWindow(QMainWindow):
 
     def _on_groups_tab_reset(self):
         """Reset session groups to the active preset from preferences."""
-        self._session_groups = copy.deepcopy(active_group_list(self._config))
-        self._populate_groups_tab()
-        self._refresh_group_combos()
+        self._merge_groups_from_preset()
 
-    # ── Group preset switching (Analysis toolbar) ─────────────────────
-
-    @Slot(str)
-    def _on_group_preset_changed(self, preset_name: str):
-        """Switch the active group preset from the Analysis toolbar combo."""
-        gui = self._config.setdefault("gui", {})
+    def _merge_groups_from_preset(self):
+        """Replace session groups with the active preset and name-match tracks."""
+        gui = self._config.get("gui", {})
         presets = gui.get("group_presets",
                           _GUI_DEFAULTS.get("group_presets", {}))
-        if preset_name not in presets:
-            return
-        gui["active_group_preset"] = preset_name
-
-        new_groups = copy.deepcopy(presets[preset_name])
+        preset = presets.get(self._active_session_preset,
+                             presets.get("Default", []))
+        new_groups = copy.deepcopy(preset)
         new_names = {g["name"].strip().lower() for g in new_groups}
 
-        # Name-match existing track assignments (case-insensitive)
         if self._session:
             for track in self._session.tracks:
                 if track.group is not None:
@@ -1720,6 +1713,19 @@ class SessionPrepWindow(QMainWindow):
         self._populate_groups_tab()
         self._refresh_group_combos()
         self._populate_setup_table()
+
+    # ── Group preset switching (Analysis toolbar) ─────────────────────
+
+    @Slot(str)
+    def _on_group_preset_changed(self, preset_name: str):
+        """Switch the active group preset from the Analysis toolbar combo."""
+        gui = self._config.get("gui", {})
+        presets = gui.get("group_presets",
+                          _GUI_DEFAULTS.get("group_presets", {}))
+        if preset_name not in presets:
+            return
+        self._active_session_preset = preset_name
+        self._merge_groups_from_preset()
 
     def _make_report_browser(self) -> QTextBrowser:
         """Create a consistently styled QTextBrowser for reports."""
@@ -1974,9 +1980,10 @@ class SessionPrepWindow(QMainWindow):
         self._analyze_action.setEnabled(True)
         self._worker = None
 
-        # Prefill session groups from the active group preset
-        self._session_groups = copy.deepcopy(active_group_list(self._config))
-        self._populate_groups_tab()
+        # Prefill session groups from Default preset
+        self._active_session_preset = "Default"
+        self._merge_groups_from_preset()
+        self._populate_group_preset_combo()
 
         self._populate_table(session)
         self._render_summary()
@@ -3276,6 +3283,33 @@ class SessionPrepWindow(QMainWindow):
 
             # Refresh group preset combo (presets may have been added/removed/renamed)
             self._populate_group_preset_combo()
+
+            # Offer to merge if the session's active preset was modified
+            if self._session:
+                preset_name = self._active_session_preset
+                gui = self._config.get("gui", {})
+                presets = gui.get("group_presets",
+                                  _GUI_DEFAULTS.get("group_presets", {}))
+                if preset_name in presets:
+                    preset_groups = presets[preset_name]
+                    if preset_groups != self._session_groups:
+                        ans = QMessageBox.question(
+                            self, "Update session groups?",
+                            f'The group preset \u201c{preset_name}\u201d'
+                            " has changed.\n\n"
+                            "Update the current session\u2019s groups"
+                            " to match?\n\n"
+                            "\u2022 Track assignments will be preserved"
+                            " where group names match.\n"
+                            "\u2022 Unmatched tracks will be set to"
+                            " (None).",
+                            QMessageBox.Yes | QMessageBox.No,
+                            QMessageBox.Yes,
+                        )
+                        if ans == QMessageBox.Yes:
+                            self._merge_groups_from_preset()
+                            self._status_bar.showMessage(
+                                "Session groups updated from preset.")
 
             # Re-configure DAW processors (enabled flag may have changed)
             self._configure_daw_processors()
