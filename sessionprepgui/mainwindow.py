@@ -385,6 +385,7 @@ class SessionPrepWindow(QMainWindow):
         self._wf_worker: WaveformLoadWorker | None = None
         self._current_track = None
         self._session_groups: list[dict] = []
+        self._prev_group_assignments: dict[str, str | None] = {}
         self._active_session_preset: str = "Default"
         self._session_config: dict[str, Any] | None = None
         self._session_widgets: dict[str, list[tuple[str, QWidget]]] = {}
@@ -526,13 +527,39 @@ class SessionPrepWindow(QMainWindow):
 
         self._analysis_toolbar.addSeparator()
 
-        self._analysis_toolbar.addWidget(QLabel("  Groups:"))
+        self._analysis_toolbar.addWidget(QLabel("  Group:"))
         self._group_preset_combo = QComboBox()
         self._group_preset_combo.setMinimumWidth(120)
         self._populate_group_preset_combo()
         self._group_preset_combo.currentTextChanged.connect(
             self._on_group_preset_changed)
         self._analysis_toolbar.addWidget(self._group_preset_combo)
+
+        self._analysis_toolbar.addSeparator()
+
+        self._analysis_toolbar.addWidget(QLabel("  Config:"))
+        self._config_preset_combo = QComboBox()
+        self._config_preset_combo.setMinimumWidth(120)
+        self._populate_config_preset_combo()
+        self._config_preset_combo.currentTextChanged.connect(
+            self._on_toolbar_config_preset_changed)
+        self._analysis_toolbar.addWidget(self._config_preset_combo)
+
+    def _populate_config_preset_combo(self):
+        """Fill the config-preset combo from config, preserving the current selection."""
+        presets = self._config.get("config_presets",
+                                   build_defaults().get("config_presets", {}))
+        active = self._active_config_preset_name
+        self._config_preset_combo.blockSignals(True)
+        self._config_preset_combo.clear()
+        for name in presets:
+            self._config_preset_combo.addItem(name)
+        idx = self._config_preset_combo.findText(active)
+        if idx >= 0:
+            self._config_preset_combo.setCurrentIndex(idx)
+        elif self._config_preset_combo.count() > 0:
+            self._config_preset_combo.setCurrentIndex(0)
+        self._config_preset_combo.blockSignals(False)
 
     def _populate_group_preset_combo(self):
         """Fill the group-preset combo from config, preserving the current selection."""
@@ -2036,6 +2063,42 @@ class SessionPrepWindow(QMainWindow):
         self._active_session_preset = preset_name
         self._merge_groups_from_preset()
 
+    # ── Config preset switching (Analysis toolbar) ────────────────────
+
+    @Slot(str)
+    def _on_toolbar_config_preset_changed(self, name: str):
+        """Switch the active config preset from the Analysis toolbar combo."""
+        presets = self._config.get("config_presets",
+                                   build_defaults().get("config_presets", {}))
+        if name not in presets:
+            return
+
+        if self._session is not None:
+            ans = QMessageBox.question(
+                self, "Switch config preset?",
+                f"Switching to \u201c{name}\u201d will overwrite your "
+                "session settings and re-analyze.\n\n"
+                "Group assignments will be preserved.\n\n"
+                "Continue?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if ans != QMessageBox.Yes:
+                # Revert combo to the current preset
+                self._config_preset_combo.blockSignals(True)
+                self._config_preset_combo.setCurrentText(
+                    self._active_config_preset_name)
+                self._config_preset_combo.blockSignals(False)
+                return
+
+        self._active_config_preset_name = name
+        self._config.setdefault("app", {})["active_config_preset"] = name
+        save_config(self._config)
+
+        if self._session is not None:
+            self._session_config = None  # re-init from new preset
+            self._on_analyze()
+
     def _make_report_browser(self) -> QTextBrowser:
         """Create a consistently styled QTextBrowser for reports."""
         browser = _HelpBrowser(self._detector_help)
@@ -2132,6 +2195,12 @@ class SessionPrepWindow(QMainWindow):
     def _on_analyze(self):
         if not self._source_dir:
             return
+
+        # Snapshot existing group assignments so we can restore after re-analysis
+        self._prev_group_assignments = {}
+        if self._session:
+            self._prev_group_assignments = {
+                t.filename: t.group for t in self._session.tracks if t.group}
 
         self._analyze_action.setEnabled(False)
         self._current_track = None
@@ -2295,10 +2364,18 @@ class SessionPrepWindow(QMainWindow):
         self._analyze_action.setEnabled(True)
         self._worker = None
 
-        # Prefill session groups from Default preset
-        self._active_session_preset = "Default"
-        self._merge_groups_from_preset()
-        self._populate_group_preset_combo()
+        if not self._session_groups:
+            # First analysis — load from Default group preset
+            self._active_session_preset = "Default"
+            self._merge_groups_from_preset()
+            self._populate_group_preset_combo()
+        else:
+            # Re-analysis — restore previous group assignments by filename
+            prev = self._prev_group_assignments
+            for track in session.tracks:
+                track.group = prev.get(track.filename)
+            self._populate_groups_tab()
+            self._refresh_group_combos()
 
         self._populate_table(session)
         self._render_summary()
@@ -3602,8 +3679,9 @@ class SessionPrepWindow(QMainWindow):
             self._waveform.set_invert_scroll(
                 self._config.get("app", {}).get("invert_scroll", "default"))
 
-            # Refresh group preset combo (presets may have been added/removed/renamed)
+            # Refresh preset combos (presets may have been added/removed/renamed)
             self._populate_group_preset_combo()
+            self._populate_config_preset_combo()
 
             # Offer to merge if the session's active preset was modified
             if self._session:
