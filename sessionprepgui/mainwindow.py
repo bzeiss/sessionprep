@@ -423,7 +423,7 @@ class SessionPrepWindow(QMainWindow):
     def _flat_config(self) -> dict[str, Any]:
         """Return a flat config dict from the active config preset.
 
-        If a session config exists (user edited Session Settings), the
+        If a session config exists (user edited session Config tab), the
         current widget values take precedence over the global config preset.
         """
         if self._session_config is not None:
@@ -1468,9 +1468,9 @@ class SessionPrepWindow(QMainWindow):
         self._detail_tabs.addTab(self._build_groups_tab(), "Groups")
         self._detail_tabs.setTabEnabled(_TAB_GROUPS, False)
 
-        # Session Settings tab — per-session config overrides
+        # Config tab — per-session config overrides
         self._detail_tabs.addTab(
-            self._build_session_settings_tab(), "Session Settings")
+            self._build_session_settings_tab(), "Config")
         self._detail_tabs.setTabEnabled(_TAB_SESSION, False)
 
         self._right_stack.addWidget(self._detail_tabs)  # index 1
@@ -1557,7 +1557,7 @@ class SessionPrepWindow(QMainWindow):
 
         return page
 
-    # ── Session Settings tab ────────────────────────────────────────────
+    # ── Config tab (per-session overrides) ────────────────────────────────
 
     def _build_session_settings_tab(self) -> QWidget:
         """Build a tree+stack config editor for per-session overrides."""
@@ -1611,7 +1611,7 @@ class SessionPrepWindow(QMainWindow):
         return page
 
     def _build_session_pages(self):
-        """Populate the session settings tree + stack from the active preset."""
+        """Populate the session config tree + stack from the active preset."""
         preset = self._active_preset()
 
         # Analysis
@@ -1805,11 +1805,11 @@ class SessionPrepWindow(QMainWindow):
         return cfg
 
     def _on_session_config_reset(self):
-        """Reset session settings to the global config preset defaults."""
+        """Reset session config to the global config preset defaults."""
         preset = self._active_preset()
         self._session_config = copy.deepcopy(preset)
         self._load_session_widgets(self._session_config)
-        self._status_bar.showMessage("Session settings reset to preset defaults.")
+        self._status_bar.showMessage("Session config reset to preset defaults.")
 
     # ── Color helpers ─────────────────────────────────────────────────────
 
@@ -2077,7 +2077,7 @@ class SessionPrepWindow(QMainWindow):
             ans = QMessageBox.question(
                 self, "Switch config preset?",
                 f"Switching to \u201c{name}\u201d will overwrite your "
-                "session settings and re-analyze.\n\n"
+                "session config and re-analyze.\n\n"
                 "Group assignments will be preserved.\n\n"
                 "Continue?",
                 QMessageBox.Yes | QMessageBox.No,
