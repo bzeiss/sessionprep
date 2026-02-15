@@ -1487,7 +1487,9 @@ class SessionPrepWindow(QMainWindow):
         The waveform uses custom painting that can bleed through other
         tabs if it remains visible while inactive.
         """
-        self._waveform.setVisible(index == _TAB_FILE)
+        wf = getattr(self, "_waveform", None)
+        if wf is not None:
+            wf.setVisible(index == _TAB_FILE)
 
     # ── Groups tab (session-local group editor) ─────────────────────────
 
@@ -3721,7 +3723,21 @@ class SessionPrepWindow(QMainWindow):
                 old_stripped = strip_presentation_keys(old_preset)
                 new_stripped = strip_presentation_keys(new_preset)
                 if new_stripped != old_stripped:
-                    self._on_analyze()
+                    if self._session_config is not None:
+                        # Session has local config — don't auto-re-analyze
+                        preset_name = self._active_config_preset_name
+                        QMessageBox.information(
+                            self, "Config preset updated",
+                            f"The config preset \u201c{preset_name}\u201d"
+                            " has been updated in Preferences.\n\n"
+                            "Your current session still uses its own"
+                            " config. To apply the new preset defaults,"
+                            " use \u201cReset to Preset Defaults\u201d"
+                            " in the Config tab or switch presets via"
+                            " the toolbar.",
+                        )
+                    else:
+                        self._on_analyze()
                 elif new_preset != old_preset:
                     # Only presentation keys changed — lightweight refresh
                     self._refresh_presentation()
