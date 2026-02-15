@@ -28,11 +28,28 @@ class AudioProcessor(ABC):
 
     @classmethod
     def config_params(cls) -> list[ParamSpec]:
-        """Return parameter specifications for this processor."""
-        return []
+        """Base returns the enabled toggle. Subclasses call super() + [...]."""
+        return [
+            ParamSpec(
+                key=f"{cls.id}_enabled",
+                type=bool,
+                default=True,
+                label="Enabled",
+                description=(
+                    "Whether this audio processor is active during analysis "
+                    "and preparation. Disable to skip it entirely."
+                ),
+            ),
+        ]
 
     def configure(self, config: dict[str, Any]) -> None:
-        pass
+        """Read config values. Subclasses should call super().configure(config)."""
+        self._enabled: bool = config.get(f"{self.id}_enabled", True)
+
+    @property
+    def enabled(self) -> bool:
+        """Whether this processor is active."""
+        return self._enabled
 
     @abstractmethod
     def process(self, track: TrackContext) -> ProcessorResult:
@@ -42,6 +59,31 @@ class AudioProcessor(ABC):
         Used in both dry-run and execute mode.
         """
         ...
+
+    def render_html(self, result: ProcessorResult, track: TrackContext | None = None,
+                    *, verbose: bool = False) -> str:
+        """Return an HTML fragment for this processor's result.
+
+        Override in subclasses for richer output (e.g. comparison tables).
+        The default renders classification, method, and gain.
+
+        Parameters
+        ----------
+        result : ProcessorResult
+        track : TrackContext | None
+            The full track context (with detector and processor results)
+            so that the processor can decide its own rendering relevance.
+        verbose : bool
+            When True, include additional analytical detail.
+        """
+        cls_text = result.classification or "Unknown"
+        return (
+            f'<div style="margin-left:8px;">'
+            f'Classification: <b>{cls_text}</b>'
+            f' &nbsp;&middot;&nbsp; {result.method}'
+            f' &nbsp;&middot;&nbsp; {result.gain_db:+.1f} dB'
+            f'</div>'
+        )
 
     @abstractmethod
     def apply(self, track: TrackContext, result: ProcessorResult) -> np.ndarray:

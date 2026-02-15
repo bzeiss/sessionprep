@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from .audio import format_duration
+from .audio import dbfs_offset, format_duration
 from .models import SessionContext
 from .utils import protools_sort_key
 
@@ -62,14 +62,14 @@ def generate_report(
     if grouped:
         lines.extend([
             "-" * 80,
-            "TRACK GROUPS (Identical Gain Applied)",
+            "TRACK GROUPS",
             "-" * 80,
             "",
         ])
         for gid in sorted(grouped.keys()):
             g = grouped[gid]
             gain_db = g.get("gain_db", 0.0)
-            lines.append(f"{gid} | Gain Applied: {gain_db:+.1f} dB")
+            lines.append(f"{gid} | Group level: {gain_db:+.1f} dB")
             for name in sorted(g.get("members") or [], key=protools_sort_key):
                 lines.append(f"  - {name}")
             lines.append("")
@@ -254,12 +254,12 @@ def save_json(
         pr = _get_primary_processor_result(t)
         clip_r = t.detector_results.get("clipping")
         sil_r = t.detector_results.get("silence")
-        mono_r = t.detector_results.get("mono_folddown")
+        sc_r = t.detector_results.get("stereo_compat")
 
         is_clipped = bool(clip_r.data.get("is_clipped")) if clip_r else False
         is_silent = bool(sil_r.data.get("is_silent")) if sil_r else False
-        mono_loss_db = mono_r.data.get("mono_loss_db") if mono_r else None
-        mono_warn = bool(mono_r.data.get("mono_warn")) if mono_r else False
+        mono_loss_db = sc_r.data.get("mono_loss_db") if sc_r else None
+        mono_warn = bool(sc_r.data.get("mono_warn")) if sc_r else False
 
         fader_offset = pr.data.get("fader_offset", 0) if pr else 0
         classification = pr.classification if pr else "Unknown"
@@ -336,12 +336,13 @@ def build_warnings(
                           type('', (), {"data": {}})()).data.get("dc_warn")]
     if dc_warn_tracks:
         dc_thresh = config.get("dc_offset_warn_db", -40.0)
+        _off = dbfs_offset(config)
         warnings.append(f"DC offset detected (>{dc_thresh} dBFS):")
         for t in dc_warn_tracks:
             dc_r = t.detector_results.get("dc_offset")
             dc_db = dc_r.data.get("dc_db", float('-inf')) if dc_r else float('-inf')
             if np.isfinite(dc_db):
-                warnings.append(f"  - {t.filename} is {dc_db:.1f} dBFS")
+                warnings.append(f"  - {t.filename} is {dc_db + _off:.1f} dBFS")
             else:
                 warnings.append(f"  - {t.filename}")
 

@@ -156,13 +156,22 @@ dynamics) may still require manual clip gain adjustments in the DAW.
 
 ### The Bimodal Classification Strategy
 
-  **TYPE 1: TRANSIENT MATERIAL** (High Crest Factor > 12dB)
+  Classification uses three metrics: **crest factor** (peak-to-RMS ratio),
+  **envelope decay rate** (how fast energy drops after the loudest moment),
+  and **density** (fraction of the track containing active content).
+  Very sparse tracks with at least one agreeing dynamic metric are classified
+  as Transient (catches toms, crashes, FX hits). For non-sparse tracks, crest
+  and decay vote together with decay as tiebreaker.
+
+  **TYPE 1: TRANSIENT MATERIAL** (High Crest + Fast Decay)
   (Drums, Percussion, Stabs)
   -> The Script normalizes these to PEAK Level (-6 dBFS).
   -> Goal: Preserve impact and headroom. We don't care about RMS voltage here;
      we care about not clipping the transient.
+  -> Also catches compressed drums (low crest but fast decay) that crest factor
+     alone would misclassify as sustained.
 
-  **TYPE 2: SUSTAINED MATERIAL** (Low Crest Factor < 12dB)
+  **TYPE 2: SUSTAINED MATERIAL** (Low Crest + Slow Decay)
   (Bass, Vocals, Guitars, Synths)
   -> The Script targets RMS Level (-18 dBFS) but is peak-limited by the
      configured peak ceiling (-6 dBFS).
@@ -170,6 +179,8 @@ dynamics) may still require manual clip gain adjustments in the DAW.
      characteristics of your plugins (Tubes, Tape, Transformers).
      If a file hits the peak ceiling before reaching the RMS target, it will end
      up below the RMS target by design.
+  -> Also catches plucked instruments and piano (high crest but slow decay) that
+     crest factor alone would misclassify as transient.
 
 This hybrid approach ensures that drums remain punchy while sustained instruments
 get the "thick" analog sound you want.
@@ -291,21 +302,25 @@ positions end up closer to unity, but that is not guaranteed.
 
 ### Classification is heuristic (transient vs sustained)
 
-The transient/sustained split is intentionally a heuristic based on crest factor.
-It will be wrong for some sources. The script supports explicit overrides so you
-can force classification when the musical role does not match the math:
+The transient/sustained split is intentionally a heuristic based on three metrics:
+crest factor (peak-to-RMS ratio), envelope decay rate (energy drop after the
+loudest moment), and density (fraction of active content). Classification priority:
+  1. Sparse + at least one dynamic metric agrees → Transient (toms, crashes, FX)
+  2. High crest + slow decay → Sustained (plucked instruments, piano)
+  3. Low crest + fast decay → Transient (compressed drums, loops)
+
+It will still be wrong for some sources. The script supports explicit overrides:
   - `--force_transient ...`
   - `--force_sustained ...`
 
-Crest threshold is not universal:
-  - The default `--crest_threshold 12` is a reasonable starting point for many
-    pop/rock sessions.
-  - Metal kicks and sharp percussion can often land in the ~15-18 dB crest range.
-  - Very compressed sustained material (some EDM leads, basses, pads) can sit
-    closer to ~6-10 dB crest.
+Thresholds are adjustable:
+  - `--crest_threshold 12` (default) — crest factor above this suggests transient
+  - `--decay_db_threshold 12` (default) — energy drop above this suggests transient
+  - `--decay_lookahead_ms 200` (default) — time window for measuring decay
+  - `--sparse_density_threshold 0.25` (default) — tracks with less active content are sparse
 
-If you see repeated `Normalization hints` (or systematic misclassification), adjust
-`--crest_threshold` for the session, and use the force flags to lock edge cases.
+If you see systematic misclassification, adjust thresholds for the session,
+and use the force flags to lock edge cases.
 
 ### Multi-mic sources (phase vs non-linearity)
 
@@ -316,32 +331,54 @@ prefer bus processing, or keep heavy saturation/compression on the group bus.
 
 Track grouping (multi-mic and bundles):
 If a set of tracks should behave as a single instrument (e.g. kick in/out/sub,
-snare top/bottom, BV stacks), use `--group` so those files get identical applied
-gain. This preserves internal balance and avoids changing how the bundle hits a
-bus compressor.
+snare top/bottom, BV stacks), use `--group Name:pattern1,pattern2` so those
+files get identical applied gain. This preserves internal balance and avoids
+changing how the bundle hits a bus compressor.
 
-Overlaps matter:
-  - A file can accidentally match multiple group specs (for example a broad pattern
-    like `Kick*` plus a specific list like `Kick In,Kick Out`).
-  - Overlaps are ambiguous because they can change which tracks get locked together,
-    which can change gain decisions and downstream fader offsets.
+Example:
+  ```
+  --group Kick:kick,kick_sub --group OH:overhead,oh --group Toms:tom
+  ```
 
-You can control overlap behavior with `--group_overlap`:
-  - `warn` (default): keep the first match and emit an ATTENTION warning.
-  - `error`: abort if any file matches multiple groups.
-  - `merge`: merge overlapping groups into a single larger group.
+Patterns support substring, glob (`*`/`?`), or exact match (suffix `$`).
+First match wins — if a file matches multiple groups, it is assigned to the
+first matching group and a warning is printed.
 
 ### Windowing and anchor strategy
 
-The goal is a robust anchor that represents loud sections without being dominated
-by rare outliers. Percentile-based momentary RMS is the default; strict max-window
-anchoring is available via `--rms_anchor max`. Sustained gain decisions still
-respect the peak ceiling via `--target_peak`.
+Sustained-material gain is computed against a single representative RMS value
+called the **anchor**. Finding this anchor is a multi-step process:
 
-Relative gating (`--gate_relative_db`) is applied before computing the momentary
-anchor and tail report. This helps sparse tracks (FX hits, vocal doubles, breakdown
-elements) where most windows are near-silent; without gating, percentile anchors
-can be dominated by silence and produce extreme (and meaningless) tail exceedances.
+1. **Window**: Slice the track into overlapping short-time RMS windows (default
+   400 ms). Each window produces one momentary RMS value. Together they form a
+   distribution of momentary loudness across the file.
+
+2. **Gate**: Discard windows that are far below the loudest window
+   (`--gate_relative_db`, default 40 dB). This removes silence and very quiet
+   passages, leaving only "active" content. Critical for sparse tracks (FX
+   hits, vocal doubles, breakdown elements) where most windows are near-silent.
+
+3. **Select anchor**:
+   - **`percentile`** (default): Take the Nth percentile of the gated
+     distribution (default P95). This represents "what the loud sections
+     typically sound like" while ignoring rare spikes — a single anomalous
+     window (breath pop, drum bleed, feedback ring) cannot pull the anchor
+     away from the track's true working level.
+   - **`max`**: Take the single loudest gated window. Useful for very short
+     files (single hits, sound effects) but fragile for longer material.
+
+4. **Use**: The anchor drives the sustained gain calculation
+   (`gain = target_rms − anchor`, capped by `target_peak − peak`) and defines
+   the baseline for tail exceedance reporting.
+
+Why P95 is the default: most real-world tracks have occasional moments louder
+than their "working level" (a vocalist leaning in, a dynamic fill, an
+arrangement accent). Max anchoring treats those moments as the reference,
+under-gaining the rest of the file. Percentile anchoring tracks the chorus-
+level loudness that will actually drive your insert processing, and flags the
+louder moments as tail exceedances for manual clip-gain attention.
+
+See [REFERENCE.md §3.3](REFERENCE.md) for a detailed walkthrough with examples.
 
 ### Tail (significant exceedances)
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
 
 import numpy as np
@@ -15,12 +16,12 @@ from .models import (
 from .detector import TrackDetector, SessionDetector
 from .processor import AudioProcessor
 from .events import EventBus
-from .audio import load_track, write_track, format_duration, linear_to_db
+from .audio import load_track, write_track, format_duration, linear_to_db, AUDIO_EXTENSIONS
 from .config import ConfigError, validate_config
 from .utils import (
     protools_sort_key,
     parse_group_specs,
-    assign_groups_to_files_with_policy,
+    assign_groups,
 )
 
 
@@ -31,9 +32,11 @@ class Pipeline:
         audio_processors: list[AudioProcessor] | None = None,
         config: dict[str, Any] | None = None,
         event_bus: EventBus | None = None,
+        max_workers: int | None = None,
     ):
         self.config = config or {}
         self.event_bus = event_bus
+        self.max_workers = max_workers or min(os.cpu_count() or 4, 8)
 
         # Separate track vs session detectors
         self.track_detectors: list[TrackDetector] = [
@@ -46,18 +49,19 @@ class Pipeline:
         # Topologically sort track detectors by depends_on
         self.track_detectors = _topo_sort_detectors(self.track_detectors)
 
-        # Sort audio processors by priority
-        self.audio_processors: list[AudioProcessor] = sorted(
-            audio_processors or [], key=lambda p: p.priority
-        )
-
         # Configure all components
         for d in self.track_detectors:
             d.configure(self.config)
         for d in self.session_detectors:
             d.configure(self.config)
-        for p in self.audio_processors:
+
+        # Configure audio processors first, then filter to enabled only
+        all_procs = audio_processors or []
+        for p in all_procs:
             p.configure(self.config)
+        self.audio_processors: list[AudioProcessor] = sorted(
+            [p for p in all_procs if p.enabled], key=lambda p: p.priority
+        )
 
         # Validate
         self._validate()
@@ -86,33 +90,56 @@ class Pipeline:
     # Phase 1: Analyze (run all detectors)
     # ------------------------------------------------------------------
 
+    def _analyze_track(self, track: TrackContext, idx: int, total: int):
+        """Run all track-level detectors for a single track (thread-safe)."""
+        self._emit("track.analyze_start", filename=track.filename,
+                   index=idx, total=total)
+        for det in self.track_detectors:
+            try:
+                self._emit("detector.start", detector_id=det.id,
+                           filename=track.filename)
+                result = det.analyze(track)
+                track.detector_results[det.id] = result
+                self._emit("detector.complete", detector_id=det.id,
+                           filename=track.filename,
+                           severity=result.severity)
+            except Exception as e:
+                track.detector_results[det.id] = DetectorResult(
+                    detector_id=det.id,
+                    severity=Severity.PROBLEM,
+                    summary=f"detector error: {e}",
+                    data={},
+                    error=str(e),
+                )
+        self._emit("track.analyze_complete", filename=track.filename,
+                   index=idx, total=total)
+
     def analyze(self, session: SessionContext) -> SessionContext:
-        """Run all track-level and session-level detectors."""
+        """Run all track-level and session-level detectors.
+
+        Track-level detectors run in parallel across files using a thread pool.
+        Session-level detectors run sequentially after all tracks complete.
+        """
         total = len(session.tracks)
-        for idx, track in enumerate(session.tracks):
-            if track.status != "OK":
-                continue
-            self._emit("track.analyze_start", filename=track.filename,
-                       index=idx, total=total)
-            for det in self.track_detectors:
-                try:
-                    self._emit("detector.start", detector_id=det.id,
-                               filename=track.filename)
-                    result = det.analyze(track)
-                    track.detector_results[det.id] = result
-                    self._emit("detector.complete", detector_id=det.id,
+        ok_items = [
+            (idx, track)
+            for idx, track in enumerate(session.tracks)
+            if track.status == "OK"
+        ]
+
+        workers = min(self.max_workers, len(ok_items)) if ok_items else 1
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(self._analyze_track, track, idx, total): track
+                for idx, track in ok_items
+            }
+            for future in as_completed(futures):
+                exc = future.exception()
+                if exc:
+                    track = futures[future]
+                    self._emit("track.analyze_complete",
                                filename=track.filename,
-                               severity=result.severity)
-                except Exception as e:
-                    track.detector_results[det.id] = DetectorResult(
-                        detector_id=det.id,
-                        severity=Severity.PROBLEM,
-                        summary=f"detector error: {e}",
-                        data={},
-                        error=str(e),
-                    )
-            self._emit("track.analyze_complete", filename=track.filename,
-                       index=idx, total=total)
+                               index=0, total=total)
 
         # Session-level detectors
         track_map = {t.filename: t for t in session.tracks}
@@ -138,48 +165,88 @@ class Pipeline:
                     )
                 ]
 
+        # Store configured detector instances on the session for render-time access
+        session.detectors = self.track_detectors + self.session_detectors
+
         return session
 
     # ------------------------------------------------------------------
     # Phase 2: Plan (run audio processors, compute gains)
     # ------------------------------------------------------------------
 
+    def _plan_track(self, track: TrackContext, idx: int, total: int):
+        """Run all audio processors for a single track (thread-safe)."""
+        self._emit("track.plan_start", filename=track.filename,
+                   index=idx, total=total)
+        for proc in self.audio_processors:
+            try:
+                self._emit("processor.start", processor_id=proc.id,
+                           filename=track.filename)
+                result = proc.process(track)
+                track.processor_results[proc.id] = result
+                self._emit("processor.complete", processor_id=proc.id,
+                           filename=track.filename)
+            except Exception as e:
+                track.processor_results[proc.id] = ProcessorResult(
+                    processor_id=proc.id,
+                    gain_db=0.0,
+                    classification="Error",
+                    method="None",
+                    error=str(e),
+                )
+        self._emit("track.plan_complete", filename=track.filename,
+                   index=idx, total=total)
+
     def plan(self, session: SessionContext) -> SessionContext:
         """
         Run all audio processors in priority order.
         Computes gains and classifications without modifying audio.
-        Also handles group gain equalization and fader offsets.
-        """
-        for track in session.tracks:
-            if track.status != "OK":
-                continue
-            for proc in self.audio_processors:
-                try:
-                    self._emit("processor.start", processor_id=proc.id,
-                               filename=track.filename)
-                    result = proc.process(track)
-                    track.processor_results[proc.id] = result
-                    self._emit("processor.complete", processor_id=proc.id,
-                               filename=track.filename)
-                except Exception as e:
-                    track.processor_results[proc.id] = ProcessorResult(
-                        processor_id=proc.id,
-                        gain_db=0.0,
-                        classification="Error",
-                        method="None",
-                        error=str(e),
-                    )
+        Also handles group gain levelling and fader offsets.
 
-        # --- Group gain equalization ---
-        self._equalize_group_gains(session)
+        Per-track processors run in parallel using a thread pool.
+        Group levelling and fader offsets run after all tracks complete.
+        """
+        total = len(session.tracks)
+        ok_items = [
+            (idx, track)
+            for idx, track in enumerate(session.tracks)
+            if track.status == "OK"
+        ]
+
+        workers = min(self.max_workers, len(ok_items)) if ok_items else 1
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(self._plan_track, track, idx, total): track
+                for idx, track in ok_items
+            }
+            for future in as_completed(futures):
+                exc = future.exception()
+                if exc:
+                    track = futures[future]
+                    self._emit("track.plan_complete",
+                               filename=track.filename,
+                               index=0, total=total)
+
+        # --- Group gain levelling ---
+        self._apply_group_levels(session)
 
         # --- Fader offsets ---
         self._compute_fader_offsets(session)
 
+        # Store configured processor instances on the session for render-time access
+        session.processors = list(self.audio_processors)
+
         return session
 
-    def _equalize_group_gains(self, session: SessionContext):
-        """Grouped tracks get the minimum gain of the group."""
+    def _apply_group_levels(self, session: SessionContext):
+        """Apply group levels for gain-linked groups (minimum gain of the group).
+
+        Reads ``_gain_linked_groups`` from *session.config* — a set of group
+        names whose members should share the same gain.  If the key is absent
+        **all** groups are levelled (backward-compatible CLI behaviour).
+        """
+        linked: set[str] | None = session.config.get("_gain_linked_groups")
+
         for proc in self.audio_processors:
             by_gid: dict[str, list[TrackContext]] = {}
             for track in session.tracks:
@@ -188,11 +255,17 @@ class Pipeline:
                 pr = track.processor_results.get(proc.id)
                 if pr is None or pr.classification == "Silent":
                     continue
+                # Preserve the per-track gain before any group adjustment
+                if "original_gain_db" not in pr.data:
+                    pr.data["original_gain_db"] = pr.gain_db
                 by_gid.setdefault(track.group, []).append(track)
 
             for gid, members in by_gid.items():
-                gains = [m.processor_results[proc.id].gain_db for m in members]
-                group_gain = min(gains) if gains else 0.0
+                if linked is not None and gid not in linked:
+                    continue
+                orig = [m.processor_results[proc.id].data["original_gain_db"]
+                        for m in members]
+                group_gain = min(orig) if orig else 0.0
                 for m in members:
                     m.processor_results[proc.id].gain_db = float(group_gain)
 
@@ -234,11 +307,128 @@ class Pipeline:
                 ]
                 anchor_offset = max(fader_offsets) if fader_offsets else 0.0
 
+            # Store anchor offset for GUI-side recomputation
+            session.config[f"_anchor_offset_{proc.id}"] = anchor_offset
+
             if anchor_offset != 0.0:
                 for track in valid:
                     pr = track.processor_results.get(proc.id)
                     if pr:
                         pr.data["fader_offset"] = pr.data.get("fader_offset", 0.0) - anchor_offset
+
+    # ------------------------------------------------------------------
+    # Prepare (apply processors, write processed files)
+    # ------------------------------------------------------------------
+
+    def prepare(
+        self,
+        session: SessionContext,
+        output_dir: str,
+        progress_cb: Callable[[int, int, str], None] | None = None,
+    ) -> SessionContext:
+        """Apply enabled processors and write processed files.
+
+        Wipes *output_dir* before writing so stale files are never left
+        behind.  Respects ``track.processor_skip`` for per-track
+        exclusions.
+
+        Parameters
+        ----------
+        session : SessionContext
+        output_dir : str
+            Target directory (wiped and recreated).
+        progress_cb : callable(current, total, message) or None
+            Optional progress reporter.
+
+        Returns
+        -------
+        SessionContext
+            The same session with ``processed_filepath`` /
+            ``applied_processors`` updated per track and
+            ``prepare_state`` set to ``"ready"``.
+        """
+        # Clean output dir (best-effort: skip locked files on Windows)
+        if os.path.isdir(output_dir):
+            for entry in os.listdir(output_dir):
+                fp = os.path.join(output_dir, entry)
+                try:
+                    if os.path.isfile(fp):
+                        os.unlink(fp)
+                except OSError:
+                    pass  # locked file — will be overwritten in place
+        os.makedirs(output_dir, exist_ok=True)
+
+        ok_tracks = [t for t in session.tracks if t.status == "OK"]
+        total = len(ok_tracks)
+        prepare_errors: list[tuple[str, str]] = []  # (filename, error)
+
+        for step, track in enumerate(ok_tracks):
+            # Determine which processors to apply for this track
+            applicable = [
+                p for p in self.audio_processors
+                if p.id not in track.processor_skip
+            ]
+
+            # Check each processor has a valid result
+            applicable = [
+                p for p in applicable
+                if p.id in track.processor_results
+                and track.processor_results[p.id].error is None
+            ]
+
+            if not applicable:
+                # Nothing to apply — clear any previous processed state
+                track.processed_filepath = None
+                track.applied_processors = []
+                if progress_cb:
+                    progress_cb(step + 1, total,
+                                f"Skipped {track.filename} (no processors)")
+                continue
+
+            if progress_cb:
+                progress_cb(step, total, f"Preparing {track.filename}")
+
+            try:
+                # Deep-copy audio data so the session's copy stays clean
+                audio = track.audio_data.copy()
+
+                # Chain processors in priority order
+                for proc in applicable:
+                    pr = track.processor_results[proc.id]
+                    # Temporarily swap audio_data for apply()
+                    orig_audio = track.audio_data
+                    track.audio_data = audio
+                    audio = proc.apply(track, pr)
+                    track.audio_data = orig_audio
+
+                # Write processed file
+                dst = os.path.join(output_dir, track.filename)
+                # Temporarily swap for write_track
+                orig_audio = track.audio_data
+                track.audio_data = audio
+                write_track(track, dst)
+                track.audio_data = orig_audio
+
+                track.processed_filepath = dst
+                track.applied_processors = [p.id for p in applicable]
+
+            except Exception as e:
+                track.processed_filepath = None
+                track.applied_processors = []
+                prepare_errors.append((track.filename, str(e)))
+                self._emit("prepare.error", filename=track.filename,
+                           error=str(e))
+
+            if progress_cb:
+                progress_cb(step + 1, total,
+                            f"Prepared {track.filename}")
+
+            self._emit("track.prepared", filename=track.filename,
+                       index=step, total=total)
+
+        session.config["_prepare_errors"] = prepare_errors
+        session.prepare_state = "ready"
+        return session
 
     # ------------------------------------------------------------------
     # Phase 3: Execute (apply gains, write files)
@@ -309,6 +499,35 @@ class Pipeline:
 # Helpers
 # --------------------------------------------------------------------------
 
+def _load_one_track(
+    source_dir: str,
+    filename: str,
+    idx: int,
+    total: int,
+    event_bus: EventBus | None,
+) -> TrackContext:
+    """Load a single WAV file (used by thread pool in load_session)."""
+    filepath = os.path.join(source_dir, filename)
+    if event_bus:
+        event_bus.emit("track.load", filename=filename,
+                       index=idx, total=total)
+    try:
+        return load_track(filepath)
+    except Exception as e:
+        return TrackContext(
+            filename=filename,
+            filepath=filepath,
+            audio_data=None,
+            samplerate=0,
+            channels=0,
+            total_samples=0,
+            bitdepth="",
+            subtype="",
+            duration_sec=0.0,
+            status=f"Error: {e}",
+        )
+
+
 def load_session(
     source_dir: str,
     config: dict[str, Any],
@@ -316,70 +535,44 @@ def load_session(
 ) -> SessionContext:
     """
     Load all WAV files from source_dir into a SessionContext.
+    Files are loaded in parallel using a thread pool.
     Handles group assignment.
     """
     files = sorted(
-        [f for f in os.listdir(source_dir) if f.lower().endswith('.wav')],
+        [f for f in os.listdir(source_dir) if f.lower().endswith(AUDIO_EXTENSIONS)],
         key=protools_sort_key,
     )
 
-    tracks: list[TrackContext] = []
-    for idx, filename in enumerate(files):
-        filepath = os.path.join(source_dir, filename)
-        if event_bus:
-            event_bus.emit("track.load", filename=filename,
-                           index=idx, total=len(files))
-        try:
-            track = load_track(filepath)
-            tracks.append(track)
-        except Exception as e:
-            tracks.append(TrackContext(
-                filename=filename,
-                filepath=filepath,
-                audio_data=None,
-                samplerate=0,
-                channels=0,
-                total_samples=0,
-                bitdepth="",
-                subtype="",
-                duration_sec=0.0,
-                status=f"Error: {e}",
-            ))
+    total = len(files)
+    workers = min(os.cpu_count() or 4, 8, total) if total else 1
+    tracks: list[TrackContext] = [None] * total  # type: ignore[list-item]
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(
+                _load_one_track, source_dir, filename, idx, total, event_bus
+            ): idx
+            for idx, filename in enumerate(files)
+        }
+        for future in as_completed(futures):
+            idx = futures[future]
+            tracks[idx] = future.result()
 
     session = SessionContext(tracks=tracks, config=dict(config))
 
     # Group assignment
     group_args = config.get("group", [])
-    group_overlap_policy = config.get("group_overlap", "warn")
     group_specs = parse_group_specs(group_args)
 
     if group_specs:
         filenames = [t.filename for t in tracks]
-        assignments, overlaps = assign_groups_to_files_with_policy(
-            filenames, group_specs, overlap_policy=group_overlap_policy,
-        )
+        assignments, warnings = assign_groups(filenames, group_specs)
         session.groups = assignments
-        session.group_overlaps = overlaps
 
         for track in tracks:
             track.group = assignments.get(track.filename)
 
-        # Generate overlap warnings
-        if overlaps:
-            if group_overlap_policy == "merge":
-                for fname, matched in overlaps:
-                    root_gid = assignments.get(fname)
-                    matched_str = ", ".join(matched)
-                    session.warnings.append(
-                        f"Grouping overlap: {fname} matched multiple groups "
-                        f"({matched_str}); merged into {root_gid}"
-                    )
-            else:
-                for fname, keep_gid, drop_gid in overlaps:
-                    session.warnings.append(
-                        f"Grouping overlap: {fname} matched multiple groups "
-                        f"({keep_gid}, {drop_gid}); using {keep_gid}"
-                    )
+        session.warnings.extend(warnings)
 
     return session
 

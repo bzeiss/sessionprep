@@ -5,7 +5,7 @@ import numpy as np
 from ..config import ParamSpec
 from ..detector import TrackDetector
 from ..models import DetectorResult, IssueLocation, Severity, TrackContext
-from ..audio import get_stereo_rms, is_silent, linear_to_db
+from ..audio import dbfs_offset, get_stereo_rms, is_silent, linear_to_db
 
 
 class OneSidedSilenceDetector(TrackDetector):
@@ -15,7 +15,7 @@ class OneSidedSilenceDetector(TrackDetector):
 
     @classmethod
     def config_params(cls) -> list[ParamSpec]:
-        return [
+        return super().config_params() + [
             ParamSpec(
                 key="one_sided_silence_db", type=(int, float), default=-80.0,
                 max=0.0,
@@ -43,7 +43,9 @@ class OneSidedSilenceDetector(TrackDetector):
         )
 
     def configure(self, config):
+        super().configure(config)
         self.threshold_db = config.get("one_sided_silence_db", -80.0)
+        self._db_offset = dbfs_offset(config)
 
     def analyze(self, track: TrackContext) -> DetectorResult:
         if is_silent(track):
@@ -93,8 +95,11 @@ class OneSidedSilenceDetector(TrackDetector):
         }
 
         if one_sided:
+            off = self._db_offset
+
             def fmt_db(x):
-                return f"{float(x):.1f}" if np.isfinite(x) else "-inf"
+                v = float(x) + off
+                return f"{v:.1f}" if np.isfinite(x) else "-inf"
 
             if side:
                 summary = (

@@ -53,6 +53,7 @@ class ParamSpec:
     choices: list | None = None      # allowed string values
     item_type: type | None = None    # element type for list fields
     nullable: bool = False           # True if None is valid
+    presentation_only: bool = False  # True → changing this key never requires re-analysis
 
 
 def default_config() -> dict[str, Any]:
@@ -81,7 +82,6 @@ def default_config() -> dict[str, Any]:
         "force_transient": [],
         "force_sustained": [],
         "group": [],
-        "group_overlap": "warn",
         "anchor": None,
         "normalize_faders": False,
         "execute": False,
@@ -178,30 +178,74 @@ ANALYSIS_PARAMS: list[ParamSpec] = [
         key="rms_anchor", type=str, default="percentile",
         choices=["percentile", "max"],
         label="RMS anchor strategy",
-        description="Which statistic to use as the representative RMS level.",
+        description=(
+            "How to pick the representative RMS level from the distribution of "
+            "momentary RMS windows. 'percentile' (default) takes the Nth "
+            "percentile of gated windows — robust to outliers like breath pops "
+            "or bleed spikes, tracks the chorus-level loudness that drives your "
+            "insert processing. 'max' takes the single loudest window — useful "
+            "for very short files (single hits) but fragile for longer material "
+            "where one anomalous moment can skew the gain decision."
+        ),
     ),
     ParamSpec(
         key="rms_percentile", type=(int, float), default=95.0,
         min=0.0, max=100.0, min_exclusive=True, max_exclusive=True,
         label="RMS percentile",
-        description="Percentile of active RMS windows (used when anchor = percentile).",
+        description=(
+            "Which percentile of the gated RMS window distribution to use as "
+            "the anchor (only applies when anchor = percentile). P95 means "
+            "95% of active windows are at or below the anchor — in practice, "
+            "this represents 'what the loud sections typically sound like'. "
+            "Lower values (e.g. 90) produce a lower anchor and more aggressive "
+            "gain. Higher values approach the max window."
+        ),
     ),
     ParamSpec(
         key="gate_relative_db", type=(int, float), default=40.0, min=0.0,
         label="Relative gate (dB)",
-        description="RMS windows quieter than (peak − gate) are excluded.",
+        description=(
+            "RMS windows more than this many dB below the loudest window are "
+            "excluded before computing the anchor and tail statistics. This is "
+            "relative to the loudest window, not an absolute dBFS value. "
+            "Critical for sparse tracks (FX hits, vocal doubles) where most "
+            "windows are near-silent — without gating, the percentile anchor "
+            "would be dominated by silence."
+        ),
+    ),
+    ParamSpec(
+        key="dbfs_convention", type=str, default="standard",
+        choices=["standard", "aes17"],
+        label="dBFS convention",
+        description=(
+            "Standard: 0 dBFS = full-scale digital. "
+            "AES17: 0 dBFS = RMS of a full-scale sine (+3.01 dB offset)."
+        ),
     ),
     # -- Global processing defaults ------------------------------------------
-    ParamSpec(
-        key="group_overlap", type=str, default="warn",
-        choices=["warn", "error", "merge"],
-        label="Group overlap handling",
-        description="Default behaviour when a track matches multiple groups.",
-    ),
     ParamSpec(
         key="normalize_faders", type=bool, default=False,
         label="Normalize fader offsets",
         description="Shift fader offsets so the smallest is 0 dB.",
+    ),
+]
+
+
+# ---------------------------------------------------------------------------
+# Presentation parameters  (config-preset-scoped, not analysis-affecting)
+# ---------------------------------------------------------------------------
+
+PRESENTATION_PARAMS: list[ParamSpec] = [
+    ParamSpec(
+        key="show_clean_detectors", type=bool, default=False,
+        presentation_only=True,
+        label="Show clean detector results",
+        description=(
+            "When enabled, detectors that found no issues (OK) are "
+            "shown in the file detail view and summary. Disable to "
+            "reduce clutter and focus on problems, warnings, and "
+            "informational findings only."
+        ),
     ),
 ]
 
@@ -313,11 +357,15 @@ def _all_param_specs() -> list[ParamSpec]:
     from .detectors import default_detectors
     from .processors import default_processors
 
+    from .daw_processors import default_daw_processors
+
     specs = list(ANALYSIS_PARAMS)
     for det in default_detectors():
         specs.extend(det.config_params())
     for proc in default_processors():
         specs.extend(proc.config_params())
+    for dp in default_daw_processors():
+        specs.extend(dp.config_params())
     return specs
 
 
@@ -367,11 +415,13 @@ def build_structured_defaults() -> dict[str, Any]:
     """
     from .detectors import default_detectors
     from .processors import default_processors
+    from .daw_processors import default_daw_processors
 
     structured: dict[str, Any] = {
         "analysis": {p.key: p.default for p in ANALYSIS_PARAMS},
         "detectors": {},
         "processors": {},
+        "daw_processors": {},
     }
 
     for det in default_detectors():
@@ -384,7 +434,43 @@ def build_structured_defaults() -> dict[str, Any]:
         if params:
             structured["processors"][proc.id] = {p.key: p.default for p in params}
 
+    for dp in default_daw_processors():
+        params = dp.config_params()
+        if params:
+            structured["daw_processors"][dp.id] = {p.key: p.default for p in params}
+
     return structured
+
+
+def strip_presentation_keys(structured: dict[str, Any]) -> dict[str, Any]:
+    """Return a deep copy of *structured* with all ``presentation_only`` keys removed.
+
+    Used to compare configs for analysis-affecting changes only.
+    Presentation-only keys (e.g. ``report_as``) are tagged via
+    :attr:`ParamSpec.presentation_only`.
+    """
+    import copy
+    from .detectors import default_detectors
+    from .processors import default_processors
+
+    # Collect presentation-only keys per (section_type, component_id)
+    pres_keys: dict[tuple[str, str], set[str]] = {}
+    for det in default_detectors():
+        keys = {p.key for p in det.config_params() if p.presentation_only}
+        if keys:
+            pres_keys[("detectors", det.id)] = keys
+    for proc in default_processors():
+        keys = {p.key for p in proc.config_params() if p.presentation_only}
+        if keys:
+            pres_keys[("processors", proc.id)] = keys
+
+    stripped = copy.deepcopy(structured)
+    for (section_type, comp_id), keys in pres_keys.items():
+        section = stripped.get(section_type, {}).get(comp_id)
+        if isinstance(section, dict):
+            for k in keys:
+                section.pop(k, None)
+    return stripped
 
 
 def flatten_structured_config(structured: dict[str, Any]) -> dict[str, Any]:
@@ -401,6 +487,9 @@ def flatten_structured_config(structured: dict[str, Any]) -> dict[str, Any]:
     for section in structured.get("processors", {}).values():
         if isinstance(section, dict):
             flat.update(section)
+    for section in structured.get("daw_processors", {}).values():
+        if isinstance(section, dict):
+            flat.update(section)
     return flat
 
 
@@ -414,6 +503,7 @@ def validate_structured_config(
     """
     from .detectors import default_detectors
     from .processors import default_processors
+    from .daw_processors import default_daw_processors
 
     errors: list[ConfigFieldError] = []
 
@@ -444,6 +534,18 @@ def validate_structured_config(
         for err in validate_param_values(proc.config_params(), section):
             errors.append(ConfigFieldError(
                 f"processors.{proc_id}.{err.key}", err.value, err.message,
+            ))
+
+    # DAW Processor sections
+    dp_map = {dp.id: dp for dp in default_daw_processors()}
+    dp_sections = structured.get("daw_processors", {})
+    for dp_id, section in dp_sections.items():
+        dp = dp_map.get(dp_id)
+        if dp is None or not isinstance(section, dict):
+            continue
+        for err in validate_param_values(dp.config_params(), section):
+            errors.append(ConfigFieldError(
+                f"daw_processors.{dp_id}.{err.key}", err.value, err.message,
             ))
 
     return errors

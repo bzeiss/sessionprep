@@ -5,13 +5,22 @@ from typing import Any
 
 import numpy as np
 import soundfile as sf
+from scipy.signal import stft as scipy_stft
 
 from .models import TrackContext
+from .chunks import chunk_ids as _chunk_ids
+
+
+# Supported audio file extensions (lowercase, with leading dot)
+AUDIO_EXTENSIONS = ('.wav', '.aif', '.aiff')
 
 
 # ---------------------------------------------------------------------------
 # Conversion helpers
 # ---------------------------------------------------------------------------
+
+AES17_OFFSET = 3.0103  # dB offset: 20 * log10(sqrt(2))
+
 
 def db_to_linear(db: float) -> float:
     return 10 ** (db / 20.0)
@@ -21,6 +30,14 @@ def linear_to_db(linear: float) -> float:
     if linear <= 0:
         return float(-np.inf)
     return float(20 * np.log10(linear))
+
+
+def dbfs_offset(config: dict) -> float:
+    """Return the dBFS offset for the configured convention.
+
+    Standard → 0.0; AES17 → +3.0103 dB.
+    """
+    return AES17_OFFSET if config.get("dbfs_convention") == "aes17" else 0.0
 
 
 def format_duration(samples: int, samplerate: int) -> str:
@@ -47,10 +64,14 @@ _SUBTYPE_MAP = {
 
 
 def load_track(filepath: str) -> TrackContext:
-    """Read a WAV file and return a fully populated TrackContext."""
+    """Read an audio file (WAV/AIFF) and return a fully populated TrackContext."""
     info = sf.info(filepath)
     data, samplerate = sf.read(filepath, dtype='float64')
     channels = 1 if data.ndim == 1 else data.shape[1]
+    try:
+        cids = _chunk_ids(filepath)
+    except (ValueError, OSError):
+        cids = []
     return TrackContext(
         filename=os.path.basename(filepath),
         filepath=filepath,
@@ -61,6 +82,7 @@ def load_track(filepath: str) -> TrackContext:
         bitdepth=_SUBTYPE_MAP.get(info.subtype, info.subtype),
         subtype=info.subtype,
         duration_sec=info.duration,
+        chunk_ids=cids,
     )
 
 
@@ -297,42 +319,263 @@ def detect_clipping_ranges(
     return len(ranges), ranges[:int(max_ranges)]
 
 
-def subsonic_ratio_db(
-    data: np.ndarray,
+def subsonic_stft_analysis(
+    signal: np.ndarray,
     samplerate: int,
     cutoff_hz: float,
-    max_samples: int = 200000,
-) -> float:
-    """FFT-based subsonic energy ratio (dB relative to full-band power)."""
-    if data.size == 0 or samplerate <= 0:
-        return float(-np.inf)
+    *,
+    window_ms: int = 500,
+    hop_ms: int | None = None,
+    abs_gate_db: float = -40.0,
+    silence_rms: float = 1e-7,
+) -> tuple[float, list[tuple[int, int, float]]]:
+    """Single-pass STFT subsonic analysis on a 1-D signal.
 
-    if data.ndim > 1:
-        mono = np.mean(data.astype(np.float64), axis=1)
+    Uses :func:`scipy.signal.stft` to compute the short-time Fourier transform
+    in one vectorised call, then derives both per-window and whole-file
+    subsonic-to-total energy ratios from the resulting power spectrum.
+
+    Parameters
+    ----------
+    signal : 1-D ndarray
+        Single-channel audio samples.
+    samplerate : int
+        Sample rate in Hz.
+    cutoff_hz : float
+        Frequency below which energy is considered subsonic.
+    window_ms : int
+        Analysis window length in milliseconds.
+    hop_ms : int or None
+        Hop between windows in milliseconds.  Defaults to *window_ms* (no
+        overlap).
+    abs_gate_db : float
+        Absolute subsonic power gate.  Windows where the estimated subsonic
+        level (``rms_db + ratio_db``) is below this are set to ``-inf``.
+    silence_rms : float
+        RMS threshold below which a window is considered silent.
+
+    Returns
+    -------
+    whole_file_ratio_db : float
+        Subsonic-to-total energy ratio for the entire signal (dB).
+    per_window_ratios : list of (sample_start, sample_end, ratio_db)
+        Per-window subsonic ratios.  Silent or gated windows have ``-inf``.
+    """
+    _NEG_INF = float(-np.inf)
+
+    if signal.ndim != 1 or signal.size < 8 or samplerate <= 0:
+        return _NEG_INF, []
+
+    original_size = signal.size
+    nperseg = max(8, int(samplerate * window_ms / 1000))
+    hop_samples = max(1, int(samplerate * ((hop_ms or window_ms)) / 1000))
+    noverlap = nperseg - hop_samples
+
+    # Pad signal so scipy.signal.stft (boundary=None) includes the tail.
+    # Without padding, partial last windows are dropped.
+    remainder = (original_size - nperseg) % hop_samples if original_size > nperseg else original_size
+    if remainder != 0:
+        pad_len = hop_samples - remainder
+        padded = np.pad(signal, (0, pad_len)).astype(np.float64)
     else:
-        mono = data.astype(np.float64)
+        padded = signal.astype(np.float64)
 
-    if mono.size == 0:
-        return float(-np.inf)
+    # Power-of-2 FFT size for speed (does not change window shape or overlap)
+    nfft = 1 << (nperseg - 1).bit_length()
 
-    step = max(1, int(mono.size // max_samples))
-    x = mono[::step]
-    if x.size < 8:
-        return float(-np.inf)
+    # --- Vectorised per-window RMS (for silence + absolute power gates) ---
+    # Compute RMS on hop-aligned non-overlapping chunks of the original signal
+    # to match the STFT frame positions.
+    n_frames = (padded.size - noverlap) // hop_samples
+    # Build RMS from hop-aligned windows (same start positions as STFT frames)
+    rms_arr = np.empty(n_frames, dtype=np.float64)
+    for i in range(n_frames):
+        s = i * hop_samples
+        e = min(s + nperseg, original_size)
+        if e <= s:
+            rms_arr[i] = 0.0
+        else:
+            chunk = padded[s:e]
+            rms_arr[i] = float(np.sqrt(np.mean(chunk ** 2)))
 
-    x = x - float(np.mean(x))
-    w = np.hanning(x.size)
-    X = np.fft.rfft(x * w)
-    p = np.abs(X) ** 2
-    freqs = np.fft.rfftfreq(x.size, d=float(step) / float(samplerate))
+    # --- STFT ---
+    _f, _t, Zxx = scipy_stft(
+        padded, fs=samplerate, nperseg=nperseg, nfft=nfft,
+        noverlap=noverlap, window='hann', boundary=None,
+    )
+    power = np.abs(Zxx) ** 2  # (n_freq_bins, n_frames)
+    actual_frames = power.shape[1]
 
-    non_dc = freqs > 0.0
-    total = float(np.sum(p[non_dc]))
-    if total <= 0.0:
-        return float(-np.inf)
+    # Trim RMS array if frame counts diverge (shouldn't happen, but be safe)
+    if rms_arr.size > actual_frames:
+        rms_arr = rms_arr[:actual_frames]
+    elif rms_arr.size < actual_frames:
+        rms_arr = np.pad(rms_arr, (0, actual_frames - rms_arr.size))
 
-    band = float(np.sum(p[(freqs > 0.0) & (freqs <= float(cutoff_hz))]))
-    if band <= 0.0:
-        return float(-np.inf)
+    # --- Frequency bin indices (integer slicing, computed once) ---
+    dc_bin = 1  # skip DC at index 0
+    cutoff_bin = min(
+        int(np.floor(cutoff_hz * nfft / samplerate)) + 1,
+        power.shape[0],
+    )
 
-    return float(10.0 * np.log10(band / total))
+    # --- Vectorised band / total power ---
+    band = np.sum(power[dc_bin:cutoff_bin, :], axis=0)   # (n_frames,)
+    total = np.sum(power[dc_bin:, :], axis=0)             # (n_frames,)
+
+    # Per-window ratio
+    with np.errstate(divide='ignore', invalid='ignore'):
+        ratios = np.where(
+            (band > 0) & (total > 0),
+            10.0 * np.log10(band / total),
+            -np.inf,
+        )
+
+    # --- Vectorised gates ---
+    # Silence gate
+    ratios[rms_arr < silence_rms] = -np.inf
+
+    # Absolute power gate: subsonic_abs = rms_db + ratio
+    with np.errstate(divide='ignore', invalid='ignore'):
+        rms_db = np.where(rms_arr > 0, 20.0 * np.log10(rms_arr), -200.0)
+    abs_mask = np.isfinite(ratios) & ((rms_db + ratios) < abs_gate_db)
+    ratios[abs_mask] = -np.inf
+
+    # --- Whole-file ratio (aggregated from per-frame power) ---
+    valid = rms_arr >= silence_rms
+    total_band = float(np.sum(band[valid]))
+    total_all = float(np.sum(total[valid]))
+    if total_band > 0 and total_all > 0:
+        whole_ratio = float(10.0 * np.log10(total_band / total_all))
+    else:
+        whole_ratio = _NEG_INF
+
+    # --- Build result tuples ---
+    results: list[tuple[int, int, float]] = []
+    for i in range(actual_frames):
+        s = i * hop_samples
+        e = min(s + nperseg, original_size) - 1
+        results.append((s, e, float(ratios[i])))
+
+    return whole_ratio, results
+
+
+# ---------------------------------------------------------------------------
+# Windowed stereo correlation + mono folddown
+# ---------------------------------------------------------------------------
+
+def windowed_stereo_correlation(
+    left: np.ndarray,
+    right: np.ndarray,
+    samplerate: int,
+    window_ms: int = 500,
+    silence_rms: float = 1e-7,
+) -> tuple[
+    float, float,
+    list[tuple[int, int, float, float]],
+]:
+    """Windowed Pearson correlation and mono folddown loss for stereo L/R.
+
+    Parameters
+    ----------
+    left, right : 1-D float arrays
+        Full-resolution left and right channel samples.
+    samplerate : int
+        Sample rate in Hz.
+    window_ms : int
+        Analysis window length in milliseconds.
+    silence_rms : float
+        RMS threshold below which a window is considered silent.
+
+    Returns
+    -------
+    whole_corr : float
+        Whole-file Pearson correlation (NaN if silent/invalid).
+    whole_mono_loss_db : float
+        Whole-file mono folddown loss in dB (0.0 if no loss, inf if total
+        cancellation).
+    per_window : list of (sample_start, sample_end, corr, mono_loss_db)
+        Per-window results.  Silent windows have (NaN, NaN).
+    """
+    _NAN = float('nan')
+
+    if (left.ndim != 1 or right.ndim != 1
+            or left.size < 8 or left.size != right.size
+            or samplerate <= 0):
+        return _NAN, 0.0, []
+
+    n = left.size
+    win_samples = max(8, int(samplerate * window_ms / 1000))
+    n_win = (n + win_samples - 1) // win_samples
+
+    # Pad to exact multiple of win_samples
+    padded_len = n_win * win_samples
+    if padded_len != n:
+        l = np.pad(left.astype(np.float64), (0, padded_len - n))
+        r = np.pad(right.astype(np.float64), (0, padded_len - n))
+    else:
+        l = left.astype(np.float64)
+        r = right.astype(np.float64)
+
+    # Reshape to (n_win, win_samples)
+    L = l.reshape(n_win, win_samples)
+    R = r.reshape(n_win, win_samples)
+
+    # Per-window DC removal
+    L = L - L.mean(axis=1, keepdims=True)
+    R = R - R.mean(axis=1, keepdims=True)
+
+    # Per-window dot products (vectorized)
+    dot_ll = np.sum(L * L, axis=1)
+    dot_rr = np.sum(R * R, axis=1)
+    dot_lr = np.sum(L * R, axis=1)
+
+    # Per-window RMS for silence gating
+    rms_l = np.sqrt(dot_ll / win_samples)
+    rms_r = np.sqrt(dot_rr / win_samples)
+    active = np.maximum(rms_l, rms_r) >= silence_rms
+
+    # --- Per-window correlation ---
+    denom = np.sqrt(dot_ll * dot_rr)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        corr = np.where(denom > 0, dot_lr / denom, 0.0)
+    corr[~active] = _NAN
+
+    # --- Per-window mono folddown loss ---
+    # stereo_power = (dot_ll + dot_rr) / 2
+    # mono_power   = (dot_ll + 2*dot_lr + dot_rr) / 4
+    stereo_p = (dot_ll + dot_rr) / 2.0
+    mono_p = (dot_ll + 2.0 * dot_lr + dot_rr) / 4.0
+    with np.errstate(divide='ignore', invalid='ignore'):
+        mono_loss = np.where(
+            (mono_p > 0) & (stereo_p > 0),
+            10.0 * np.log10(stereo_p / mono_p),
+            np.where(stereo_p > 0, np.inf, 0.0),
+        )
+    mono_loss[~active] = _NAN
+
+    # --- Whole-file aggregation (from cumulative dot products) ---
+    sum_ll = float(np.sum(dot_ll[active]))
+    sum_rr = float(np.sum(dot_rr[active]))
+    sum_lr = float(np.sum(dot_lr[active]))
+
+    whole_denom = np.sqrt(sum_ll * sum_rr)
+    whole_corr = float(sum_lr / whole_denom) if whole_denom > 0 else _NAN
+
+    whole_stereo_p = (sum_ll + sum_rr) / 2.0
+    whole_mono_p = (sum_ll + 2.0 * sum_lr + sum_rr) / 4.0
+    if whole_mono_p > 0 and whole_stereo_p > 0:
+        whole_mono_loss = float(10.0 * np.log10(whole_stereo_p / whole_mono_p))
+    elif whole_stereo_p > 0:
+        whole_mono_loss = float('inf')
+    else:
+        whole_mono_loss = 0.0
+
+    # --- Build result tuples ---
+    results: list[tuple[int, int, float, float]] = []
+    for i in range(n_win):
+        s = i * win_samples
+        e = min(s + win_samples, n) - 1
+        results.append((s, e, float(corr[i]), float(mono_loss[i])))
+
+    return whole_corr, whole_mono_loss, results

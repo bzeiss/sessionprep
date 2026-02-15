@@ -40,8 +40,15 @@ class PlaybackController(QObject):
     def play_start_sample(self) -> int:
         return self._play_start_sample
 
-    def play(self, audio_data, samplerate: int, start_sample: int = 0):
-        """Start playback from the given sample position."""
+    def play(self, audio_data, samplerate: int, start_sample: int = 0,
+             mono: bool = False):
+        """Start playback from the given sample position.
+
+        Parameters
+        ----------
+        mono : bool
+            When True and audio is stereo, fold down to mono via (L+R)/2.
+        """
         self.stop()
 
         if audio_data is None or audio_data.size == 0:
@@ -51,6 +58,10 @@ class PlaybackController(QObject):
         audio = audio_data
         if audio.ndim == 1:
             audio = audio.reshape(-1, 1)
+
+        # Mono folddown: (L+R)/2 → single channel output
+        if mono and audio.shape[1] == 2:
+            audio = (audio[:, 0:1] + audio[:, 1:2]) / 2.0
 
         if start_sample >= audio.shape[0]:
             start_sample = 0

@@ -1,11 +1,17 @@
 import os
 import sys
 import argparse
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
-from rich import box
+
+try:
+    from rich.console import Console
+    from rich.table import Table
+    from rich.panel import Panel
+    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
+    from rich import box
+except ImportError:
+    print("Error: The 'rich' library is required for the CLI but not installed.", file=sys.stderr)
+    print("Please install it with: pip install sessionprep[cli] (or uv sync --extra cli)", file=sys.stderr)
+    sys.exit(1)
 
 from sessionpreplib import __version__
 from sessionpreplib.pipeline import Pipeline, load_session
@@ -15,6 +21,7 @@ from sessionpreplib.config import default_config, merge_configs
 from sessionpreplib.rendering import build_diagnostic_summary, render_diagnostic_summary_text
 from sessionpreplib.reports import generate_report, save_json, build_warnings
 from sessionpreplib.utils import protools_sort_key
+from sessionpreplib.audio import AUDIO_EXTENSIONS
 from sessionpreplib.events import EventBus
 
 console = Console()
@@ -36,7 +43,7 @@ def parse_arguments():
                         version=f"sessionprep {__version__}")
     
     parser.add_argument("directory", type=str, 
-                        help="Source directory containing .wav tracks")
+                        help="Source directory containing audio tracks (.wav, .aif, .aiff)")
     
     # Targets
     parser.add_argument("--target_rms", type=float, default=-18.0, 
@@ -103,10 +110,10 @@ def parse_arguments():
              "glob patterns ('Synth_*.wav'), or exact match ('Bass_01.wav$')")
 
     parser.add_argument("--group", action="append", default=[],
-                        help="Group tracks so members get identical gain. Provide a comma-separated list and/or glob patterns. Repeat --group for multiple groups.")
-
-    parser.add_argument("--group_overlap", type=str, choices=["warn", "error", "merge"], default="warn",
-                        help="What to do if a file matches multiple --group specs: warn (keep first match), error (abort), merge (merge matching groups)")
+                        help="Named gain-linked group. Syntax: Name:pattern1,pattern2  "
+                             "(e.g. --group Kick:kick,kick_sub). Patterns support "
+                             "substring, glob (*/?), or exact match (suffix $). "
+                             "First match wins; overlaps produce a warning.")
 
     # Output Configuration
     parser.add_argument("--overwrite", action="store_true",
@@ -154,7 +161,6 @@ def print_diagnostic_summary(summary):
     attention = summary.get("attention") or []
     information = summary.get("information") or []
     clean = summary.get("clean") or []
-    normalization_hints = summary.get("normalization_hints") or []
     clean_count = int(summary.get("clean_count", 0) or 0)
     total_ok = int(summary.get("total_ok", 0) or 0)
 
@@ -200,13 +206,6 @@ def print_diagnostic_summary(summary):
     if not print_groups(clean, "green", compact=True):
         console.print("  [green]-[/] None")
 
-    console.print("")
-    console.print("[bold cyan]\U0001f50e Normalization hints[/]")
-    if normalization_hints:
-        for hint in normalization_hints:
-            console.print(f"  [cyan]-[/] {hint}")
-    else:
-        console.print("  [green]-[/] None")
 
 
 
@@ -272,7 +271,6 @@ def process_files():
         "force_transient": args.force_transient,
         "force_sustained": args.force_sustained,
         "group": args.group,
-        "group_overlap": args.group_overlap,
         "anchor": args.anchor,
         "normalize_faders": args.normalize_faders,
         "execute": args.execute,
@@ -317,11 +315,11 @@ def process_files():
     ) as progress:
         # Count files first for the progress bar
         wav_files = sorted(
-            [f for f in os.listdir(source_dir) if f.lower().endswith('.wav')],
+            [f for f in os.listdir(source_dir) if f.lower().endswith(AUDIO_EXTENSIONS)],
             key=protools_sort_key,
         )
         if not wav_files:
-            console.print(f"[red]No .wav files found in {source_dir}[/]")
+            console.print(f"[red]No audio files found in {source_dir}[/]")
             return
 
         task_id = progress.add_task("[cyan]Loading & analyzing tracks...", total=len(wav_files))
@@ -347,6 +345,39 @@ def process_files():
 
     # --- SORT by Pro Tools order ---
     session.tracks.sort(key=lambda t: protools_sort_key(t.filename))
+
+    # --- PRINT GROUP ASSIGNMENTS (if any) ---
+    if session.groups:
+        grouped: dict[str, list] = {}
+        for t in session.tracks:
+            if t.group is not None:
+                grouped.setdefault(t.group, []).append(t)
+
+        console.print("")
+        group_table = Table(box=box.ROUNDED, title="Gain-Linked Groups", title_justify="left")
+        group_table.add_column("Group", style="bold cyan")
+        group_table.add_column("Gain", justify="right", style="bold green")
+        group_table.add_column("Members", style="dim")
+
+        def _get_primary_pr(track):
+            if track.processor_results:
+                return next(iter(track.processor_results.values()))
+            return None
+
+        for gname in sorted(grouped.keys()):
+            members = grouped[gname]
+            pr = _get_primary_pr(members[0])
+            gain_str = f"{pr.gain_db:+.1f} dB" if pr else "—"
+            member_list = ", ".join(m.filename for m in members)
+            group_table.add_row(gname, gain_str, member_list)
+
+        console.print(group_table)
+
+        for w in session.warnings:
+            if str(w).startswith("Group overlap:"):
+                console.print(f"  [yellow]⚠ {w}[/]")
+
+        console.print("")
 
     # --- BUILD DIAGNOSTIC SUMMARY ---
     diagnostic_summary = build_diagnostic_summary(session)

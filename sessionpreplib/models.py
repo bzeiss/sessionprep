@@ -42,6 +42,8 @@ class IssueLocation:
     severity: Severity
     label: str
     description: str
+    freq_min_hz: float | None = None
+    freq_max_hz: float | None = None
 
 
 @dataclass
@@ -67,19 +69,27 @@ class ProcessorResult:
 
 
 @dataclass
-class DawAction:
-    action_type: str
+class DawCommand:
+    """A single operation to perform against a DAW.
+
+    Plain data object — the DawProcessor that created it is responsible
+    for execution.  undo_params captures the state needed to reverse
+    the operation (e.g. the previous fader value).
+    """
+    command_type: str
     target: str
-    params: dict[str, Any]
-    source: str
-    priority: int = 0
+    params: dict[str, Any] = field(default_factory=dict)
+    source: str = ""
+    undo_params: dict[str, Any] | None = None
 
 
 @dataclass
-class DawActionResult:
-    action: DawAction
+class DawCommandResult:
+    """Outcome of executing a single DawCommand."""
+    command: DawCommand
     success: bool
     error: str | None = None
+    timestamp: datetime = field(default_factory=datetime.now)
 
 
 @dataclass
@@ -97,6 +107,12 @@ class TrackContext:
     detector_results: dict[str, DetectorResult] = field(default_factory=dict)
     processor_results: dict[str, ProcessorResult] = field(default_factory=dict)
     group: str | None = None
+    classification_override: str | None = None
+    rms_anchor_override: str | None = None
+    chunk_ids: list[str] = field(default_factory=list)
+    processed_filepath: str | None = None
+    applied_processors: list[str] = field(default_factory=list)
+    processor_skip: set[str] = field(default_factory=set)
     _cache: dict[str, Any] = field(default_factory=dict, repr=False)
 
 
@@ -105,14 +121,18 @@ class SessionContext:
     tracks: list[TrackContext]
     config: dict[str, Any]
     groups: dict[str, str] = field(default_factory=dict)
-    group_overlaps: list = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    detectors: list = field(default_factory=list)
+    processors: list = field(default_factory=list)
+    daw_state: dict[str, Any] = field(default_factory=dict)
+    daw_command_log: list[DawCommandResult] = field(default_factory=list)
+    prepare_state: str = "none"
 
 
 @dataclass
 class SessionResult:
     session: SessionContext
-    daw_actions: list[DawAction] = field(default_factory=list)
+    daw_commands: list[DawCommand] = field(default_factory=list)
     diagnostic_summary: dict[str, Any] = field(default_factory=dict)
 
 

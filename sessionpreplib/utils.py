@@ -43,113 +43,71 @@ def matches_keywords(filename: str, keywords: list[str]) -> bool:
 
 
 def parse_group_specs(group_args: list[str] | None) -> list[dict[str, Any]]:
-    """Parse --group arguments into group spec dicts."""
-    groups = []
-    for idx, spec in enumerate(group_args or [], start=1):
-        parts = [p.strip() for p in str(spec).split(",") if p.strip()]
-        if not parts:
-            continue
+    """Parse ``--group Name:pattern1,pattern2`` arguments into group specs.
+
+    The ``Name:`` prefix is mandatory.  Raises :class:`ValueError` if a
+    spec is missing the prefix or has no patterns after the colon.
+
+    Returns a list of dicts with keys ``name``, ``patterns``, ``members``.
+    """
+    groups: list[dict[str, Any]] = []
+    for spec in (group_args or []):
+        raw = str(spec).strip()
+        if ":" not in raw:
+            raise ValueError(
+                f"Invalid --group syntax: '{raw}'. "
+                f"Expected Name:pattern1,pattern2  (e.g. --group Kick:kick,kick_sub)"
+            )
+        name, _, pattern_str = raw.partition(":")
+        name = name.strip()
+        if not name:
+            raise ValueError(
+                f"Invalid --group syntax: '{raw}'. Group name before ':' must not be empty."
+            )
+        patterns = [p.strip() for p in pattern_str.split(",") if p.strip()]
+        if not patterns:
+            raise ValueError(
+                f"Invalid --group syntax: '{raw}'. "
+                f"At least one pattern is required after '{name}:'."
+            )
         groups.append({
-            "id": f"G{idx}",
-            "spec": str(spec),
-            "patterns": parts,
+            "name": name,
+            "patterns": patterns,
             "members": [],
         })
     return groups
 
 
-def assign_groups_to_files_with_policy(
+def assign_groups(
     filenames: list[str],
     group_specs: list[dict[str, Any]],
-    overlap_policy: str = "warn",
-) -> tuple[dict[str, str], list]:
-    """
-    Assign files to groups based on keyword matching.
+) -> tuple[dict[str, str], list[str]]:
+    """Assign files to named groups using first-match-wins.
 
     Returns:
-        (assignments, overlaps) where assignments maps filename -> group_id,
-        and overlaps is a list of overlap records.
+        ``(assignments, warnings)`` where *assignments* maps
+        ``filename → group_name`` and *warnings* is a list of
+        human-readable overlap warning strings.
     """
     assignments: dict[str, str] = {}
-    overlaps: list = []
+    warnings: list[str] = []
 
     if not group_specs:
-        return assignments, overlaps
+        return assignments, warnings
 
-    if overlap_policy not in {"warn", "error", "merge"}:
-        raise ValueError(f"Unknown group overlap policy: {overlap_policy}")
-
-    def gid_rank(gid: str) -> int:
-        try:
-            return int(str(gid)[1:])
-        except Exception:
-            return 10**9
-
-    if overlap_policy in {"warn", "error"}:
-        for fname in filenames:
-            for g in group_specs:
-                if matches_keywords(fname, g["patterns"]):
-                    if fname in assignments:
-                        overlaps.append((fname, assignments[fname], g["id"]))
-                        break
-                    assignments[fname] = g["id"]
-                    g["members"].append(fname)
-                    break
-
-        if overlap_policy == "error" and overlaps:
-            msg_lines = ["Grouping overlaps detected:"]
-            for fname, keep_gid, drop_gid in overlaps[:50]:
-                msg_lines.append(
-                    f"- {fname} matched multiple groups ({keep_gid}, {drop_gid})"
-                )
-            if len(overlaps) > 50:
-                msg_lines.append(f"... ({len(overlaps) - 50} more)")
-            raise ValueError("\n".join(msg_lines))
-
-        return assignments, overlaps
-
-    # --- merge policy: union-find ---
-    parent = {g["id"]: g["id"] for g in group_specs}
-
-    def find(x: str) -> str:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(a: str, b: str) -> None:
-        ra = find(a)
-        rb = find(b)
-        if ra == rb:
-            return
-        if gid_rank(ra) <= gid_rank(rb):
-            parent[rb] = ra
-        else:
-            parent[ra] = rb
-
-    matched_by_file: dict[str, list[str]] = {}
     for fname in filenames:
-        matched = []
+        matched_group: str | None = None
         for g in group_specs:
             if matches_keywords(fname, g["patterns"]):
-                matched.append(g["id"])
-        if not matched:
-            continue
-        matched_by_file[fname] = matched
-        if len(matched) > 1:
-            for other in matched[1:]:
-                union(matched[0], other)
+                if matched_group is None:
+                    matched_group = g["name"]
+                    g["members"].append(fname)
+                else:
+                    warnings.append(
+                        f"Group overlap: {fname} matches '{g['name']}' "
+                        f"but is already assigned to '{matched_group}'"
+                    )
+        if matched_group is not None:
+            assignments[fname] = matched_group
 
-    for g in group_specs:
-        g["members"] = []
-
-    group_by_id = {g["id"]: g for g in group_specs}
-
-    for fname, matched in matched_by_file.items():
-        root = find(matched[0])
-        assignments[fname] = root
-        group_by_id[root]["members"].append(fname)
-        if len(matched) > 1:
-            overlaps.append((fname, matched))
-
-    return assignments, overlaps
+    return assignments, warnings

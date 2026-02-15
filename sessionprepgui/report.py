@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .theme import COLORS, FILE_COLOR_TRANSIENT, FILE_COLOR_SUSTAINED
 from .helpers import esc
+from sessionpreplib.chunks import read_chunks, STANDARD_CHUNKS, detect_origin
 
 
 # ---------------------------------------------------------------------------
@@ -13,15 +14,14 @@ from .helpers import esc
 def render_summary_html(
     summary: dict,
     *,
-    show_hints: bool = True,
     show_faders: bool = True,
+    show_clean: bool = True,
 ) -> str:
     """Render a diagnostic summary dict as styled HTML."""
     problems = summary.get("problems") or []
     attention = summary.get("attention") or []
     information = summary.get("information") or []
     clean = summary.get("clean") or []
-    normalization_hints = summary.get("normalization_hints") or []
     clean_count = int(summary.get("clean_count", 0))
     total_ok = int(summary.get("total_ok", 0))
 
@@ -78,21 +78,10 @@ def render_summary_html(
     parts.append(render_groups(information, COLORS["information"]))
 
     # Clean
-    parts.append(f'<div style="color:{COLORS["clean"]}; font-size:12pt; font-weight:bold; {section_spacing}">'
-                 f'\U0001f7e2 CLEAN</div>')
-    parts.append(render_groups(clean, COLORS["clean"]))
-
-    # Normalization hints (optional)
-    if show_hints:
-        parts.append(f'<div style="color:{COLORS["hints"]}; font-size:12pt; font-weight:bold; {section_spacing}">'
-                     f'\U0001f50e Normalization Hints</div>')
-        if normalization_hints:
-            for hint in normalization_hints:
-                parts.append(f'<div style="margin-left:16px; color:{COLORS["hints"]};">'
-                             f'&bull; {esc(hint)}</div>')
-        else:
-            parts.append(f'<div style="margin-left:16px; color:{COLORS["clean"]};">'
-                         f'&bull; None</div>')
+    if show_clean:
+        parts.append(f'<div style="color:{COLORS["clean"]}; font-size:12pt; font-weight:bold; {section_spacing}">'
+                     f'\U0001f7e2 CLEAN</div>')
+        parts.append(render_groups(clean, COLORS["clean"]))
 
     return "\n".join(parts)
 
@@ -166,8 +155,22 @@ def render_fader_table_html(session) -> str:
 # Per-track detail
 # ---------------------------------------------------------------------------
 
-def render_track_detail_html(track) -> str:
-    """Render per-track detail as styled HTML."""
+def render_track_detail_html(track, session=None, *, show_clean: bool = True,
+                             verbose: bool = False) -> str:
+    """Render per-track detail as styled HTML.
+
+    Parameters
+    ----------
+    track : TrackContext
+    session : SessionContext | None
+        If provided, configured detector/processor instances from the
+        session are used for self-rendering via their ``render_html()``
+        methods.
+    show_clean : bool
+        If False, detectors with severity ``clean`` are hidden.
+    verbose : bool
+        When True, processors may include additional analytical detail.
+    """
     parts = []
     parts.append(f'<div style="color:{COLORS["heading"]}; font-size:13pt; font-weight:bold;">'
                  f'{esc(track.filename)}</div>')
@@ -182,50 +185,127 @@ def render_track_detail_html(track) -> str:
         parts.append(f'<div style="color:{COLORS["dim"]}; margin-top:6px;">{fmt}</div>')
         parts.append(f'<div style="color:{COLORS["dim"]};">{dur}</div>')
 
-        # Processor result
-        pr = next(iter(track.processor_results.values()), None) if track.processor_results else None
-        if pr:
-            type_color = FILE_COLOR_TRANSIENT.name() if "Transient" in (pr.classification or "") else FILE_COLOR_SUSTAINED.name()
+        # Chunk metadata + DAW origin (single line)
+        try:
+            _container, all_chunks = read_chunks(track.filepath)
+            notable = [ch for ch in all_chunks if ch.id not in STANDARD_CHUNKS]
+        except (ValueError, OSError):
+            notable = []
+        origin = detect_origin(track.chunk_ids, track.filepath)
+        meta_parts = []
+        if notable:
+            def _fmt_size(n: int) -> str:
+                if n < 1024:
+                    return f"{n} B"
+                elif n < 1024 * 1024:
+                    return f"{n / 1024:.1f} KB"
+                return f"{n / (1024 * 1024):.1f} MB"
+            chunk_parts = [
+                f'{esc(ch.id.strip())} ({_fmt_size(ch.size)})'
+                for ch in notable
+            ]
+            meta_parts.append(f'Chunks: {" &middot; ".join(chunk_parts)}')
+        if origin:
+            meta_parts.append(f'Origin: {esc(origin)}')
+        if meta_parts:
+            parts.append(
+                f'<div style="color:{COLORS["dim"]}; margin-top:4px;">'
+                f'{" / ".join(meta_parts)}</div>'
+            )
+
+        # Build lookup maps from session instances
+        proc_map = {p.id: p for p in (session.processors if session else [])}
+        det_map = {d.id: d for d in (session.detectors if session else [])}
+
+        # Processor results
+        for proc_id, pr in (track.processor_results or {}).items():
+            proc_inst = proc_map.get(proc_id)
+            if proc_inst:
+                html_fragment = proc_inst.render_html(pr, track, verbose=verbose)
+                if not html_fragment:
+                    continue  # processor chose to suppress output (e.g. no-op)
+            else:
+                # Fallback: basic display
+                html_fragment = (
+                    f'<div style="margin-left:8px;">'
+                    f'{esc(pr.classification or "")} &middot; {esc(pr.method)} '
+                    f'&middot; {pr.gain_db:+.1f} dB</div>'
+                )
             parts.append(f'<div style="margin-top:12px; color:{COLORS["heading"]}; '
-                         f'font-weight:bold;">Normalization Analysis</div>')
-            parts.append(f'<div style="margin-left:8px;">Classification: '
-                         f'<span style="color:{type_color}; font-weight:bold;">'
-                         f'{esc(pr.classification)}</span></div>')
-            parts.append(f'<div style="margin-left:8px;">Method: {esc(pr.method)}</div>')
-            parts.append(f'<div style="margin-left:8px;">Gain: {pr.gain_db:+.1f} dB</div>')
+                         f'font-weight:bold;">{esc(proc_map[proc_id].name if proc_id in proc_map else proc_id)}</div>')
+            parts.append(html_fragment)
             if track.group:
-                parts.append(f'<div style="margin-left:8px;">Group: {esc(track.group)}</div>')
+                original = pr.data.get("original_gain_db", pr.gain_db)
+                delta = pr.gain_db - original
+                parts.append(
+                    f'<div style="margin-left:8px; margin-top:4px;">'
+                    f'Group: <b>{esc(track.group)}</b>'
+                    f' &nbsp;&middot;&nbsp; Group level: <b>{pr.gain_db:+.1f} dB</b>'
+                    f' (individual: {original:+.1f} dB,'
+                    f' &Delta; {delta:+.1f} dB)</div>'
+                )
 
         # Detector results
         if track.detector_results:
-            parts.append(f'<div style="margin-top:12px; color:{COLORS["heading"]}; '
+            parts.append(f'<div style="margin-top:20px; color:{COLORS["heading"]}; '
                          f'font-weight:bold;">Detectors</div>')
-            parts.append(
-                '<table cellpadding="3" cellspacing="2" '
-                'style="margin-left:8px; margin-top:4px;">'
-            )
-            for det_id, result in track.detector_results.items():
-                sev = result.severity.value if hasattr(result.severity, "value") else str(result.severity)
-                sev_color, sev_label = {
-                    "problem":     (COLORS["problems"],    "PROBLEM"),
-                    "attention":   (COLORS["attention"],   "ATTENTION"),
-                    "information": (COLORS["information"], "INFO"),
-                    "clean":       (COLORS["clean"],       "OK"),
-                }.get(sev, (COLORS["information"], "INFO"))
-
+            _SEV_ORDER = {"problem": 0, "attention": 1, "information": 2, "info": 2, "clean": 3}
+            def _det_sort_key(item):
+                det_id, result = item
+                det_inst = det_map.get(det_id)
+                if det_inst and hasattr(det_inst, 'effective_severity'):
+                    eff = det_inst.effective_severity(result)
+                    sev = eff.value if eff is not None else "zzz"
+                else:
+                    sev = result.severity.value if hasattr(result.severity, "value") else str(result.severity)
+                name = det_map[det_id].name if det_id in det_map else det_id
+                return (_SEV_ORDER.get(sev, 99), name.lower())
+            det_rows = []
+            for det_id, result in sorted(track.detector_results.items(), key=_det_sort_key):
+                det_inst = det_map.get(det_id)
+                # Determine effective severity (respects report_as override)
+                if det_inst and hasattr(det_inst, 'effective_severity'):
+                    eff = det_inst.effective_severity(result)
+                    if eff is None:
+                        continue
+                    sev = eff.value
+                else:
+                    sev = result.severity.value if hasattr(result.severity, "value") else str(result.severity)
+                if not show_clean and sev == "clean":
+                    continue
+                if det_inst:
+                    html_frag = det_inst.render_html(result, track)
+                    if html_frag:
+                        det_rows.append(html_frag)
+                else:
+                    # Fallback: generic row
+                    sev_color, sev_label = {
+                        "problem":     (COLORS["problems"],    "PROBLEM"),
+                        "attention":   (COLORS["attention"],   "ATTENTION"),
+                        "information": (COLORS["information"], "INFO"),
+                        "clean":       (COLORS["clean"],       "OK"),
+                    }.get(sev, (COLORS["information"], "INFO"))
+                    det_rows.append(
+                        f'<tr>'
+                        f'<td width="90" style="background-color:{sev_color}; color:#000;'
+                        f' font-weight:bold; font-size:8pt; text-align:center;'
+                        f' padding:2px 8px;">'
+                        f'{sev_label}</td>'
+                        f'<td style="padding-left:6px; white-space:nowrap;">'
+                        f'<b>{esc(det_id)}</b></td>'
+                        f'<td style="padding-left:6px; color:{COLORS["dim"]};">'
+                        f'{esc(result.summary)}</td>'
+                        f'</tr>'
+                    )
+            if det_rows:
                 parts.append(
-                    f'<tr>'
-                    f'<td width="90" style="background-color:{sev_color}; color:#000;'
-                    f' font-weight:bold; font-size:8pt; text-align:center;'
-                    f' padding:2px 8px;">'
-                    f'{sev_label}</td>'
-                    f'<td style="padding-left:6px; white-space:nowrap;">'
-                    f'<a href="detector:{det_id}" style="color:{COLORS["text"]}; '
-                    f'text-decoration:none;"><b>{esc(det_id)}</b></a></td>'
-                    f'<td style="padding-left:6px; color:{COLORS["dim"]};">'
-                    f'{esc(result.summary)}</td>'
-                    f'</tr>'
+                    '<table cellpadding="3" cellspacing="2" '
+                    'style="margin-left:8px; margin-top:4px;">'
                 )
-            parts.append('</table>')
+                parts.extend(det_rows)
+                parts.append('</table>')
+            else:
+                parts.append(f'<div style="margin-left:8px; margin-top:4px; '
+                             f'color:{COLORS["dim"]};">None</div>')
 
     return "\n".join(parts)

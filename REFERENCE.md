@@ -15,7 +15,6 @@ For usage and quick start, see [README.md](README.md).
 3. [Analysis Metrics (Stage B)](#3-analysis-metrics-stage-b)
 4. [Processing (Stage C)](#4-processing-stage-c)
 5. [Fader Restoration (Stage D)](#5-fader-restoration-stage-d)
-6. [Normalization Hints](#6-normalization-hints)
 
 ---
 
@@ -86,10 +85,13 @@ A detector earns its place if it meets at least one of these criteria:
 - **What it means:** one or more stereo-compatibility warnings were detected:
   - correlation below `--corr_warn` and/or
   - mono fold-down loss above `--mono_loss_warn_db`
-- **Why it matters:** these values provide context about stereo content and mono fold-down behavior.
-- **Controls:** `--corr_warn`, `--mono_loss_warn_db`
+- **Why it matters:** low or negative correlation indicates phase differences between channels that cause level loss or cancellation in mono playback (phone speakers, mono PA systems).
+- **Controls:** `--corr_warn`, `--mono_loss_warn_db`, `--corr_windowed`, `--corr_window_ms` (default 250 ms), `--corr_max_regions`
+- **Windowed analysis:** when enabled, per-window Pearson correlation and mono folddown loss are computed. Contiguous windows exceeding either threshold are merged into regions with waveform overlays.
 - **Categorization:**
-  - INFORMATION: `Stereo compatibility` with per-file details.
+  - ATTENTION: localized regions with poor stereo compatibility detected.
+  - INFORMATION: whole-file correlation or mono loss exceeds threshold (no localized regions).
+  - CLEAN: `No stereo compatibility issues detected`.
 
 ### 2.7 Dual-mono (identical L/R)
 
@@ -118,12 +120,75 @@ A detector earns its place if it meets at least one of these criteria:
 
 ### 2.10 Subsonic content
 
-- **What it means:** the file has significant energy below a cutoff frequency (default `30 Hz`).
-- **Why it matters:** subsonic rumble can eat headroom, trigger compressors/limiters, and cause translation issues.
-- **Controls:** `--subsonic_hz`, `--subsonic_warn_ratio_db`
+- **What it means:** the file has significant energy below a cutoff frequency
+  (default `30 Hz`).
+- **Why it matters:** subsonic rumble can eat headroom, trigger
+  compressors/limiters, and cause translation issues on smaller speakers.
+- **Controls:** `--subsonic_hz`, `--subsonic_warn_ratio_db`,
+  `subsonic_windowed`, `subsonic_window_ms`, `subsonic_max_regions`
 - **Categorization:**
   - CLEAN: `No significant subsonic content detected`.
   - ATTENTION: `Subsonic content` with per-file details (consider an HPF).
+
+**How detection works:**
+
+The detector performs a single `scipy.signal.stft` call per channel with Hann
+windowing, then computes vectorised band/total power ratios: `power below
+cutoff / total power` (excluding DC), expressed in dB.  A ratio of −20 dB
+means 1 % of the signal's energy is subsonic.  The configured threshold
+(default `−20 dB`) determines when this becomes an ATTENTION.  Both the
+whole-file ratio and per-window ratios are derived from the same STFT pass
+— no redundant FFT calls.
+
+**Per-channel analysis (always active for stereo+):**
+
+For multi-channel files, each channel is analyzed independently.  The combined
+ratio is the **maximum** (worst) of all per-channel ratios — more conservative
+than the previous mono-downmix approach, which could mask subsonic content in
+one channel through phase cancellation.  If only one channel exceeds the
+threshold, the issue is reported for that specific channel; if all channels
+exceed it, a whole-file issue is reported.
+
+Subsonic issues carry frequency bounds (`freq_min_hz=0`, `freq_max_hz=cutoff`)
+for frequency-bounded overlays in spectrogram mode.
+
+**Windowed analysis (default: on):**
+
+When `subsonic_windowed` is enabled, the detector also splits each channel into
+short windows (default 500 ms via `subsonic_window_ms`) and computes the
+subsonic ratio per window. Contiguous windows exceeding the threshold are
+merged into regions with precise sample ranges, visible as waveform overlays.
+
+This serves two purposes:
+  1. **Localization** — shows *where* subsonic content is concentrated (bass
+     drops, HVAC bleed in quiet sections) instead of painting the entire file.
+  2. **Absolute subsonic power gate** — each window's absolute subsonic energy
+     level is checked (`window_rms_db + ratio_db`).  Windows where this is
+     below −40 dBFS are suppressed.  This prevents amp hum or noise in quiet
+     gaps from producing false positives — a high subsonic *ratio* is
+     meaningless when the absolute energy is too quiet to waste headroom.
+
+**Threshold relaxation for windowed analysis:**
+
+Individual 500 ms windows have less frequency resolution than a very long FFT.
+When the whole-file ratio is borderline (e.g. −18 dB vs −20 dB threshold), no
+single window may cross the same threshold even though the aggregate clearly
+does.  To handle this, the windowed analysis uses a relaxed threshold (6 dB
+below the configured threshold).  This ensures that windows where subsonic
+energy is concentrated still produce visible regions.
+
+**Fallback for diffuse subsonic content:**
+
+If no windows exceed the relaxed threshold (the subsonic energy is spread
+evenly across the file rather than concentrated), the detector falls back to
+marking **active-signal regions** — windows whose RMS is within 20 dB of the
+loudest window.  Since the whole-file analysis already confirmed subsonic
+content, these active windows are where it lives.  This avoids painting
+silent gaps between notes while still showing meaningful overlays.
+
+If even the active-signal approach produces no regions, a whole-file overlay
+is shown as a last resort — an ATTENTION result always has at least one
+visible issue.
 
 ### 2.11 Tail regions exceeded anchor
 
@@ -137,7 +202,7 @@ A detector earns its place if it meets at least one of these criteria:
 
 - **What it means:** a file matched multiple `--group` specs.
 - **Why it matters:** indicates ambiguous patterns; grouping may not apply as intended.
-- **Controls:** `--group`, `--group_overlap`
+- **Controls:** `--group Name:pattern1,pattern2` (first match wins; overlaps produce a warning)
 - **Categorization:**
   - ATTENTION: `Grouping overlaps` with overlap details.
 
@@ -179,19 +244,78 @@ sparse events.
 ### 3.3 Anchor selection (percentile vs. max)
 
 **What it is:**
-  - The analysis chooses one representative RMS value ("anchor") from the window
-    distribution.
-  - Default is a percentile anchor (P95 via `--rms_percentile 95`), which tends
-    to represent loud sections while ignoring rare spikes.
-  - `--rms_anchor max` anchors to the single loudest window.
 
-**Why it matters:**
-  - This anchor becomes the reference level used in downstream reporting (and in
-    execute mode, gain decisions).
+The RMS analysis produces many short-time RMS values — one per window (default
+400 ms). After relative gating removes near-silent windows (see §3.4), we have
+a distribution of momentary RMS levels representing the "active" parts of the
+track. The **anchor** is the single representative value chosen from this
+distribution, used as the reference level for gain decisions and tail
+exceedance reporting.
+
+Two strategies are available:
+
+  - **`percentile`** (default, `--rms_anchor percentile`):
+    Takes the Nth percentile of the gated window distribution
+    (default P95 via `--rms_percentile 95`). This means 95 % of the active
+    windows are at or below the anchor — in practice, the anchor represents
+    "what the loud sections of this track typically sound like."
+
+  - **`max`**:
+    Takes the single loudest gated window. The anchor is the absolute peak of
+    the RMS distribution.
+
+**Why percentile is usually better than max:**
+
+Consider a vocal track with a consistent verse at −20 dBFS RMS, a loud chorus
+at −16 dBFS, and one isolated shout that hits −12 dBFS for a single 400 ms
+window:
+
+  - **Max anchor** = −12 dBFS. Gain is computed against that one shout, which
+    means the verse and chorus are treated as "quieter than the track's level."
+    The tail exceedance report is clean (nothing exceeds the max), but the gain
+    decision is driven by a moment that may not represent the working level of
+    the track at all.
+
+  - **P95 anchor** ≈ −16 dBFS (roughly the chorus level). Gain is computed
+    against the chorus — the part that matters most when feeding insert
+    processing. The shout shows up as a tail exceedance, flagging it for
+    manual clip-gain attention.
+
+In general, **max** is fragile because a single anomalous window (a breath
+pop, a drum bleed spike, a momentary feedback ring) can pull the anchor away
+from the track's true working level. **Percentile** is robust to these
+outliers while still tracking the loud sections faithfully.
+
+**When max is useful:**
+
+  - Very short, punchy files (a single hit, a sound effect) where there is no
+    meaningful "distribution" — every window matters equally.
+  - When you explicitly want the gain decision anchored to the absolute loudest
+    moment in the file.
+
+**How P95 works step by step:**
+
+  1. Compute momentary RMS for each 400 ms window across the file.
+  2. Gate: discard windows more than `--gate_relative_db` (default 40 dB) below
+     the loudest window. This removes silence and very quiet sections.
+  3. Sort the remaining "active" windows by RMS value.
+  4. Pick the value at the 95th percentile of that sorted list.
+  5. Convert to dBFS → this is `rms_anchor_db`.
+
+The anchor is then used to:
+  - Compute sustained-material gain: `gain = target_rms − anchor`
+    (capped by `target_peak − peak`).
+  - Identify tail exceedances: windows that exceed the anchor by more than
+    `--tail_min_exceed_db` are reported as regions needing manual attention.
 
 **Relevance for mix engineers:**
-  - Percentile anchoring usually reflects "the part of the track that matters"
-    instead of a momentary transient.
+  - Percentile anchoring reflects "the part of the track that matters" — the
+    loud sections that will drive your insert processing — rather than a
+    momentary spike that may not represent the track's working level.
+  - If you find that gain decisions are too conservative (track ends up quieter
+    than expected), lower the percentile (e.g., `--rms_percentile 90`).
+  - If gain decisions are too aggressive (track ends up too hot), raise the
+    percentile or switch to `--rms_anchor max`.
 
 ### 3.4 Relative gating for sparse tracks
 
@@ -213,18 +337,31 @@ sparse events.
   - `--gate_relative_db 40` means "keep windows within 40 dB of the loudest RMS
     window." It is not an absolute dBFS value (so it is not `-40`).
 
-### 3.5 Crest factor + classification
+### 3.5 Audio classification (crest factor + envelope decay + density)
 
 **What it is:**
-  - A simple crest factor estimate: `peak - anchor_rms`.
-  - Used to classify tracks as "transient" vs "sustained".
+  - A three-metric classifier that combines crest factor (peak-to-RMS ratio),
+    envelope decay rate (how fast energy drops after the loudest moment), and
+    density (fraction of the track containing active content above the gate).
+  - Crest factor alone can misclassify compressed drums (low crest but transient)
+    and plucked instruments (high crest but sustained). The decay metric acts as
+    a tiebreaker when the two metrics disagree. Density catches sparse percussion
+    (toms, crashes, FX hits) that may have ambiguous crest and decay values.
+
+**Classification logic (in priority order):**
+  1. Keyword overrides (`--force_transient`, `--force_sustained`)
+  2. Sparse + at least one dynamic metric agrees → Transient (toms, crashes, FX)
+  3. High crest + fast decay → Transient (drums, percussion)
+  4. Low crest + slow decay → Sustained (pads, bass, vocals)
+  5. High crest + slow decay → Sustained (plucked/piano — decay overrides)
+  6. Low crest + fast decay → Transient (compressed drums — decay overrides)
 
 **Why it matters:**
   - Helps pick a more appropriate normalization strategy.
   - Explains why certain tracks behave differently when you drive dynamics and
     saturation processing.
-  - If the crest factor is close to `--crest_threshold`, the `Normalization hints`
-    section will flag an edge case and suggest `--force_transient` / `--force_sustained`.
+  - Sparse tracks (e.g., toms that only play occasionally) are caught by the
+    density metric even when crest and decay are ambiguous.
 
 ### 3.6 Tail exceedance report (significant regions above anchor)
 
@@ -284,25 +421,134 @@ are more consistent. Per-insert gain staging is still part of mixing.
 
 ---
 
-## 6. Normalization Hints
+## 6. GUI Waveform Controls
 
-This section (in the output) is not a "health" detector bucket. It is a set of
-optional hints related to how the transient/sustained classification may affect
-normalization. It is always printed (even without `-x`) so you can review edge
-cases without having to re-run in execute mode.
+### 6.1 Mouse
 
-In the `Normalization hints` section, "near transient/sustained threshold" means
-the file is very close to the crest threshold (`--crest_threshold`, default
-`12 dB`).
+| Action | Effect |
+|--------|--------|
+| **Click** | Set playback cursor position |
+| **Hover** | Crosshair guide with dBFS readout (waveform) or frequency readout (spectrogram) |
+| **Ctrl + wheel** | Horizontal zoom (centered on pointer) |
+| **Ctrl + Shift + wheel** | Vertical zoom (amplitude in waveform, frequency range in spectrogram) |
+| **Shift + Alt + wheel** | Scroll up / down (frequency pan, spectrogram mode) |
+| **Shift + wheel** | Scroll left / right |
 
-Why this matters:
-  - Above the threshold, the file is treated as transient and normalized by peak
-    (`--target_peak`).
-  - Below the threshold, the file is treated as sustained and normalized by RMS
-    (`--target_rms`) with a peak ceiling.
+### 6.2 Keyboard Shortcuts
 
-If the crest factor is within +/-2 dB of the threshold, small differences in the
-measurement (windowing, gating, fades, edits) can flip the classification. The
-warning is a prompt to sanity-check the musical intent and optionally override:
-  - Use `--force_transient` for drum-like / hit-like material.
-  - Use `--force_sustained` for pad-like / sustained material.
+| Key | Effect |
+|-----|--------|
+| **R** | Zoom in (centered on mouse guide, or cursor if not hovering) |
+| **T** | Zoom out (centered on mouse guide, or cursor if not hovering) |
+
+> The waveform must have keyboard focus (click it first) for keyboard
+> shortcuts to work.
+
+### 6.3 Toolbar Buttons
+
+| Button | Effect |
+|--------|--------|
+| **Waveform / Spectrogram ▾** | Switch between waveform and spectrogram display mode |
+| **Display ▾** | Spectrogram settings: FFT Size, Window, Color Theme, dB Floor, dB Ceiling (spectrogram mode only) |
+| **Detector Overlays ▾** | Toggle visibility of individual detector overlays (both modes) |
+| **Peak / RMS Max** | Toggle peak ("P") and max-RMS ("R") markers (waveform mode, off by default) |
+| **RMS L/R** | Toggle per-channel RMS envelope (yellow, waveform mode) |
+| **RMS AVG** | Toggle combined RMS envelope (orange, waveform mode) |
+| **Fit** | Reset zoom to show entire file |
+| **+** | Zoom in at cursor |
+| **−** | Zoom out at cursor |
+| **↑** | Scale up (amplitude in waveform, frequency range in spectrogram) |
+| **↓** | Scale down (amplitude in waveform, frequency range in spectrogram) |
+
+### 6.4 Playback Controls
+
+| Button | Effect |
+|--------|--------|
+| **▶ Play** | Start playback from cursor position |
+| **■ Stop** | Stop playback and return cursor to start position |
+| **M** | Toggle mono playback — folds stereo to mono via (L+R)/2 for auditioning mono compatibility. Latched: toggle once, then play/stop freely. Orange when active. |
+| **Space** | Toggle play/stop (global shortcut) |
+
+---
+
+## 7. GUI Track Table Controls
+
+### 7.1 Analysis Column
+
+The **Analysis** column displays per-track severity counts instead of a single
+worst-severity label.  Each severity level is color-coded and only non-zero
+counts are shown:
+
+| Display | Meaning |
+|---------|---------|
+| `2P 1A 5I` | 2 Problems (red), 1 Attention (orange), 5 Information (blue) |
+| `1A` | 1 Attention only |
+| `OK` | All detectors clean (green) |
+| `Error` | File could not be read (red) |
+
+The column is sortable — tracks with problems sort first, then attention, then
+clean.  Within the same worst severity, tracks with more total issues sort
+higher.
+
+### 7.2 Selection
+
+Standard Extended Selection applies to the track table:
+
+| Action | Effect |
+|--------|--------|
+| **Click** | Select single row |
+| **Shift + click** | Extend selection to contiguous range |
+| **Ctrl + click** | Toggle individual rows (non-adjacent selection) |
+
+### 7.3 Batch Editing
+
+Hold **Alt+Shift** and click a dropdown in any selected row to apply the
+chosen value to **all** selected rows.  This mirrors the Pro Tools convention
+where Alt-clicking a control applies it across the track selection.
+
+- The multi-row selection is preserved while the dropdown is open (the table
+  overrides Qt's default behaviour of clearing the selection on cell-widget
+  focus).
+- Re-selecting the same value that is already shown still triggers the batch
+  action — useful for normalising all selected rows to a common setting.
+- Re-analysis of affected tracks runs **asynchronously** with a progress bar.
+  The selection is restored after re-analysis completes, even if sorting
+  reorders the rows.
+
+Supported batch dropdowns:
+
+| Dropdown | Column | Effect |
+|----------|--------|--------|
+| **RMS Anchor** | 5 | Override per-track RMS anchor; triggers full re-analysis (detectors + processors) |
+| **Classification** | 3 | Override per-track classification; triggers processor-only re-calculation |
+
+### 7.4 RMS Anchor Override
+
+Per-track dropdown overriding the global `rms_anchor` analysis setting.
+
+| Label | Override value | Meaning |
+|-------|---------------|---------|
+| Default | *(none)* | Use the global setting from Preferences |
+| Max | `max` | Loudest gated RMS window |
+| P99 | `p99` | 99th percentile of gated RMS windows |
+| P95 | `p95` | 95th percentile (default global setting) |
+| P90 | `p90` | 90th percentile |
+| P85 | `p85` | 85th percentile |
+
+Changing the anchor re-runs all detectors and processors for the affected
+track(s), since the anchor value influences both tail exceedance detection and
+gain calculation.
+
+### 7.5 Classification Override
+
+Per-track dropdown overriding the auto-detected audio classification.
+
+| Label | Effect |
+|-------|--------|
+| Transient | Force peak-based normalization (`target_peak`) |
+| Sustained | Force RMS-based normalization (`target_rms`) |
+| Skip | Exclude track from processing (gain = 0 dB, spin box disabled) |
+
+Changing the classification re-runs processors only (no detector re-analysis
+needed), since the classification affects only the normalization method and
+gain calculation.

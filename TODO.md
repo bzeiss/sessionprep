@@ -12,27 +12,71 @@
 
 ### P1: DAW Scripting Layer
 
-- [ ] **`daw_processor.py` — DawProcessor ABC + priority bands**
-  - `DAWPRIORITY_IMPORT`, `_ROUTE`, `_APPEARANCE`, `_AUTOMATION`, `_FINALIZE`
-  - `plan(session) -> list[DawAction]`
+- [x] **`daw_processor.py` — DawProcessor ABC**
+  - `config_params()`, `configure()`, `check_connectivity()`
+  - `fetch(session)`, `transfer(session)`, `sync(session)`
+  - `execute_commands(session, commands)` — ad-hoc commands from GUI tools
+  - One processor per DAW (ProTools, DAWProject, etc.)
+  - Orchestrated by GUI/CLI directly, not Pipeline
 
-- [ ] **`daw_processors/` package — Concrete DAW processors**
-  - `template_router.py` — TemplateRouter (routing rules → folder/bus assignment)
-  - `track_colorizer.py` — TrackColorizer (color by classification or rules)
-  - `fader_restore.py` — FaderRestore (inverse gain → `set_fader` actions)
+- [x] **`daw_processors/` package — factory**
+  - `default_daw_processors()` (empty, ready for concrete processors)
 
-- [ ] **`daw_backend.py` — DawBackend ABC**
-  - `execute(actions) -> list[DawActionResult]`
-  - `supports(action_type) -> bool`
+- [x] **DawCommand / DawCommandResult models**
+  - Plain data + undo_params; processor executes via internal dispatch
 
-- [ ] **`daw_backends/` package — Concrete backends**
-  - `json_export.py` — JsonExportBackend (serialize actions to JSON)
-  - `protools.py` — ProToolsBackend (stub, future PTSL integration)
+- [x] **Config/Settings/Preferences integration** — four-section config
+  (`app`, `colors`, `config_presets`, `group_presets`), Preferences two-tab
+  layout (Global + Config Presets), config preset CRUD, group preset CRUD,
+  toolbar "Config:" and "Group:" combos, session Config tab with per-session
+  overrides, legacy config migration
 
-- [ ] **Pipeline phases 3+5: `plan_daw()` and `execute_daw()`**
-  - Add `daw_processors` param to Pipeline constructor
-  - `plan_daw(session) -> list[DawAction]`
-  - `execute_daw(actions, backend) -> list[DawActionResult]`
+- [x] **Concrete: ProToolsProcessor** (PTSL) — `ProToolsDawProcessor` in `daw_processors/protools.py`.
+  `check_connectivity()`, `fetch()` (folder hierarchy), `transfer()` (audio import + CIE L*a*b*
+  perceptual color matching). `sync()` not yet implemented. Configurable command delay.
+- [ ] **Concrete: DAWProjectProcessor** (.dawproject files)
+- [x] **GUI toolbar dropdown** for active DAW processor selection — combo box + Check/Fetch/Transfer/Sync actions in Session Setup toolbar
+- [ ] **GUI DAW Tools panel** (color picker, etc. → execute_commands)
+- [ ] **Undo execution** (rollback last transfer/sync batch)
+
+### P1: File-Based Processing Pipeline
+
+- [x] **AudioProcessor enabled toggle** — base `config_params()` returns
+  `{id}_enabled` ParamSpec, `configure()` reads `_enabled`, `enabled` property.
+  Subclasses chain via `super().config_params() + [...]`. Pipeline configures
+  all processors first, then filters to enabled before sorting by priority.
+
+- [x] **Model changes** — `TrackContext` gained `processed_filepath`,
+  `applied_processors`, `processor_skip`. `SessionContext` gained
+  `prepare_state` (`"none"` / `"ready"` / `"stale"`).
+
+- [x] **`Pipeline.prepare()` method** — wipes output dir, chains enabled
+  processors per track (respecting `processor_skip`), writes processed files,
+  updates track metadata, sets `prepare_state = "ready"`.
+
+- [x] **`PrepareWorker` QThread** — runs `Pipeline.prepare()` in background
+  with progress/finished/error signals.
+
+- [x] **Prepare button** (analysis toolbar) — right-aligned, staleness
+  indicators: "Prepare" / "Prepare ✓" / "Prepare (!)". Enabled after analysis.
+
+- [x] **Processing column** (analysis table, col 7) — per-track multiselect
+  `QToolButton` + checkable `QMenu`. Labels: "Default" (all active), "None"
+  (all skipped), comma-separated (partial). Disabled "None" when no processors
+  enabled globally. Editable only in analysis phase.
+
+- [x] **Use Processed toggle** (setup toolbar) — checkable action with stale
+  indicator. Controls `session.config["_use_processed"]`.
+  `ProToolsDawProcessor.transfer()` uses `processed_filepath` when enabled.
+
+- [x] **Staleness triggers** — gain, classification, RMS anchor, processor
+  selection, and re-analysis changes transition `"ready"` → `"stale"`.
+
+- [x] **MonoDownmixProcessor** (stub) — `PRIORITY_POST` (200), `apply()`
+  returns audio unchanged. Tests multi-processor UI behaviour.
+
+- [ ] **Batch-edit support for Processing column** (deferred)
+- [ ] **Visual feedback in setup table** (processed vs original file badges/tooltips)
 
 ### P1: Testing Infrastructure
 
@@ -71,6 +115,14 @@
 
 - [ ] **Wrap existing functions into PlainTextRenderer class**
 
+### P3: PreferencePage Superclass Refactor
+
+- [ ] **Refactor preferences into `PreferencePage` base class with generic Reset to Defaults**
+  - Each page subclasses `PreferencePage` with `populate(config)`, `read() -> dict`, `reset_defaults()`
+  - Dialog auto-wires Reset button per page
+  - Reduces duplication, provides consistent UX across all preference pages
+  - Currently Colors and Groups have manual Reset; General/Analysis/Detectors/Processors do not
+
 ### P3: Validation Polish
 
 - [ ] **Component-level `configure()` validation**
@@ -93,16 +145,15 @@
 
 ### P3: Make `rich` an Optional Dependency
 
-- [ ] **Move `rich` from core to optional/CLI dependency**
-  - `rich` is in `[project.dependencies]` because `sessionprep.py` imports it unconditionally
-  - The library (`sessionpreplib`) has no dependency on `rich`
-  - Anyone using only `sessionpreplib` (GUI, web frontend) pulls in `rich` unnecessarily
-  - Fix: move to `[project.optional-dependencies].cli` and guard imports in `sessionprep.py`
+- [x] **Move `rich` from core to optional/CLI dependency** (Status: ✅ Done)
+  - `rich` is now in `[project.optional-dependencies].cli`
+  - `sessionprep.py` guards imports with a helpful error message
+  - GUI builds (Nuitka) explicitly exclude `rich` to save space
 
 ### P3: Group Gain as Processor
 
 - [ ] **Extract `GroupGainProcessor` at `PRIORITY_POST` (200)**
-  - Currently implemented as `Pipeline._equalize_group_gains()` post-step
+  - Currently implemented as `Pipeline._apply_group_levels()` post-step
   - Moving to a processor makes it disableable/replaceable
 
 ---
@@ -138,13 +189,10 @@
 
 ### UX / Output Quality
 
-- [ ] **Reduce normalization hint noise** (Status: ❌) `NEW`
-  - Problem: In example output, 11 of 14 files triggered "near threshold" warnings. That's not actionable—it's noise.
-  - Options:
-    1. Tighten tolerance from ±2 dB to ±1 dB
-    2. Make hints opt-in: `--show_normalization_hints`
-    3. Only show top N most borderline cases
-  - Recommendation: Option 2 (off by default)
+- [x] **Reduce normalization hint noise** (Status: ✅ Done)
+  - Removed normalization hints entirely — the three-metric classifier
+    (crest + decay + density) makes single-metric "near threshold" warnings
+    obsolete.
 
 - [ ] **Auto-generate email-ready issue summary** (Status: ❌)
   - Why: Detection without communication is incomplete. This is workflow gold.
@@ -201,21 +249,22 @@
 
 ### Classification Robustness
 
-- [ ] **Crest factor classification improvements** (Status: ❌) `EXPANDED`
-  - Problem: A 12 dB threshold is arbitrary, and borderline cases are common.
-  - Issues:
-    - Metal kicks hit 15-18 dB crest
-    - Compressed EDM leads sit at 6-8 dB
-    - Genre-dependent behavior not accounted for
-  - Options:
-    1. `--crest_threshold` per-genre presets: `--preset metal`, `--preset edm`
-    2. Adaptive threshold based on session statistics
-    3. Spectral analysis to supplement crest (drums have specific spectral signatures)
-  - Example output showing fragility:
-    ```
-    Break Harm_01.wav: borderline crest factor (crest 12.0 dB vs threshold 12.0 dB, Δ +0.0 dB)
-    Vs harms_01.wav: borderline crest factor (crest 12.6 dB vs threshold 12.0 dB, Δ +0.6 dB)
-    ```
+- [x] **Audio classifier upgrade (crest + decay + density)** (Status: ✅ Done)
+  - Replaced single crest-factor threshold with a three-metric classifier:
+    crest factor, envelope decay rate (10 ms short-window energy envelope),
+    and content density (fraction of active RMS windows).
+  - Resolves compressed drums (low crest, fast decay → Transient),
+    plucked instruments (high crest, slow decay → Sustained), and
+    sparse percussion like toms/crashes (sparse + dynamic metric agreement).
+  - Sparse tracks require at least one dynamic metric (crest or decay) to
+    agree before being classified as Transient, preventing false positives
+    on sparse sustained content (e.g., guitar only in the outro).
+  - New configurable params: `decay_lookahead_ms` (default 200),
+    `decay_db_threshold` (default 12.0), `sparse_density_threshold` (default 0.25).
+  - Detector renamed: `crest_factor` → `audio_classifier`
+    (`CrestFactorDetector` → `AudioClassifierDetector`).
+  - File renamed: `crest_factor.py` → `audio_classifier.py`.
+  - All consumers updated (tail_exceedance, bimodal_normalize, rendering).
 
 - [ ] **Loudness Range (LRA) / dynamics measurement** (Status: ❌)
   - Why: Beyond crest—flag heavily compressed vs genuinely dynamic tracks.
@@ -230,24 +279,44 @@
     - Energy above Nyquist/2 (aliasing from bad SRC)
     - Missing expected low end (e.g., "Bass" track with nothing below 100Hz)
   - Categorization: ATTENTION
+- [x] **Subsonic detection: per-channel analysis** (Status: ✅ Done)
+  - Each channel is analyzed independently for stereo/multi-channel files.
+  - If only one channel triggers, the issue is reported per-channel with the
+    specific channel index. Both channels triggering → whole-file issue.
+  - Combined ratio = max of per-channel ratios (no phase-cancellation masking).
+  - Per-channel ratios stored in `data["per_channel"]`.
+  - `subsonic_stft_analysis()` in `audio.py` (scipy STFT, replaces three old functions).
 
-- [ ] **Subsonic detection: per-channel analysis** (Status: ❌) `NEW`
-  - Why: Current implementation sums to mono before FFT analysis. Subsonic content isolated to one channel (e.g., bad cable, ground loop on one side) could be diluted or missed.
-  - Current code:
-    ```python
-    mono = np.mean(data.astype(np.float64), axis=1)  # averages L/R
-    ```
-  - Fix: Analyze L and R independently for stereo files; report per-channel if only one side has subsonic issues.
-  - Categorization: Improves existing ATTENTION detector
+- [x] **Subsonic detection: windowed analysis option** (Status: ✅ Done)
+  - Default on via `subsonic_windowed` config (default: `true`).
+  - Splits each channel into windows (`subsonic_window_ms`, default 500 ms).
+  - Contiguous exceeding windows merged into regions with precise sample ranges.
+  - Regions reported as `IssueLocation` objects (visible on waveform overlays).
+  - Capped by `subsonic_max_regions` (default 20).
+  - Per-window ratios derived from single STFT pass (vectorised, no Python loop).
+  - Whole-file analysis always runs regardless of windowed setting.
+  - Four safeguards for accurate windowed results:
+    1. Absolute subsonic power gate (window_rms_db + ratio_db < −40 dBFS → skip;
+       prevents amp hum/noise in quiet gaps from false positives).
+    2. Threshold relaxation (windowed threshold = configured − 6 dB, compensates for reduced frequency resolution in short windows).
+    3. Active-signal fallback (if no ratio-based regions found, marks windows
+       within 20 dB of the loudest window — matches where signal is active).
+    4. Whole-file fallback (if even active-signal finds nothing, a full-file
+       overlay is shown so ATTENTION always has a visible issue).
 
-- [ ] **Subsonic detection: windowed analysis option** (Status: ❌) `NEW`
-  - Why: Current implementation does a single whole-file FFT (downsampled to ~200k samples). Subsonic rumble isolated to specific sections (bass drops, HVAC bleed in quiet parts) may not trigger the threshold.
-  - Options:
-    1. Windowed analysis with percentile reporting (like RMS anchor)
-    2. Report time ranges where subsonic content exceeds threshold
-    3. Keep whole-file as default, add `--subsonic_windowed` for detailed analysis
-  - Documentation: At minimum, document current behavior (whole-file average, not sectional)
-  - Categorization: Enhancement to existing detector
+- [x] **Stereo compatibility: merged detector with windowed analysis** (Status: ✅ Done)
+  - Merged `StereoCorrelationDetector` + `MonoFolddownDetector` into unified
+    `StereoCompatDetector` (id `stereo_compat`).
+  - `windowed_stereo_correlation()` in `audio.py`: vectorised numpy with per-window
+    DC removal, silence gating, whole-file aggregation from cumulative dot products.
+  - Both Pearson correlation and mono folddown loss computed per window from the same
+    dot products (L·L, R·R, L·R) at zero extra cost.
+  - Contiguous windows exceeding `corr_warn` or `mono_loss_warn_db` merged into regions.
+  - Regions reported as `IssueLocation` objects with waveform overlays.
+  - Severity upgrades INFO → ATTENTION when localized regions are found.
+  - Config: `corr_warn`, `mono_loss_warn_db`, `corr_windowed`, `corr_window_ms`,
+    `corr_max_regions`.
+  - Files deleted: `stereo_correlation.py`, `mono_folddown.py`.
 
 - [ ] **Reverb/bleed estimation** (Status: ❌) `NEW`
   - Why: A "dry" vocal with 2 seconds of reverb tail affects processing decisions. A "kick" track with hi-hat bleed means I can't gate it cleanly.
@@ -296,14 +365,11 @@
 
 ### Documentation
 
-- [ ] **Document subsonic detection methodology** (Status: ❌) `NEW`
-  - Why: Current behavior is non-obvious and could mislead users.
-  - Document:
-    - Whole-file FFT (not windowed/sectional)
-    - Downsampled to ~200k samples for performance
-    - Sums to mono before analysis (L/R not independent)
-    - Ratio is power in band ≤ cutoff vs. total power (excluding DC)
-  - Location: Detector reference docs or inline in README
+- [x] **Document subsonic detection methodology** (Status: ✅ Done)
+  - Documented in REFERENCE.md §2.10: STFT-based per-channel analysis via
+    `scipy.signal.stft`, max-of-channels combined ratio, vectorised windowed
+    analysis, absolute power gate, threshold relaxation, active-signal and
+    whole-file fallbacks, frequency-bounded issue overlays.
 
 ---
 
@@ -327,13 +393,83 @@
   - Approach: Simple spectral centroid or band energy checks against filename keywords
   - Categorization: ATTENTION (informational)
 
+### Vocal Automation (Future Feature)
+
+- [ ] **Vocal automation curve generation** (Status: ❌) `FUTURE`
+  - **Scope:** Pre-mix vocal cleanup to make vocals compressor-ready
+  - **Goal:** Remove mechanical problems (plosives, sibilance, peaks, level inconsistencies) that waste time and sabotage compressor
+  - **NOT in scope:** Macro dynamics (verse/chorus balance), artistic automation, creative mixing decisions
+  - **When:** After core features are complete and stable
+
+#### Core Processors
+
+- [ ] **Phrase-level leveler**
+  - Purpose: Smooth out loudness variations between phrases (2-4 second windows)
+  - Algorithm: Bring outlier phrases toward median ±3-6 dB (genre-dependent)
+  - Settings: `window_ms`, `target_range_db`, `smoothing` (aggressive/moderate/gentle)
+  - Not normalization: Preserve intentional dynamics, only fix extremes
+
+- [ ] **Plosive tamer**
+  - Purpose: Remove low-frequency thumps from P, B consonants
+  - Detection: 50-200 Hz bursts, <50ms duration
+  - Action: Momentary 6-12 dB reduction (genre-dependent threshold)
+  - Settings: `threshold` (0.0-1.0 energy ratio), `reduction_db`, `freq_range`
+
+- [ ] **Sibilance tamer**
+  - Purpose: Reduce harsh high-frequency spikes from S, T consonants
+  - Detection: 5-10 kHz spikes, <100ms duration
+  - Action: Momentary 3-8 dB reduction (frequency-specific or broadband)
+  - Settings: `threshold` (ratio vs. mid-freq), `reduction_db`, `freq_range`
+
+- [ ] **Peak limiter**
+  - Purpose: Catch random peaks that would overload compressor (mouth clicks, breath pops)
+  - Detection: Peaks >6 dB above local RMS (500ms window)
+  - Action: Fast reduction over 10-50ms (5ms attack, 30ms release)
+  - Settings: `threshold_db`, `target_db`, `attack_ms`, `release_ms`
+
+#### Genre Preset System
+
+- [ ] **Preset configurations**
+  - Pop: Aggressive control (±3 dB range, heavy plosive/sibilance reduction)
+  - Rock: Moderate control (±6 dB range, preserve energy)
+  - Jazz: Minimal control (±10 dB range, preserve natural dynamics)
+  - Minimal: Only obvious problems (disable leveler, catch extremes only)
+  - Custom: User-configurable thresholds
+
+#### Implementation Details
+
+- [ ] **Automation curve generation**
+  - Smoothing: 50ms attack, 200ms release (avoid zipper noise, pumping)
+  - Thinning: Reduce to <5000 points for DAW compatibility
+  - Global smoothing: Apply ballistics (compressor-style attack/release)
+  - Preserve intentional peaks: Don't squash belts/screams (>10 dB above target)
+
+- [ ] **GUI integration**
+  - Vocal automation panel (waveform + automation overlay)
+  - Preset dropdown (pop/rock/jazz/minimal/custom)
+  - Processor checkboxes + threshold sliders
+  - Real-time curve regeneration (adjust settings, preview curve)
+  - Statistics display (plosives detected, sibilance regions, peaks reduced)
+  - Visualization only (no interactive editing—refinement done in DAW)
+
+- [ ] **Export formats**
+  - DAWproject: Native volume automation lane
+  - Pro Tools PTSL: Native automation (when PTSL integration ready)
+  - JSON: For custom workflows / manual import
+
 ### Documentation
 
 - [x] **Reorganize docs** (Status: ✅ Done)
   - README.md — overview, installation, quick start, usage examples
   - TECHNICAL.md — audio engineering background, normalization theory, signal chain
   - REFERENCE.md — detector reference, analysis metrics, processing details
-  - DEVELOPMENT.md — development setup, building, library architecture
+  - DEVELOPMENT.md — development setup, building (PyInstaller + Nuitka), library architecture
+
+- [x] **Build System Harmonization** (Status: ✅ Done)
+  - Centralized `build_conf.py` for shared metadata.
+  - Symmetric `build_pyinstaller.py` and `build_nuitka.py`.
+  - Consistent `dist_*/` directory structure.
+  - GitHub Actions for automated artifacts.
 
 ---
 
@@ -346,10 +482,13 @@
 | **2** | Group intelligence | Multi-mic phase coherence |
 | **3** | Workflow polish | Click/pop detection |
 | **4** | Metering depth | LRA, LUFS (P2), True-peak/ISP (P2) |
-| **5** | Subsonic improvements | Per-channel analysis, Windowed option, Documentation |
+| ~~**5**~~ | ~~Subsonic improvements~~ | ~~Per-channel analysis, Windowed option, Documentation~~ → ✅ Done (STFT speedup, per-channel, windowed, docs) |
 | **6** | Auto-fix capabilities | DC removal, SRC |
-| **7** | Classification v2 | Crest improvements, Spectral analysis |
-| **8** | DAW scripting | DawProcessor ABC, backends, PTSL integration |
+| ~~**7**~~ | ~~Classification v2~~ | ~~Crest improvements~~ → ✅ Done (audio classifier with decay metric) |
+| ~~**7b**~~ | ~~Simplify CLI grouping~~ | ~~Overlap policies, anonymous IDs~~ → ✅ Done (named groups, first-match-wins, no overlap policy) |
+| **8** | DAW scripting | ~~DawProcessor ABC~~, ~~PTSL integration (check/fetch/transfer)~~, sync, DAWProject backend |
+| ~~**9**~~ | ~~File-based processing~~ | ~~AudioProcessor enabled toggle, Pipeline.prepare(), Prepare button, Processing column, Use Processed toggle, staleness, MonoDownmix stub~~ → ✅ Done |
+| ~~**10**~~ | ~~Stereo compatibility~~ | ~~Merge StereoCorrelation + MonoFolddown, windowed analysis, waveform overlays~~ → ✅ Done |
 | **Ongoing** | Low-hanging fruit | Stereo narrowness, Start offset, Name mismatch, `rich` optional |
 
 ---
@@ -361,7 +500,7 @@
 | Over-compression / brick-wall limiting | P0 | Mix engineer feedback |
 | Noise floor / SNR estimation | P0 | Mix engineer feedback |
 | Multi-mic phase coherence | P0 | Mix engineer feedback |
-| Reduce normalization hint noise | P0 | Mix engineer feedback |
+| ~~Reduce normalization hint noise~~ | P0 | ✅ Resolved (normalization hints removed — obsolete with three-metric classifier) |
 | Email summary generator | P0 | Workflow requirement |
 | "Effectively silent" / noise-only detection (rare) | P1 | User note (close to silence) |
 | Click/pop detection | P1 | Mix engineer feedback |
@@ -381,7 +520,40 @@
 | ~~Hard-coded processor ID in Pipeline~~ | — | ✅ Resolved |
 | ~~Report/JSON generation in CLI~~ | — | ✅ Resolved (moved to `sessionpreplib/reports.py`) |
 | ~~Docs reorganization~~ | — | ✅ Resolved (README, TECHNICAL, REFERENCE) |
-| ~~Preferences dialog~~ | — | ✅ Resolved (tree nav, ParamSpec-driven pages, reset-to-default) |
-| ~~HiDPI scaling~~ | — | ✅ Resolved (QT_SCALE_FACTOR, persisted in gui.scale_factor) |
+| ~~Preferences dialog~~ | — | ✅ Resolved (two-tab layout: Global + Config Presets; config preset CRUD; group preset CRUD; ParamSpec-driven pages; reset-to-default) |
+| ~~Config presets + session config~~ | — | ✅ Resolved (four-section config structure, named config presets, toolbar Config: combo, session Config tab, per-session overrides, legacy migration, group preservation on re-analysis) |
+| ~~HiDPI scaling~~ | — | ✅ Resolved (QT_SCALE_FACTOR, persisted in app.scale_factor) |
 | ~~Detector/processor help text~~ | — | ✅ Resolved (visible subtext + rich tooltips) |
 | ~~About dialog~~ | — | ✅ Resolved (version from importlib.metadata) |
+| ~~Waveform overlay controls~~ | — | ✅ Resolved (Detector Overlays dropdown with per-detector checkable items, filtered by is_relevant) |
+| ~~Peak/RMS marker toggle~~ | — | ✅ Resolved (Peak / RMS Max toggle button, dark violet/teal-blue colors) |
+| ~~RMS L/R and RMS AVG split~~ | — | ✅ Resolved (separate toggle buttons replacing single RMS toggle) |
+| ~~Show clean detector results pref~~ | — | ✅ Resolved (show_clean_detectors in Detectors section, default off) |
+| ~~Default project directory pref~~ | — | ✅ Resolved (directory picker in General prefs, Open Folder starts there) |
+| ~~Real progress bar~~ | — | ✅ Resolved (determinate bar from EventBus events, async table row updates) |
+| ~~Tail exceedance relevance~~ | — | ✅ Resolved (is_relevant on TrackDetector, suppressed for peak/peak-limited methods) |
+| ~~Severity label vs is_relevant mismatch~~ | — | ✅ Resolved (track_analysis_label now accepts detectors list, checks is_relevant; re-evaluated in _on_track_planned) |
+| ~~Waveform keyboard shortcuts~~ | — | ✅ Resolved (Ctrl+wheel h-zoom, Ctrl+Shift+wheel v-zoom, Shift+wheel scroll, R/T zoom at guide position) |
+| ~~Vectorised waveform downsampling~~ | — | ✅ Resolved (_build_peaks and _build_rms_envelope use NumPy reshape + vectorised min/max/sqrt) |
+| ~~AIFF/AIF file support~~ | — | ✅ Resolved (AUDIO_EXTENSIONS constant in audio.py; pipeline, GUI, CLI all scan .wav/.aif/.aiff) |
+| ~~Channel count column~~ | — | ✅ Resolved (Ch column in track table, populated from TrackContext.channels) |
+| ~~WAV/AIFF chunk I/O~~ | — | ✅ Resolved (chunks.py: read_chunks, write_chunks, remove_chunks, chunk_ids; chunk metadata in file detail report) |
+| ~~Spectrogram display mode~~ | — | ✅ Resolved (mel spectrogram via scipy STFT, magma/viridis/grayscale colormaps, frequency scale, configurable FFT/window/dB range) |
+| ~~Frequency-bounded detector overlays~~ | — | ✅ Resolved (IssueLocation.freq_min_hz/freq_max_hz, mel-mapped rectangles in spectrogram mode) |
+| ~~Spectrogram navigation~~ | — | ✅ Resolved (Ctrl+Shift+wheel freq zoom, Shift+Alt+wheel freq pan, dB floor/ceiling presets) |
+| ~~Horizontal time scale~~ | — | ✅ Resolved (time axis in waveform display) |
+| ~~Output folder preference~~ | — | ✅ Resolved (directory picker in General prefs) |
+| ~~Skip reanalysis on GUI-only changes~~ | — | ✅ Resolved (Preferences dialog detects gui-vs-analysis changes) |
+| ~~Subsonic STFT speedup~~ | — | ✅ Resolved (scipy.signal.stft replaces per-window Python FFT loop; scipy promoted to core dep) |
+| ~~Scipy as core dependency~~ | — | ✅ Resolved (scipy>=1.12 promoted from gui optional to core dependencies; used by subsonic STFT + spectrogram) |
+| ~~Batch RMS anchor / classification override~~ | — | ✅ Resolved (BatchEditTableWidget + BatchComboBox in widgets.py, selectionCommand override preserves multi-selection, Alt+Shift batch apply, async BatchReanalyzeWorker with progress) |
+| ~~CLI grouping simplification~~ | — | ✅ Resolved (named groups via `Name:pattern` syntax, first-match-wins, overlap warnings, removed `--group_overlap`/union-find/merge) |
+| ~~Group levelling terminology~~ | — | ✅ Resolved ("equalize" → "group level" throughout codebase; `_equalize_group_gains` → `_apply_group_levels`) |
+| ~~Stereo compat windowed analysis~~ | — | ✅ Resolved (merged StereoCorrelation + MonoFolddown → StereoCompatDetector; windowed Pearson correlation + mono folddown loss; IssueLocation overlays) |
+| ~~Stereo compat false positive fix~~ | — | ✅ Resolved (`_windowed_analysis` fallback only runs when `any_whole_warn` is True; prevents unconditional active-region marking) |
+| ~~Stereo compat window default~~ | — | ✅ Resolved (default `corr_window_ms` changed from 500 ms to 250 ms for better localization) |
+| ~~Summary report\_as routing fix~~ | — | ✅ Resolved (`_buckets` dict in `rendering.py` was missing `"info"` key; `report_as` config choice `"info"` now routes correctly to info bucket) |
+| ~~Prepare error reporting~~ | — | ✅ Resolved (per-track write failures collected in `_prepare_errors`, displayed via `QMessageBox.warning` with file-locking guidance) |
+| ~~Mono playback button~~ | — | ✅ Resolved (checkable **M** button in playback controls; `PlaybackController.play(mono=True)` folds stereo to mono via (L+R)/2; orange when active) |
+| ~~Analysis column severity counts~~ | — | ✅ Resolved (replaced single worst-severity label with colored per-severity counts: `2P 1A 5I` format; QLabel cell widget with HTML rich text + hidden `_SortableItem` for sorting) |
+| ~~Peak/RMS Max markers default off~~ | — | ✅ Resolved (`_show_markers` and toggle default changed to `False`) |

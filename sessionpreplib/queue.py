@@ -95,7 +95,7 @@ class SessionQueue:
             pipeline.analyze(session)
             pipeline.plan(session)
 
-            daw_actions = []
+            daw_commands = []
 
             if job.config.get("execute"):
                 import os
@@ -111,7 +111,7 @@ class SessionQueue:
 
             job.result = SessionResult(
                 session=session,
-                daw_actions=daw_actions,
+                daw_commands=daw_commands,
             )
             job.status = JobStatus.COMPLETED
         except Exception as e:

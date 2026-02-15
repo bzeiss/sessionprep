@@ -1,12 +1,11 @@
 from .silence import SilenceDetector
 from .clipping import ClippingDetector
 from .dc_offset import DCOffsetDetector
-from .stereo_correlation import StereoCorrelationDetector
+from .stereo_compat import StereoCompatDetector
 from .dual_mono import DualMonoDetector
-from .mono_folddown import MonoFolddownDetector
 from .one_sided_silence import OneSidedSilenceDetector
 from .subsonic import SubsonicDetector
-from .crest_factor import CrestFactorDetector
+from .audio_classifier import AudioClassifierDetector
 from .tail_exceedance import TailExceedanceDetector
 from .format_consistency import FormatConsistencyDetector
 from .length_consistency import LengthConsistencyDetector
@@ -18,12 +17,11 @@ def default_detectors():
         SilenceDetector(),
         ClippingDetector(),
         DCOffsetDetector(),
-        StereoCorrelationDetector(),
+        StereoCompatDetector(),
         DualMonoDetector(),
-        MonoFolddownDetector(),
         OneSidedSilenceDetector(),
         SubsonicDetector(),
-        CrestFactorDetector(),
+        AudioClassifierDetector(),
         TailExceedanceDetector(),
         FormatConsistencyDetector(),
         LengthConsistencyDetector(),
@@ -40,12 +38,11 @@ __all__ = [
     "SilenceDetector",
     "ClippingDetector",
     "DCOffsetDetector",
-    "StereoCorrelationDetector",
+    "StereoCompatDetector",
     "DualMonoDetector",
-    "MonoFolddownDetector",
     "OneSidedSilenceDetector",
     "SubsonicDetector",
-    "CrestFactorDetector",
+    "AudioClassifierDetector",
     "TailExceedanceDetector",
     "FormatConsistencyDetector",
     "LengthConsistencyDetector",

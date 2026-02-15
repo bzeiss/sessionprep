@@ -18,11 +18,11 @@ from ..audio import (
 class TailExceedanceDetector(TrackDetector):
     id = "tail_exceedance"
     name = "Tail Regions Exceeded Anchor"
-    depends_on = ["silence", "crest_factor"]
+    depends_on = ["silence", "audio_classifier"]
 
     @classmethod
     def config_params(cls) -> list[ParamSpec]:
-        return [
+        return super().config_params() + [
             ParamSpec(
                 key="tail_min_exceed_db", type=(int, float), default=3.0,
                 min=0.0, min_exclusive=True,
@@ -61,7 +61,21 @@ class TailExceedanceDetector(TrackDetector):
             "section-based gain riding."
         )
 
+    def is_relevant(self, result: DetectorResult, track: TrackContext | None = None) -> bool:
+        """Tail exceedance is only meaningful when normalizing to the RMS anchor.
+
+        If the processor chose a peak-based method (Transient peak targeting
+        or Sustained peak-limited), the anchor is irrelevant and this
+        detector's result would be noise.
+        """
+        if track and track.processor_results:
+            pr = next(iter(track.processor_results.values()), None)
+            if pr and pr.method and "RMS" not in pr.method:
+                return False
+        return True
+
     def configure(self, config):
+        super().configure(config)
         self.window_ms = config.get("window", 400)
         self.stereo_mode = config.get("stereo_mode", "avg")
         self.rms_anchor_mode = config.get("rms_anchor", "percentile")
@@ -90,7 +104,16 @@ class TailExceedanceDetector(TrackDetector):
                 data=empty_data,
             )
 
-        if self.rms_anchor_mode != "percentile":
+        # Resolve per-track RMS anchor override
+        ov = getattr(track, "rms_anchor_override", None)
+        if ov == "max":
+            effective_mode = "max"
+        elif ov and ov.startswith("p"):
+            effective_mode = "percentile"
+        else:
+            effective_mode = self.rms_anchor_mode
+
+        if effective_mode != "percentile":
             return DetectorResult(
                 detector_id=self.id,
                 severity=Severity.CLEAN,
@@ -98,13 +121,13 @@ class TailExceedanceDetector(TrackDetector):
                 data=empty_data,
             )
 
-        # Read anchor_mean from crest_factor detector result
-        crest_result = track.detector_results.get("crest_factor")
+        # Read anchor_mean from audio_classifier detector result
+        crest_result = track.detector_results.get("audio_classifier")
         if crest_result is None:
             return DetectorResult(
                 detector_id=self.id,
                 severity=Severity.CLEAN,
-                summary="crest_factor result missing",
+                summary="audio_classifier result missing",
                 data=empty_data,
             )
 
