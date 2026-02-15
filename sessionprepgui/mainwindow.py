@@ -1098,28 +1098,60 @@ class SessionPrepWindow(QMainWindow):
                 group_target[g["name"]] = dt.lower()
 
         if not group_target:
-            self._status_bar.showMessage("Auto-Assign: no DAW targets configured.")
+            QMessageBox.information(
+                self, "Auto-Assign",
+                "No DAW targets are configured.\n\n"
+                "Open the Groups tab and set a DAW Target for each "
+                "group that should be mapped to a Pro Tools folder.")
             return
 
         # Collect assignments: folder_pt_id → [filenames]
         batch: dict[str, list[str]] = {}
+        no_group = 0
+        no_target = 0
+        no_folder = 0
+        already_assigned = 0
         for track in self._session.tracks:
             # Skip already-assigned tracks
             if track.filename in assignments:
+                already_assigned += 1
                 continue
             # Skip tracks without a group or without a DAW target
             if not track.group:
+                no_group += 1
                 continue
             target_key = group_target.get(track.group)
             if not target_key:
+                no_target += 1
                 continue
             folder_id = folder_by_name.get(target_key)
             if not folder_id:
+                no_folder += 1
                 continue
             batch.setdefault(folder_id, []).append(track.filename)
 
         if not batch:
-            self._status_bar.showMessage("Auto-Assign: nothing to assign.")
+            reasons: list[str] = []
+            if no_group:
+                reasons.append(
+                    f"\u2022 {no_group} track(s) have no group assigned.")
+            if no_target:
+                reasons.append(
+                    f"\u2022 {no_target} track(s) belong to groups without "
+                    "a DAW target.")
+            if no_folder:
+                reasons.append(
+                    f"\u2022 {no_folder} track(s) have DAW targets that "
+                    "don\u2019t match any fetched folder name.")
+            if already_assigned:
+                reasons.append(
+                    f"\u2022 {already_assigned} track(s) are already "
+                    "assigned.")
+            detail = "\n".join(reasons) if reasons else (
+                "No unassigned tracks found.")
+            QMessageBox.information(
+                self, "Auto-Assign",
+                f"Nothing to assign.\n\n{detail}")
             return
 
         # Apply assignments in bulk
