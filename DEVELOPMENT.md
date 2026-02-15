@@ -336,6 +336,7 @@ sessionpreplib/
     processors/
         __init__.py              # Exports all processors; provides default_processors()
         bimodal_normalize.py     # BimodalNormalizeProcessor
+        mono_downmix.py          # MonoDownmixProcessor (stub)
     daw_processors/
         __init__.py              # Exports all DAW processors; provides default_daw_processors()
         protools.py              # ProToolsDawProcessor — Pro Tools integration via py-ptsl gRPC SDK
@@ -524,9 +525,21 @@ class TrackContext:
     processor_results: dict[str, ProcessorResult] = field(default_factory=dict)
     group: str | None = None
     classification_override: str | None = None
+    rms_anchor_override: str | None = None
     chunk_ids: list[str] = field(default_factory=list)
     _cache: dict[str, Any] = field(default_factory=dict, repr=False)
+    # File-based processing pipeline
+    processed_filepath: str | None = None
+    applied_processors: list[str] = field(default_factory=list)
+    processor_skip: set[str] = field(default_factory=set)
 ```
+
+- `processed_filepath` — absolute path to the processed output file (set by
+  `Pipeline.prepare()`), or `None` if not yet prepared.
+- `applied_processors` — list of processor IDs that were applied during the
+  last `prepare()` run.
+- `processor_skip` — set of processor IDs to skip for this track (per-track
+  override; empty = use all enabled processors, i.e. "Default").
 
 ### 4.8 SessionContext
 
@@ -541,6 +554,7 @@ class SessionContext:
     processors: list = field(default_factory=list)
     daw_state: dict[str, Any] = field(default_factory=dict)
     daw_command_log: list[DawCommandResult] = field(default_factory=list)
+    prepare_state: str = "none"
 ```
 
 - `daw_state` — namespaced per DAW processor id. Each processor stores fetched
@@ -548,6 +562,10 @@ class SessionContext:
   `session.daw_state["protools"]["folders"]`).
 - `daw_command_log` — flat, append-only list of all executed DAW commands across
   all transfer/sync/execute_commands calls.
+- `prepare_state` — tracks the state of the file-based Prepare step. Values:
+  `"none"` (never prepared), `"ready"` (prepared and up-to-date), `"stale"`
+  (prepared but invalidated by changes to gain, classification, RMS anchor,
+  processor selection, or re-analysis).
 
 ### 4.9 SessionResult / SessionJob / JobStatus
 
@@ -788,12 +806,21 @@ class AudioProcessor(ABC):
     name: str
     priority: int
 
+    def config_params(cls) -> list[ParamSpec]: ...   # base: {id}_enabled toggle
     def configure(self, config: dict[str, Any]) -> None: ...
+    @property
+    def enabled(self) -> bool: ...
     @abstractmethod
     def process(self, track: TrackContext) -> ProcessorResult: ...
     @abstractmethod
     def apply(self, track: TrackContext, result: ProcessorResult) -> np.ndarray: ...
 ```
+
+The base `config_params()` returns a single `{id}_enabled` `ParamSpec` (bool,
+default `True`). Subclasses extend via `super().config_params() + [...]`.
+The base `configure()` reads `self._enabled` from the config. The Pipeline
+configures all processors first, then filters to only enabled ones before
+sorting by priority.
 
 ### 7.2 process() vs apply() Split
 
@@ -812,22 +839,32 @@ class AudioProcessor(ABC):
   - Transient -> gain = target_peak - peak
   - Sustained -> gain = min(target_rms - rms, target_peak - peak)
 
-### 7.4 Group Levelling
+### 7.4 MonoDownmixProcessor (`mono_downmix.py`)
+
+- **ID:** `mono_downmix` | **Priority:** `PRIORITY_POST` (200)
+- **Status:** Stub — `apply()` returns audio unchanged. A real implementation
+  would sum/average channels and return a mono array.
+- **Logic:**
+  - Mono files → classification "Mono", method "pass-through (already mono)"
+  - Multi-channel files → classification "Stereo", method "downmix Nch → 1ch (stub)"
+  - Gain is always 0.0 dB (no-op)
+
+### 7.5 Group Levelling
 
 Implemented as a post-processing step in `Pipeline._apply_group_levels()`.
 After all processors run, grouped tracks receive the minimum gain of the group.
 
-### 7.5 Fader Offsets
+### 7.6 Fader Offsets
 
 Implemented in `Pipeline._compute_fader_offsets()`. Calculates inverse of gain,
 applies anchor adjustment (`--anchor` or `--normalize_faders`). Stored in
 `ProcessorResult.data["fader_offset"]`.
 
-### 7.6 Registration
+### 7.7 Registration
 
 ```python
 def default_processors() -> list[AudioProcessor]:
-    return [BimodalNormalizeProcessor()]
+    return [BimodalNormalizeProcessor(), MonoDownmixProcessor()]
 ```
 
 ---
@@ -995,20 +1032,22 @@ Tracks with no group assignment skip colorization.
 
 ### 9.1 Overview
 
-Defined in `sessionpreplib/pipeline.py`. Three implemented phases:
+Defined in `sessionpreplib/pipeline.py`. Four implemented phases:
 
 ```
 analyze()   -> Run all detectors (track-level + session-level)
 plan()      -> Run audio processors + group equalization + fader offsets
-execute()   -> Apply gains, backup originals, write processed files
+prepare()   -> Apply processors per track, write processed files to output dir
+execute()   -> Apply gains, backup originals, write processed files (CLI legacy)
 ```
 
 ### 9.2 Phase Usage by Mode
 
 | Mode | Phases executed |
 |------|----------------|
-| Dry-run (default) | `analyze` -> `plan` |
-| Execute (audio only) | `analyze` -> `plan` -> `execute` |
+| Dry-run (default) | `analyze` → `plan` |
+| GUI with Prepare | `analyze` → `plan` → `prepare` |
+| Execute (CLI legacy) | `analyze` → `plan` → `execute` |
 
 ### 9.3 Pipeline Class
 
@@ -1018,10 +1057,37 @@ class Pipeline:
                  max_workers=None): ...
     def analyze(self, session: SessionContext) -> SessionContext: ...
     def plan(self, session: SessionContext) -> SessionContext: ...
+    def prepare(self, session, output_dir, progress_cb=None) -> SessionContext: ...
     def execute(self, session, output_dir, backup_dir, is_overwriting) -> SessionContext: ...
 ```
 
-### 9.4 Parallel Execution
+### 9.4 Prepare Phase
+
+`prepare()` generates processed audio files into a dedicated output folder,
+enabling the GUI to offer processed files for DAW transfer without overwriting
+originals.
+
+**Behaviour:**
+
+1. Wipe `output_dir` (clean slate on every run).
+2. For each OK track, determine applicable processors: all enabled processors
+   whose ID is **not** in `track.processor_skip`.
+3. Filter to processors with a valid (non-error) `ProcessorResult`.
+4. Deep-copy `audio_data`, chain `apply()` calls in priority order.
+5. Write the processed audio to `output_dir/filename` (preserving original
+   subtype via `write_track()`).
+6. Update `track.processed_filepath` and `track.applied_processors`.
+7. Set `session.prepare_state = "ready"`.
+
+Tracks with no applicable processors are skipped (no file written,
+`processed_filepath` set to `None`).
+
+**Staleness:** The GUI transitions `prepare_state` from `"ready"` to `"stale"`
+whenever gain, classification, RMS anchor, per-track processor selection, or
+re-analysis changes occur. The Prepare button and Use Processed toggle reflect
+the current state.
+
+### 9.5 Parallel Execution
 
 All three parallelizable stages use `concurrent.futures.ThreadPoolExecutor`:
 
@@ -1054,7 +1120,7 @@ at the number of tracks.
 - `_apply_group_levels()` — grouped tracks get minimum gain
 - `_compute_fader_offsets()` — inverse gain + anchor adjustment
 
-### 9.5 `load_session()` Helper
+### 9.6 `load_session()` Helper
 
 ```python
 def load_session(source_dir, config, event_bus=None) -> SessionContext
@@ -1063,7 +1129,7 @@ def load_session(source_dir, config, event_bus=None) -> SessionContext
 Loads all WAVs from `source_dir` in parallel, assigns groups (named,
 first-match-wins), appends overlap warnings to `session.warnings`.
 
-### 9.6 Topological Sort
+### 9.7 Topological Sort
 
 `_topo_sort_detectors()` uses Kahn's algorithm. Raises `ConfigError` on
 cycles or missing dependencies.
@@ -1185,6 +1251,9 @@ class EventBus:
 | `track.plan_complete` | Pipeline | `filename`, `index`, `total` |
 | `track.write_start` | Pipeline | `filename`, `index`, `total` |
 | `track.write_complete` | Pipeline | `filename`, `index`, `total` |
+| `prepare.start` | Pipeline | `filename` |
+| `prepare.complete` | Pipeline | `filename` |
+| `prepare.error` | Pipeline | `filename`, `error` |
 | `job.start` | Queue | `job_id` |
 | `job.complete` | Queue | `job_id`, `status` |
 
@@ -1350,7 +1419,7 @@ group).
 | `theme.py` | `COLORS` dict, `FILE_COLOR_*` constants, dark palette + stylesheet |
 | `helpers.py` | `esc()`, `track_analysis_label(track, detectors=None)` (filters via `is_relevant()`), `fmt_time()`, severity maps |
 | `widgets.py` | `BatchEditTableWidget`, `BatchComboBox` — reusable batch-edit base classes preserving multi-row selection across cell-widget clicks (zero app imports) |
-| `worker.py` | QThread workers: `AnalyzeWorker` (pipeline in background, thread-safe progress, per-track signals), `BatchReanalyzeWorker` (subset re-analysis after batch overrides), `DawCheckWorker` (connectivity check), `DawFetchWorker` (folder fetch), `DawTransferWorker` (transfer with progress + progress_value signals) |
+| `worker.py` | QThread workers: `AnalyzeWorker` (pipeline in background, thread-safe progress, per-track signals), `BatchReanalyzeWorker` (subset re-analysis after batch overrides), `PrepareWorker` (runs `Pipeline.prepare()` in background with progress), `DawCheckWorker` (connectivity check), `DawFetchWorker` (folder fetch), `DawTransferWorker` (transfer with progress + progress_value signals) |
 | `report.py` | HTML rendering: `render_summary_html()`, `render_fader_table_html()`, `render_track_detail_html()` |
 | `waveform.py` | `WaveformWidget` — two display modes (waveform + spectrogram), vectorised NumPy peak/RMS downsampling, mel spectrogram (256 mel bins via `scipy.signal.stft`, configurable FFT/window/dB range/colormap), dB and frequency scales, peak/RMS markers, crosshair mouse guide (dBFS in waveform, Hz in spectrogram), mouse-wheel zoom/pan (Ctrl+wheel h-zoom, Ctrl+Shift+wheel v-zoom, Shift+Alt+wheel freq pan, Shift+wheel scroll), keyboard shortcuts (R/T zoom), detector issue overlays with optional frequency bounds, RMS L/R and RMS AVG envelopes, playback cursor, tooltips |
 | `playback.py` | `PlaybackController` — sounddevice OutputStream lifecycle, QTimer cursor updates, signal-based API |
@@ -1486,6 +1555,33 @@ leaves. `preferences` reads `ParamSpec` metadata from detectors and processors.
 - **HiDPI scaling** is applied via `QT_SCALE_FACTOR` environment variable,
   read directly from the JSON config file before `QApplication` is created
   (bypassing the validate-and-merge path to avoid side effects).
+- **File-based processing pipeline** — an opt-in, non-destructive workflow
+  for generating processed audio files. The pipeline is controlled by three
+  UI elements:
+  - **Prepare button** (analysis toolbar, right-aligned) — triggers
+    `PrepareWorker` → `Pipeline.prepare()`. Text reflects staleness state:
+    "Prepare" (never run), "Prepare ✓" (ready), "Prepare (!)" (stale).
+    Enabled after analysis completes.
+  - **Processing column** (analysis table, column 7) — per-track multiselect
+    `QToolButton` with a checkable `QMenu` listing all enabled
+    `AudioProcessor` instances. Label shows "Default" (all processors
+    active, i.e. `processor_skip` is empty), "None" (all skipped), or
+    comma-separated names (partial selection). When no processors are
+    enabled globally, the button is disabled and shows "None". Toggling
+    a processor adds/removes its ID from `track.processor_skip` and marks
+    the Prepare state as stale. Editable only in the analysis phase.
+  - **Use Processed toggle** (setup toolbar) — checkable `QAction` that
+    sets `session.config["_use_processed"]`. Label shows "Use Processed:
+    On/Off" with "(!) " appended when `prepare_state == "stale"`. Enabled
+    only when `prepare_state` is `"ready"` or `"stale"`. When on,
+    `ProToolsDawProcessor.transfer()` uses `track.processed_filepath`
+    instead of `track.filepath` for each track that has a processed file.
+  - **Staleness triggers** — changing gain, classification, RMS anchor,
+    per-track processor selection, or re-analyzing transitions
+    `prepare_state` from `"ready"` to `"stale"`, updating both the Prepare
+    button and Use Processed toggle labels.
+  - **Output directory** — resolved from `config["app"]["output_folder"]`
+    (default: `"processed"`), relative to the session source directory.
 - **DAW integration** — the Session Setup tab provides a toolbar with
   Connect/Check, Fetch, Transfer, and Sync actions. A combo box selects the
   active DAW processor. The folder tree (right side of a splitter) supports
@@ -1654,12 +1750,15 @@ SessionQueue                          manages N jobs, priority-ordered
             |                         -> SessionDetectors
             |-- plan()                -> AudioProcessors (priority-sorted)
             |                         -> Group levelling + fader offsets
-            +-- execute()             -> AudioProcessors.apply() + file write
+            |-- prepare()             -> Apply per-track processors, write to output dir
+            |                         -> Respects processor_skip, sets prepare_state
+            +-- execute()             -> AudioProcessors.apply() + file write (CLI legacy)
 
 DawProcessor (orchestrated by GUI/CLI, outside Pipeline)
   |-- check_connectivity()            -> verify DAW is reachable
   |-- fetch(session)                  -> pull DAW state into session.daw_state
   |-- transfer(session)               -> full push (builds + executes DawCommands)
+  |                                   -> uses processed files when _use_processed is on
   |-- sync(session)                   -> incremental delta push
   +-- execute_commands(session, cmds)  -> ad-hoc commands from GUI tools
 ```

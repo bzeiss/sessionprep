@@ -75,7 +75,7 @@ from .report import render_summary_html, render_track_detail_html
 from .widgets import BatchEditTableWidget, BatchComboBox
 from .worker import (
     AnalyzeWorker, BatchReanalyzeWorker, DawCheckWorker, DawFetchWorker,
-    DawTransferWorker,
+    DawTransferWorker, PrepareWorker,
 )
 from .waveform import WaveformWidget, WaveformLoadWorker
 from sessionpreplib.audio import AUDIO_EXTENSIONS
@@ -394,6 +394,7 @@ class SessionPrepWindow(QMainWindow):
         self._pending_after_check = None
         self._daw_fetch_worker: DawFetchWorker | None = None
         self._daw_transfer_worker: DawTransferWorker | None = None
+        self._prepare_worker: PrepareWorker | None = None
 
         # Load persistent GUI configuration (four-section structure)
         self._config = load_config()
@@ -545,6 +546,17 @@ class SessionPrepWindow(QMainWindow):
             self._on_toolbar_config_preset_changed)
         self._analysis_toolbar.addWidget(self._config_preset_combo)
 
+        # ── Spacer ─────────────────────────────────────────────────────
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._analysis_toolbar.addWidget(spacer)
+
+        # ── Right: Prepare button ──────────────────────────────────────
+        self._prepare_action = QAction("Prepare", self)
+        self._prepare_action.setEnabled(False)
+        self._prepare_action.triggered.connect(self._on_prepare)
+        self._analysis_toolbar.addAction(self._prepare_action)
+
     def _populate_config_preset_combo(self):
         """Fill the config-preset combo from config, preserving the current selection."""
         presets = self._config.get("config_presets",
@@ -598,6 +610,15 @@ class SessionPrepWindow(QMainWindow):
         self._daw_check_label = QLabel("")
         self._daw_check_label.setContentsMargins(6, 0, 0, 0)
         self._setup_toolbar.addWidget(self._daw_check_label)
+
+        self._setup_toolbar.addSeparator()
+
+        # ── Use Processed toggle ───────────────────────────────────────
+        self._use_processed_action = QAction("Use Processed: Off", self)
+        self._use_processed_action.setCheckable(True)
+        self._use_processed_action.setEnabled(False)
+        self._use_processed_action.toggled.connect(self._on_use_processed_toggled)
+        self._setup_toolbar.addAction(self._use_processed_action)
 
         # ── Spacer ─────────────────────────────────────────────────────
         spacer = QWidget()
@@ -833,6 +854,32 @@ class SessionPrepWindow(QMainWindow):
         else:
             self._status_bar.showMessage(f"Fetch failed: {message}")
         self._update_daw_lifecycle_buttons()
+
+    # ── Use Processed toggle ────────────────────────────────────────────
+
+    @Slot(bool)
+    def _on_use_processed_toggled(self, checked: bool):
+        if self._session:
+            self._session.config["_use_processed"] = checked
+        self._update_use_processed_action()
+
+    def _update_use_processed_action(self):
+        """Update the Use Processed toggle label, enabled state, and stale indicator."""
+        if not self._session:
+            self._use_processed_action.setEnabled(False)
+            self._use_processed_action.setText("Use Processed: Off")
+            return
+
+        state = self._session.prepare_state
+        has_prepared = state in ("ready", "stale")
+        self._use_processed_action.setEnabled(has_prepared)
+
+        checked = self._use_processed_action.isChecked()
+        on_off = "On" if checked else "Off"
+        if state == "stale" and checked:
+            self._use_processed_action.setText(f"Use Processed: {on_off} (!)")
+        else:
+            self._use_processed_action.setText(f"Use Processed: {on_off}")
 
     # ── DAW Transfer ─────────────────────────────────────────────────────
 
@@ -1118,10 +1165,10 @@ class SessionPrepWindow(QMainWindow):
 
         # Track table
         self._track_table = _DraggableTrackTable()
-        self._track_table.setColumnCount(7)
+        self._track_table.setColumnCount(8)
         self._track_table.setHorizontalHeaderLabels(
             ["File", "Ch", "Analysis", "Classification", "Gain",
-             "RMS Anchor", "Group"]
+             "RMS Anchor", "Group", "Processing"]
         )
         self._track_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._track_table.setSelectionMode(QTableWidget.ExtendedSelection)
@@ -1141,12 +1188,14 @@ class SessionPrepWindow(QMainWindow):
         header.setSectionResizeMode(4, QHeaderView.Interactive)
         header.setSectionResizeMode(5, QHeaderView.Interactive)
         header.setSectionResizeMode(6, QHeaderView.Interactive)
+        header.setSectionResizeMode(7, QHeaderView.Interactive)
         header.resizeSection(1, 30)
         header.resizeSection(2, 150)
         header.resizeSection(3, 120)
         header.resizeSection(4, 90)
         header.resizeSection(5, 100)
         header.resizeSection(6, 140)
+        header.resizeSection(7, 130)
 
         self._track_table.cellClicked.connect(self._on_row_clicked)
         self._track_table.currentCellChanged.connect(self._on_current_cell_changed)
@@ -1670,6 +1719,13 @@ class SessionPrepWindow(QMainWindow):
             idx = self._session_stack.addWidget(pg)
             self._session_page_index[id(child)] = idx
 
+            # Connect processor enabled toggle to live-update Processing column
+            enabled_key = f"{proc.id}_enabled"
+            for key, widget in wdg:
+                if key == enabled_key and isinstance(widget, QCheckBox):
+                    widget.toggled.connect(self._on_processor_enabled_changed)
+                    break
+
         # DAW Processors
         daw_parent = QTreeWidgetItem(self._session_tree, ["DAW Processors"])
         placeholder2 = QWidget()
@@ -1711,6 +1767,17 @@ class SessionPrepWindow(QMainWindow):
 
     def _load_session_widgets(self, preset: dict[str, Any]):
         """Load values from a config preset dict into session widgets."""
+        self._loading_session_widgets = True
+        try:
+            self._load_session_widgets_inner(preset)
+        finally:
+            self._loading_session_widgets = False
+        # Single refresh after all widgets are set
+        if self._session:
+            self._on_processor_enabled_changed(False)
+
+    def _load_session_widgets_inner(self, preset: dict[str, Any]):
+        """Inner loader — sets widget values without triggering column refresh."""
         # Analysis
         analysis = preset.get("analysis", {})
         for key, widget in self._session_widgets.get("analysis", []):
@@ -2396,6 +2463,11 @@ class SessionPrepWindow(QMainWindow):
         self._phase_tabs.setTabEnabled(_PHASE_SETUP, True)
         self._populate_setup_table()
 
+        # Enable Prepare button; mark stale if previously prepared
+        if session.prepare_state == "ready":
+            session.prepare_state = "stale"
+        self._update_prepare_button()
+
         ok_count = sum(1 for t in session.tracks if t.status == "OK")
         self._status_bar.showMessage(
             f"Analysis complete: {ok_count}/{len(session.tracks)} tracks OK"
@@ -2414,6 +2486,120 @@ class SessionPrepWindow(QMainWindow):
             f'<div style="margin-top:8px;">{esc(message)}</div>'
         ))
         self._status_bar.showMessage(f"Error: {message}")
+
+    # ── Prepare handlers ─────────────────────────────────────────────────
+
+    @Slot()
+    def _on_prepare(self):
+        """Run the Prepare pipeline to generate processed audio files."""
+        if not self._session or not self._source_dir:
+            return
+        if self._prepare_worker is not None:
+            return  # already running
+
+        output_folder = self._config.get("app", {}).get(
+            "output_folder", "processed")
+        output_dir = os.path.join(self._source_dir, output_folder)
+
+        # Use the session's configured processors
+        processors = list(self._session.processors) if self._session.processors else []
+        if not processors:
+            self._status_bar.showMessage("No audio processors enabled.")
+            return
+
+        self._prepare_action.setEnabled(False)
+        self._status_bar.showMessage("Preparing processed files\u2026")
+
+        self._prepare_worker = PrepareWorker(
+            self._session, processors, output_dir)
+        self._prepare_worker.progress.connect(self._on_worker_progress)
+        self._prepare_worker.progress_value.connect(
+            self._on_worker_progress_value)
+        self._prepare_worker.finished.connect(self._on_prepare_done)
+        self._prepare_worker.error.connect(self._on_prepare_error)
+        self._prepare_worker.start()
+
+    @Slot()
+    def _on_prepare_done(self):
+        self._prepare_worker = None
+        self._update_prepare_button()
+        self._update_use_processed_action()
+        prepared = sum(
+            1 for t in self._session.tracks
+            if t.processed_filepath is not None
+        )
+        self._status_bar.showMessage(
+            f"Prepare complete: {prepared} file(s) written")
+        self._populate_setup_table()
+
+    @Slot(str)
+    def _on_prepare_error(self, message: str):
+        self._prepare_worker = None
+        self._prepare_action.setEnabled(True)
+        self._status_bar.showMessage(f"Prepare failed: {message}")
+
+    def _update_prepare_button(self):
+        """Update the Prepare button text and enabled state based on prepare_state."""
+        if not self._session:
+            self._prepare_action.setEnabled(False)
+            self._prepare_action.setText("Prepare")
+            return
+
+        state = self._session.prepare_state
+        self._prepare_action.setEnabled(True)
+        if state == "ready":
+            self._prepare_action.setText("Prepare \u2713")
+        elif state == "stale":
+            self._prepare_action.setText("Prepare (!)")
+        else:
+            self._prepare_action.setText("Prepare")
+
+    def _mark_prepare_stale(self):
+        """Mark prepared files as stale if they were previously ready."""
+        if self._session and self._session.prepare_state == "ready":
+            self._session.prepare_state = "stale"
+            self._update_prepare_button()
+            self._update_use_processed_action()
+
+    @Slot(bool)
+    def _on_processor_enabled_changed(self, _checked: bool):
+        """Live-update session.processors and Processing column when a
+        processor enabled toggle changes in the session config widgets."""
+        if not self._session:
+            return
+        if getattr(self, "_loading_session_widgets", False):
+            return
+        # Re-evaluate which processors are enabled from current widget values
+        flat = self._flat_config()
+        new_processors = []
+        for proc in default_processors():
+            proc.configure(flat)
+            if proc.enabled:
+                new_processors.append(proc)
+        new_processors.sort(key=lambda p: p.priority)
+        self._session.processors = new_processors
+        self._refresh_processing_column()
+        self._mark_prepare_stale()
+
+    def _refresh_processing_column(self):
+        """Rebuild all Processing column buttons from the current
+        session.processors list."""
+        if not self._session:
+            return
+        processors = self._session.processors
+        for row in range(self._track_table.rowCount()):
+            fname_item = self._track_table.item(row, 0)
+            if not fname_item:
+                continue
+            track = next(
+                (t for t in self._session.tracks if t.filename == fname_item.text()),
+                None,
+            )
+            if not track or track.status != "OK":
+                continue
+            # Remove old widget and recreate
+            self._track_table.removeCellWidget(row, 7)
+            self._create_processing_button(row, track)
 
     # ── Slots: track selection ────────────────────────────────────────────
 
@@ -2663,6 +2849,89 @@ class SessionPrepWindow(QMainWindow):
     def _on_spec_ceil_changed(self, action):
         self._waveform.set_spec_db_ceil(float(action.data()))
 
+    # ── Processing column (col 7) ──────────────────────────────────────
+
+    def _create_processing_button(self, row: int, track) -> None:
+        """Create a multiselect tool button for the Processing column."""
+        if track.status != "OK":
+            item = _SortableItem("", "zzz")
+            self._track_table.setItem(row, 7, item)
+            return
+
+        processors = self._session.processors if self._session else []
+
+        btn = QToolButton()
+        btn.setProperty("track_filename", track.filename)
+
+        if processors:
+            btn.setPopupMode(QToolButton.InstantPopup)
+            menu = QMenu(btn)
+            for proc in processors:
+                action = menu.addAction(proc.name)
+                action.setCheckable(True)
+                checked = proc.id not in track.processor_skip
+                action.setChecked(checked)
+                action.setData(proc.id)
+                action.toggled.connect(self._on_processing_toggled)
+            btn.setMenu(menu)
+        else:
+            btn.setEnabled(False)
+
+        self._update_processing_button_label(btn, track, processors)
+
+        # Hidden sort item
+        sort_item = _SortableItem("", len(track.processor_skip))
+        self._track_table.setItem(row, 7, sort_item)
+        self._track_table.setCellWidget(row, 7, btn)
+
+    def _update_processing_button_label(self, btn, track, processors):
+        """Set the button label based on current processor_skip state."""
+        if not processors:
+            btn.setText("None")
+            btn.setToolTip("No audio processors enabled")
+            return
+        active = [p.name for p in processors if p.id not in track.processor_skip]
+        if len(active) == len(processors):
+            btn.setText("Default")
+            btn.setToolTip("Using all enabled processors: " + ", ".join(p.name for p in processors))
+        elif not active:
+            btn.setText("None")
+            btn.setToolTip("All processors skipped for this track")
+        else:
+            btn.setText(", ".join(active))
+            btn.setToolTip("Active processors: " + ", ".join(active))
+
+    @Slot(bool)
+    def _on_processing_toggled(self, checked: bool):
+        """Handle user toggling a processor in the Processing column menu."""
+        action = self.sender()
+        if not action:
+            return
+        menu = action.parent()
+        if not menu:
+            return
+        btn = menu.parent()
+        if not btn:
+            return
+        fname = btn.property("track_filename")
+        if not fname or not self._session:
+            return
+        track = next(
+            (t for t in self._session.tracks if t.filename == fname), None
+        )
+        if not track:
+            return
+
+        proc_id = action.data()
+        if checked:
+            track.processor_skip.discard(proc_id)
+        else:
+            track.processor_skip.add(proc_id)
+
+        processors = self._session.processors if self._session else []
+        self._update_processing_button_label(btn, track, processors)
+        self._mark_prepare_stale()
+
     def _populate_table(self, session):
         """Update the track table with analysis results."""
         self._track_table.setSortingEnabled(False)
@@ -2672,6 +2941,8 @@ class SessionPrepWindow(QMainWindow):
             self._track_table.removeCellWidget(row, 3)
             self._track_table.removeCellWidget(row, 4)
             self._track_table.removeCellWidget(row, 5)
+            self._track_table.removeCellWidget(row, 6)
+            self._track_table.removeCellWidget(row, 7)
 
             fname_item = self._track_table.item(row, 0)
             if not fname_item:
@@ -2763,25 +3034,36 @@ class SessionPrepWindow(QMainWindow):
 
                 # RMS Anchor combo (column 5)
                 self._create_anchor_combo(row, track)
-
-                # Group combo (column 6)
-                self._create_group_combo(row, track)
-
-                # Row background from group color
-                self._apply_row_group_color(row, track.group)
+            elif track.status == "OK":
+                # OK track but no processor results (all processors disabled)
+                cls_item = _SortableItem("", "zzz")
+                self._track_table.setItem(row, 3, cls_item)
+                gain_item = _SortableItem("", 0.0)
+                self._track_table.setItem(row, 4, gain_item)
             else:
                 cls_item = _SortableItem("", "zzz")
                 self._track_table.setItem(row, 3, cls_item)
                 gain_item = _SortableItem("", 0.0)
                 self._track_table.setItem(row, 4, gain_item)
+
+            # Group combo, processing button, and row color for all OK tracks
+            if track.status == "OK":
+                # Group combo (column 6)
+                self._create_group_combo(row, track)
+
+                # Processing multiselect (column 7)
+                self._create_processing_button(row, track)
+
+                # Row background from group color
+                self._apply_row_group_color(row, track.group)
         self._track_table.setSortingEnabled(True)
 
-        # Auto-fit columns 2–6 to content, File column stays Stretch, Ch stays Fixed
+        # Auto-fit columns 2–7 to content, File column stays Stretch, Ch stays Fixed
         header = self._track_table.horizontalHeader()
-        for col in (2, 3, 4, 5, 6):
+        for col in (2, 3, 4, 5, 6, 7):
             header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         self._track_table.resizeColumnsToContents()
-        for col in (2, 3, 4, 5, 6):
+        for col in (2, 3, 4, 5, 6, 7):
             header.setSectionResizeMode(col, QHeaderView.Interactive)
         self._auto_fit_group_column()
         self._auto_fit_track_table()
@@ -2911,6 +3193,7 @@ class SessionPrepWindow(QMainWindow):
             self._style_classification_combo(combo, text)
             self._update_track_row(fname)
             self._refresh_file_tab(track)
+        self._mark_prepare_stale()
 
     @Slot(float)
     def _on_gain_changed(self, value: float):
@@ -2931,6 +3214,7 @@ class SessionPrepWindow(QMainWindow):
         pr = next(iter(track.processor_results.values()), None)
         if pr:
             pr.gain_db = value
+        self._mark_prepare_stale()
 
         # Update hidden sort item
         for row in range(self._track_table.rowCount()):
@@ -3122,6 +3406,7 @@ class SessionPrepWindow(QMainWindow):
                 return
             track.rms_anchor_override = new_override
             self._reanalyze_single_track(track)
+        self._mark_prepare_stale()
 
     # ── Group column (col 6) ────────────────────────────────────────────
 

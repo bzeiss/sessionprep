@@ -110,6 +110,9 @@ class TrackContext:
     classification_override: str | None = None
     rms_anchor_override: str | None = None
     chunk_ids: list[str] = field(default_factory=list)
+    processed_filepath: str | None = None
+    applied_processors: list[str] = field(default_factory=list)
+    processor_skip: set[str] = field(default_factory=set)
     _cache: dict[str, Any] = field(default_factory=dict, repr=False)
 
 
@@ -123,6 +126,7 @@ class SessionContext:
     processors: list = field(default_factory=list)
     daw_state: dict[str, Any] = field(default_factory=dict)
     daw_command_log: list[DawCommandResult] = field(default_factory=list)
+    prepare_state: str = "none"
 
 
 @dataclass

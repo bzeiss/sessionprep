@@ -49,18 +49,19 @@ class Pipeline:
         # Topologically sort track detectors by depends_on
         self.track_detectors = _topo_sort_detectors(self.track_detectors)
 
-        # Sort audio processors by priority
-        self.audio_processors: list[AudioProcessor] = sorted(
-            audio_processors or [], key=lambda p: p.priority
-        )
-
         # Configure all components
         for d in self.track_detectors:
             d.configure(self.config)
         for d in self.session_detectors:
             d.configure(self.config)
-        for p in self.audio_processors:
+
+        # Configure audio processors first, then filter to enabled only
+        all_procs = audio_processors or []
+        for p in all_procs:
             p.configure(self.config)
+        self.audio_processors: list[AudioProcessor] = sorted(
+            [p for p in all_procs if p.enabled], key=lambda p: p.priority
+        )
 
         # Validate
         self._validate()
@@ -314,6 +315,113 @@ class Pipeline:
                     pr = track.processor_results.get(proc.id)
                     if pr:
                         pr.data["fader_offset"] = pr.data.get("fader_offset", 0.0) - anchor_offset
+
+    # ------------------------------------------------------------------
+    # Prepare (apply processors, write processed files)
+    # ------------------------------------------------------------------
+
+    def prepare(
+        self,
+        session: SessionContext,
+        output_dir: str,
+        progress_cb: Callable[[int, int, str], None] | None = None,
+    ) -> SessionContext:
+        """Apply enabled processors and write processed files.
+
+        Wipes *output_dir* before writing so stale files are never left
+        behind.  Respects ``track.processor_skip`` for per-track
+        exclusions.
+
+        Parameters
+        ----------
+        session : SessionContext
+        output_dir : str
+            Target directory (wiped and recreated).
+        progress_cb : callable(current, total, message) or None
+            Optional progress reporter.
+
+        Returns
+        -------
+        SessionContext
+            The same session with ``processed_filepath`` /
+            ``applied_processors`` updated per track and
+            ``prepare_state`` set to ``"ready"``.
+        """
+        import shutil
+
+        # Wipe and recreate
+        if os.path.isdir(output_dir):
+            shutil.rmtree(output_dir)
+        os.makedirs(output_dir, exist_ok=True)
+
+        ok_tracks = [t for t in session.tracks if t.status == "OK"]
+        total = len(ok_tracks)
+
+        for step, track in enumerate(ok_tracks):
+            # Determine which processors to apply for this track
+            applicable = [
+                p for p in self.audio_processors
+                if p.id not in track.processor_skip
+            ]
+
+            # Check each processor has a valid result
+            applicable = [
+                p for p in applicable
+                if p.id in track.processor_results
+                and track.processor_results[p.id].error is None
+            ]
+
+            if not applicable:
+                # Nothing to apply — clear any previous processed state
+                track.processed_filepath = None
+                track.applied_processors = []
+                if progress_cb:
+                    progress_cb(step + 1, total,
+                                f"Skipped {track.filename} (no processors)")
+                continue
+
+            if progress_cb:
+                progress_cb(step, total, f"Preparing {track.filename}")
+
+            try:
+                # Deep-copy audio data so the session's copy stays clean
+                audio = track.audio_data.copy()
+
+                # Chain processors in priority order
+                for proc in applicable:
+                    pr = track.processor_results[proc.id]
+                    # Temporarily swap audio_data for apply()
+                    orig_audio = track.audio_data
+                    track.audio_data = audio
+                    audio = proc.apply(track, pr)
+                    track.audio_data = orig_audio
+
+                # Write processed file
+                dst = os.path.join(output_dir, track.filename)
+                # Temporarily swap for write_track
+                orig_audio = track.audio_data
+                track.audio_data = audio
+                write_track(track, dst)
+                track.audio_data = orig_audio
+
+                track.processed_filepath = dst
+                track.applied_processors = [p.id for p in applicable]
+
+            except Exception as e:
+                track.processed_filepath = None
+                track.applied_processors = []
+                self._emit("prepare.error", filename=track.filename,
+                           error=str(e))
+
+            if progress_cb:
+                progress_cb(step + 1, total,
+                            f"Prepared {track.filename}")
+
+            self._emit("track.prepared", filename=track.filename,
+                       index=step, total=total)
+
+        session.prepare_state = "ready"
+        return session
 
     # ------------------------------------------------------------------
     # Phase 3: Execute (apply gains, write files)

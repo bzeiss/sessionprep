@@ -17,7 +17,7 @@ class BimodalNormalizeProcessor(AudioProcessor):
 
     @classmethod
     def config_params(cls) -> list[ParamSpec]:
-        return [
+        return super().config_params() + [
             ParamSpec(
                 key="target_rms", type=(int, float), default=-18.0,
                 min=-80.0, max=0.0,
@@ -33,6 +33,7 @@ class BimodalNormalizeProcessor(AudioProcessor):
         ]
 
     def configure(self, config):
+        super().configure(config)
         self.target_rms = config.get("target_rms", -18.0)
         self.target_peak = config.get("target_peak", -6.0)
         self._db_offset = dbfs_offset(config)

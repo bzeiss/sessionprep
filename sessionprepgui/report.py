@@ -219,18 +219,21 @@ def render_track_detail_html(track, session=None, *, show_clean: bool = True,
 
         # Processor results
         for proc_id, pr in (track.processor_results or {}).items():
-            parts.append(f'<div style="margin-top:12px; color:{COLORS["heading"]}; '
-                         f'font-weight:bold;">{esc(proc_map[proc_id].name if proc_id in proc_map else proc_id)}</div>')
             proc_inst = proc_map.get(proc_id)
             if proc_inst:
-                parts.append(proc_inst.render_html(pr, track, verbose=verbose))
+                html_fragment = proc_inst.render_html(pr, track, verbose=verbose)
+                if not html_fragment:
+                    continue  # processor chose to suppress output (e.g. no-op)
             else:
                 # Fallback: basic display
-                parts.append(
+                html_fragment = (
                     f'<div style="margin-left:8px;">'
                     f'{esc(pr.classification or "")} &middot; {esc(pr.method)} '
                     f'&middot; {pr.gain_db:+.1f} dB</div>'
                 )
+            parts.append(f'<div style="margin-top:12px; color:{COLORS["heading"]}; '
+                         f'font-weight:bold;">{esc(proc_map[proc_id].name if proc_id in proc_map else proc_id)}</div>')
+            parts.append(html_fragment)
             if track.group:
                 original = pr.data.get("original_gain_db", pr.gain_db)
                 delta = pr.gain_db - original

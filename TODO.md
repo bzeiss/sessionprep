@@ -39,6 +39,45 @@
 - [ ] **GUI DAW Tools panel** (color picker, etc. → execute_commands)
 - [ ] **Undo execution** (rollback last transfer/sync batch)
 
+### P1: File-Based Processing Pipeline
+
+- [x] **AudioProcessor enabled toggle** — base `config_params()` returns
+  `{id}_enabled` ParamSpec, `configure()` reads `_enabled`, `enabled` property.
+  Subclasses chain via `super().config_params() + [...]`. Pipeline configures
+  all processors first, then filters to enabled before sorting by priority.
+
+- [x] **Model changes** — `TrackContext` gained `processed_filepath`,
+  `applied_processors`, `processor_skip`. `SessionContext` gained
+  `prepare_state` (`"none"` / `"ready"` / `"stale"`).
+
+- [x] **`Pipeline.prepare()` method** — wipes output dir, chains enabled
+  processors per track (respecting `processor_skip`), writes processed files,
+  updates track metadata, sets `prepare_state = "ready"`.
+
+- [x] **`PrepareWorker` QThread** — runs `Pipeline.prepare()` in background
+  with progress/finished/error signals.
+
+- [x] **Prepare button** (analysis toolbar) — right-aligned, staleness
+  indicators: "Prepare" / "Prepare ✓" / "Prepare (!)". Enabled after analysis.
+
+- [x] **Processing column** (analysis table, col 7) — per-track multiselect
+  `QToolButton` + checkable `QMenu`. Labels: "Default" (all active), "None"
+  (all skipped), comma-separated (partial). Disabled "None" when no processors
+  enabled globally. Editable only in analysis phase.
+
+- [x] **Use Processed toggle** (setup toolbar) — checkable action with stale
+  indicator. Controls `session.config["_use_processed"]`.
+  `ProToolsDawProcessor.transfer()` uses `processed_filepath` when enabled.
+
+- [x] **Staleness triggers** — gain, classification, RMS anchor, processor
+  selection, and re-analysis changes transition `"ready"` → `"stale"`.
+
+- [x] **MonoDownmixProcessor** (stub) — `PRIORITY_POST` (200), `apply()`
+  returns audio unchanged. Tests multi-processor UI behaviour.
+
+- [ ] **Batch-edit support for Processing column** (deferred)
+- [ ] **Visual feedback in setup table** (processed vs original file badges/tooltips)
+
 ### P1: Testing Infrastructure
 
 - [ ] **`tests/factories.py` — Test factories**
@@ -434,6 +473,7 @@
 | ~~**7**~~ | ~~Classification v2~~ | ~~Crest improvements~~ → ✅ Done (audio classifier with decay metric) |
 | ~~**7b**~~ | ~~Simplify CLI grouping~~ | ~~Overlap policies, anonymous IDs~~ → ✅ Done (named groups, first-match-wins, no overlap policy) |
 | **8** | DAW scripting | ~~DawProcessor ABC~~, ~~PTSL integration (check/fetch/transfer)~~, sync, DAWProject backend |
+| ~~**9**~~ | ~~File-based processing~~ | ~~AudioProcessor enabled toggle, Pipeline.prepare(), Prepare button, Processing column, Use Processed toggle, staleness, MonoDownmix stub~~ → ✅ Done |
 | **Ongoing** | Low-hanging fruit | Stereo narrowness, Start offset, Name mismatch, `rich` optional |
 
 ---

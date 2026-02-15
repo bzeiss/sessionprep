@@ -353,7 +353,13 @@ class ProToolsDawProcessor(DawProcessor):
                     continue
 
                 folder_name = folder["name"]
-                filepath = os.path.abspath(tc.filepath)
+                use_processed = session.config.get("_use_processed", False)
+                if (use_processed
+                        and tc.processed_filepath
+                        and os.path.isfile(tc.processed_filepath)):
+                    filepath = os.path.abspath(tc.processed_filepath)
+                else:
+                    filepath = os.path.abspath(tc.filepath)
                 import_cmd = DawCommand(
                     "import_audio", fname,
                     {"folder_name": folder_name, "filepath": filepath},

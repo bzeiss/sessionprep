@@ -28,11 +28,28 @@ class AudioProcessor(ABC):
 
     @classmethod
     def config_params(cls) -> list[ParamSpec]:
-        """Return parameter specifications for this processor."""
-        return []
+        """Base returns the enabled toggle. Subclasses call super() + [...]."""
+        return [
+            ParamSpec(
+                key=f"{cls.id}_enabled",
+                type=bool,
+                default=True,
+                label="Enabled",
+                description=(
+                    "Whether this audio processor is active during analysis "
+                    "and preparation. Disable to skip it entirely."
+                ),
+            ),
+        ]
 
     def configure(self, config: dict[str, Any]) -> None:
-        pass
+        """Read config values. Subclasses should call super().configure(config)."""
+        self._enabled: bool = config.get(f"{self.id}_enabled", True)
+
+    @property
+    def enabled(self) -> bool:
+        """Whether this processor is active."""
+        return self._enabled
 
     @abstractmethod
     def process(self, track: TrackContext) -> ProcessorResult:

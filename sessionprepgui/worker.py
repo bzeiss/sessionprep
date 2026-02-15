@@ -195,6 +195,45 @@ class AnalyzeWorker(QThread):
             self.error.emit(str(e))
 
 
+class PrepareWorker(QThread):
+    """Runs Pipeline.prepare() off the main thread with progress."""
+
+    progress = Signal(str)              # status text
+    progress_value = Signal(int, int)   # (current, total)
+    track_prepared = Signal(str)        # filename
+    finished = Signal()
+    error = Signal(str)
+
+    def __init__(self, session, processors, output_dir: str):
+        super().__init__()
+        self._session = session
+        self._processors = processors
+        self._output_dir = output_dir
+
+    def _on_progress(self, current: int, total: int, message: str):
+        self.progress.emit(message)
+        self.progress_value.emit(current, total)
+
+    def run(self):
+        try:
+            from sessionpreplib.pipeline import Pipeline
+
+            # Build a lightweight pipeline with just the processors
+            pipeline = Pipeline(
+                detectors=[],
+                audio_processors=self._processors,
+                config=self._session.config,
+            )
+            pipeline.prepare(
+                self._session,
+                self._output_dir,
+                progress_cb=self._on_progress,
+            )
+            self.finished.emit()
+        except Exception as e:
+            self.error.emit(str(e))
+
+
 class BatchReanalyzeWorker(QThread):
     """Re-run detectors and/or processors for a subset of tracks.
 
