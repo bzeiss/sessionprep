@@ -223,36 +223,33 @@ def build_diagnostic_summary(
                     dc_items.append(f"{t.filename}: DC offset issue")
                 issue_names.add(t.filename)
 
-        # Stereo compatibility (correlation + mono folddown combined)
-        parts = []
-        if not _is_skipped("stereo_correlation"):
-            corr_r = t.detector_results.get("stereo_correlation")
-            if corr_r and corr_r.data.get("corr_warn"):
-                lr_corr = corr_r.data.get("lr_corr")
+        # Stereo compatibility (correlation + mono folddown, unified detector)
+        if not _is_skipped("stereo_compat"):
+            sc_r = t.detector_results.get("stereo_compat")
+            if sc_r and (sc_r.data.get("corr_warn") or sc_r.data.get("mono_warn")):
+                parts = []
+                lr_corr = sc_r.data.get("lr_corr")
                 corr_warn_val = session.config.get("corr_warn", -0.3)
-                if lr_corr is None:
-                    parts.append("corr < threshold")
-                else:
-                    parts.append(f"corr {float(lr_corr):.2f} (< {float(corr_warn_val):g})")
-
-        if not _is_skipped("mono_folddown"):
-            mono_r = t.detector_results.get("mono_folddown")
-            if mono_r and mono_r.data.get("mono_warn"):
-                mono_loss_db = mono_r.data.get("mono_loss_db")
+                if sc_r.data.get("corr_warn"):
+                    if lr_corr is None:
+                        parts.append("corr < threshold")
+                    else:
+                        parts.append(f"corr {float(lr_corr):.2f} (< {float(corr_warn_val):g})")
+                mono_loss_db = sc_r.data.get("mono_loss_db")
                 mono_warn_val = session.config.get("mono_loss_warn_db", 6.0)
-                if mono_loss_db is None:
-                    parts.append("mono loss > threshold")
-                elif np.isfinite(mono_loss_db):
-                    parts.append(
-                        f"mono loss {float(mono_loss_db):.1f} dB (> {float(mono_warn_val):g} dB)"
-                    )
-                else:
-                    parts.append(
-                        f"mono loss inf dB (> {float(mono_warn_val):g} dB)"
-                    )
-
-        if parts:
-            stereo_compat_items.append(f"{t.filename}: " + ", ".join(parts))
+                if sc_r.data.get("mono_warn"):
+                    if mono_loss_db is None:
+                        parts.append("mono loss > threshold")
+                    elif np.isfinite(mono_loss_db):
+                        parts.append(
+                            f"mono loss {float(mono_loss_db):.1f} dB "
+                            f"(> {float(mono_warn_val):g} dB)")
+                    else:
+                        parts.append(
+                            f"mono loss inf dB (> {float(mono_warn_val):g} dB)")
+                if parts:
+                    stereo_compat_items.append(
+                        f"{t.filename}: " + ", ".join(parts))
 
         # Dual mono
         if not _is_skipped("dual_mono"):
@@ -332,7 +329,7 @@ def build_diagnostic_summary(
          "request reprint / check limiting", clipped_items),
         ("dc_offset",         attention_groups,  "DC offset",
          "consider DC removal", dc_items),
-        ("stereo_correlation", info_groups,      "Stereo compatibility",
+        ("stereo_compat",     info_groups,       "Stereo compatibility",
          None, stereo_compat_items),
         ("dual_mono",         info_groups,       "Dual-mono (identical L/R)",
          None, dual_mono_items),

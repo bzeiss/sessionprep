@@ -85,10 +85,13 @@ A detector earns its place if it meets at least one of these criteria:
 - **What it means:** one or more stereo-compatibility warnings were detected:
   - correlation below `--corr_warn` and/or
   - mono fold-down loss above `--mono_loss_warn_db`
-- **Why it matters:** these values provide context about stereo content and mono fold-down behavior.
-- **Controls:** `--corr_warn`, `--mono_loss_warn_db`
+- **Why it matters:** low or negative correlation indicates phase differences between channels that cause level loss or cancellation in mono playback (phone speakers, mono PA systems).
+- **Controls:** `--corr_warn`, `--mono_loss_warn_db`, `--corr_windowed`, `--corr_window_ms`, `--corr_max_regions`
+- **Windowed analysis:** when enabled, per-window Pearson correlation and mono folddown loss are computed. Contiguous windows exceeding either threshold are merged into regions with waveform overlays.
 - **Categorization:**
-  - INFORMATION: `Stereo compatibility` with per-file details.
+  - ATTENTION: localized regions with poor stereo compatibility detected.
+  - INFORMATION: whole-file correlation or mono loss exceeds threshold (no localized regions).
+  - CLEAN: `No stereo compatibility issues detected`.
 
 ### 2.7 Dual-mono (identical L/R)
 

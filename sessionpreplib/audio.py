@@ -458,3 +458,124 @@ def subsonic_stft_analysis(
         results.append((s, e, float(ratios[i])))
 
     return whole_ratio, results
+
+
+# ---------------------------------------------------------------------------
+# Windowed stereo correlation + mono folddown
+# ---------------------------------------------------------------------------
+
+def windowed_stereo_correlation(
+    left: np.ndarray,
+    right: np.ndarray,
+    samplerate: int,
+    window_ms: int = 500,
+    silence_rms: float = 1e-7,
+) -> tuple[
+    float, float,
+    list[tuple[int, int, float, float]],
+]:
+    """Windowed Pearson correlation and mono folddown loss for stereo L/R.
+
+    Parameters
+    ----------
+    left, right : 1-D float arrays
+        Full-resolution left and right channel samples.
+    samplerate : int
+        Sample rate in Hz.
+    window_ms : int
+        Analysis window length in milliseconds.
+    silence_rms : float
+        RMS threshold below which a window is considered silent.
+
+    Returns
+    -------
+    whole_corr : float
+        Whole-file Pearson correlation (NaN if silent/invalid).
+    whole_mono_loss_db : float
+        Whole-file mono folddown loss in dB (0.0 if no loss, inf if total
+        cancellation).
+    per_window : list of (sample_start, sample_end, corr, mono_loss_db)
+        Per-window results.  Silent windows have (NaN, NaN).
+    """
+    _NAN = float('nan')
+
+    if (left.ndim != 1 or right.ndim != 1
+            or left.size < 8 or left.size != right.size
+            or samplerate <= 0):
+        return _NAN, 0.0, []
+
+    n = left.size
+    win_samples = max(8, int(samplerate * window_ms / 1000))
+    n_win = (n + win_samples - 1) // win_samples
+
+    # Pad to exact multiple of win_samples
+    padded_len = n_win * win_samples
+    if padded_len != n:
+        l = np.pad(left.astype(np.float64), (0, padded_len - n))
+        r = np.pad(right.astype(np.float64), (0, padded_len - n))
+    else:
+        l = left.astype(np.float64)
+        r = right.astype(np.float64)
+
+    # Reshape to (n_win, win_samples)
+    L = l.reshape(n_win, win_samples)
+    R = r.reshape(n_win, win_samples)
+
+    # Per-window DC removal
+    L = L - L.mean(axis=1, keepdims=True)
+    R = R - R.mean(axis=1, keepdims=True)
+
+    # Per-window dot products (vectorized)
+    dot_ll = np.sum(L * L, axis=1)
+    dot_rr = np.sum(R * R, axis=1)
+    dot_lr = np.sum(L * R, axis=1)
+
+    # Per-window RMS for silence gating
+    rms_l = np.sqrt(dot_ll / win_samples)
+    rms_r = np.sqrt(dot_rr / win_samples)
+    active = np.maximum(rms_l, rms_r) >= silence_rms
+
+    # --- Per-window correlation ---
+    denom = np.sqrt(dot_ll * dot_rr)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        corr = np.where(denom > 0, dot_lr / denom, 0.0)
+    corr[~active] = _NAN
+
+    # --- Per-window mono folddown loss ---
+    # stereo_power = (dot_ll + dot_rr) / 2
+    # mono_power   = (dot_ll + 2*dot_lr + dot_rr) / 4
+    stereo_p = (dot_ll + dot_rr) / 2.0
+    mono_p = (dot_ll + 2.0 * dot_lr + dot_rr) / 4.0
+    with np.errstate(divide='ignore', invalid='ignore'):
+        mono_loss = np.where(
+            (mono_p > 0) & (stereo_p > 0),
+            10.0 * np.log10(stereo_p / mono_p),
+            np.where(stereo_p > 0, np.inf, 0.0),
+        )
+    mono_loss[~active] = _NAN
+
+    # --- Whole-file aggregation (from cumulative dot products) ---
+    sum_ll = float(np.sum(dot_ll[active]))
+    sum_rr = float(np.sum(dot_rr[active]))
+    sum_lr = float(np.sum(dot_lr[active]))
+
+    whole_denom = np.sqrt(sum_ll * sum_rr)
+    whole_corr = float(sum_lr / whole_denom) if whole_denom > 0 else _NAN
+
+    whole_stereo_p = (sum_ll + sum_rr) / 2.0
+    whole_mono_p = (sum_ll + 2.0 * sum_lr + sum_rr) / 4.0
+    if whole_mono_p > 0 and whole_stereo_p > 0:
+        whole_mono_loss = float(10.0 * np.log10(whole_stereo_p / whole_mono_p))
+    elif whole_stereo_p > 0:
+        whole_mono_loss = float('inf')
+    else:
+        whole_mono_loss = 0.0
+
+    # --- Build result tuples ---
+    results: list[tuple[int, int, float, float]] = []
+    for i in range(n_win):
+        s = i * win_samples
+        e = min(s + win_samples, n) - 1
+        results.append((s, e, float(corr[i]), float(mono_loss[i])))
+
+    return whole_corr, whole_mono_loss, results

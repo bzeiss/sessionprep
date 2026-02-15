@@ -254,12 +254,12 @@ def save_json(
         pr = _get_primary_processor_result(t)
         clip_r = t.detector_results.get("clipping")
         sil_r = t.detector_results.get("silence")
-        mono_r = t.detector_results.get("mono_folddown")
+        sc_r = t.detector_results.get("stereo_compat")
 
         is_clipped = bool(clip_r.data.get("is_clipped")) if clip_r else False
         is_silent = bool(sil_r.data.get("is_silent")) if sil_r else False
-        mono_loss_db = mono_r.data.get("mono_loss_db") if mono_r else None
-        mono_warn = bool(mono_r.data.get("mono_warn")) if mono_r else False
+        mono_loss_db = sc_r.data.get("mono_loss_db") if sc_r else None
+        mono_warn = bool(sc_r.data.get("mono_warn")) if sc_r else False
 
         fader_offset = pr.data.get("fader_offset", 0) if pr else 0
         classification = pr.classification if pr else "Unknown"

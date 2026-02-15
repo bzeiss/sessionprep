@@ -347,15 +347,20 @@ class Pipeline:
             ``applied_processors`` updated per track and
             ``prepare_state`` set to ``"ready"``.
         """
-        import shutil
-
-        # Wipe and recreate
+        # Clean output dir (best-effort: skip locked files on Windows)
         if os.path.isdir(output_dir):
-            shutil.rmtree(output_dir)
+            for entry in os.listdir(output_dir):
+                fp = os.path.join(output_dir, entry)
+                try:
+                    if os.path.isfile(fp):
+                        os.unlink(fp)
+                except OSError:
+                    pass  # locked file — will be overwritten in place
         os.makedirs(output_dir, exist_ok=True)
 
         ok_tracks = [t for t in session.tracks if t.status == "OK"]
         total = len(ok_tracks)
+        prepare_errors: list[tuple[str, str]] = []  # (filename, error)
 
         for step, track in enumerate(ok_tracks):
             # Determine which processors to apply for this track
@@ -410,6 +415,7 @@ class Pipeline:
             except Exception as e:
                 track.processed_filepath = None
                 track.applied_processors = []
+                prepare_errors.append((track.filename, str(e)))
                 self._emit("prepare.error", filename=track.filename,
                            error=str(e))
 
@@ -420,6 +426,7 @@ class Pipeline:
             self._emit("track.prepared", filename=track.filename,
                        index=step, total=total)
 
+        session.config["_prepare_errors"] = prepare_errors
         session.prepare_state = "ready"
         return session
 

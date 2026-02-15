@@ -304,6 +304,20 @@
     4. Whole-file fallback (if even active-signal finds nothing, a full-file
        overlay is shown so ATTENTION always has a visible issue).
 
+- [x] **Stereo compatibility: merged detector with windowed analysis** (Status: ✅ Done)
+  - Merged `StereoCorrelationDetector` + `MonoFolddownDetector` into unified
+    `StereoCompatDetector` (id `stereo_compat`).
+  - `windowed_stereo_correlation()` in `audio.py`: vectorised numpy with per-window
+    DC removal, silence gating, whole-file aggregation from cumulative dot products.
+  - Both Pearson correlation and mono folddown loss computed per window from the same
+    dot products (L·L, R·R, L·R) at zero extra cost.
+  - Contiguous windows exceeding `corr_warn` or `mono_loss_warn_db` merged into regions.
+  - Regions reported as `IssueLocation` objects with waveform overlays.
+  - Severity upgrades INFO → ATTENTION when localized regions are found.
+  - Config: `corr_warn`, `mono_loss_warn_db`, `corr_windowed`, `corr_window_ms`,
+    `corr_max_regions`.
+  - Files deleted: `stereo_correlation.py`, `mono_folddown.py`.
+
 - [ ] **Reverb/bleed estimation** (Status: ❌) `NEW`
   - Why: A "dry" vocal with 2 seconds of reverb tail affects processing decisions. A "kick" track with hi-hat bleed means I can't gate it cleanly.
   - Approach: Analyze decay characteristics. Signal that doesn't drop > 30 dB within 200ms after transients likely has reverb/bleed.
@@ -474,6 +488,7 @@
 | ~~**7b**~~ | ~~Simplify CLI grouping~~ | ~~Overlap policies, anonymous IDs~~ → ✅ Done (named groups, first-match-wins, no overlap policy) |
 | **8** | DAW scripting | ~~DawProcessor ABC~~, ~~PTSL integration (check/fetch/transfer)~~, sync, DAWProject backend |
 | ~~**9**~~ | ~~File-based processing~~ | ~~AudioProcessor enabled toggle, Pipeline.prepare(), Prepare button, Processing column, Use Processed toggle, staleness, MonoDownmix stub~~ → ✅ Done |
+| ~~**10**~~ | ~~Stereo compatibility~~ | ~~Merge StereoCorrelation + MonoFolddown, windowed analysis, waveform overlays~~ → ✅ Done |
 | **Ongoing** | Low-hanging fruit | Stereo narrowness, Start offset, Name mismatch, `rich` optional |
 
 ---
@@ -534,3 +549,4 @@
 | ~~Batch RMS anchor / classification override~~ | — | ✅ Resolved (BatchEditTableWidget + BatchComboBox in widgets.py, selectionCommand override preserves multi-selection, Alt+Shift batch apply, async BatchReanalyzeWorker with progress) |
 | ~~CLI grouping simplification~~ | — | ✅ Resolved (named groups via `Name:pattern` syntax, first-match-wins, overlap warnings, removed `--group_overlap`/union-find/merge) |
 | ~~Group levelling terminology~~ | — | ✅ Resolved ("equalize" → "group level" throughout codebase; `_equalize_group_gains` → `_apply_group_levels`) |
+| ~~Stereo compat windowed analysis~~ | — | ✅ Resolved (merged StereoCorrelation + MonoFolddown → StereoCompatDetector; windowed Pearson correlation + mono folddown loss; IssueLocation overlays) |

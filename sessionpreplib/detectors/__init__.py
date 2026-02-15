@@ -1,9 +1,8 @@
 from .silence import SilenceDetector
 from .clipping import ClippingDetector
 from .dc_offset import DCOffsetDetector
-from .stereo_correlation import StereoCorrelationDetector
+from .stereo_compat import StereoCompatDetector
 from .dual_mono import DualMonoDetector
-from .mono_folddown import MonoFolddownDetector
 from .one_sided_silence import OneSidedSilenceDetector
 from .subsonic import SubsonicDetector
 from .audio_classifier import AudioClassifierDetector
@@ -18,9 +17,8 @@ def default_detectors():
         SilenceDetector(),
         ClippingDetector(),
         DCOffsetDetector(),
-        StereoCorrelationDetector(),
+        StereoCompatDetector(),
         DualMonoDetector(),
-        MonoFolddownDetector(),
         OneSidedSilenceDetector(),
         SubsonicDetector(),
         AudioClassifierDetector(),
@@ -40,9 +38,8 @@ __all__ = [
     "SilenceDetector",
     "ClippingDetector",
     "DCOffsetDetector",
-    "StereoCorrelationDetector",
+    "StereoCompatDetector",
     "DualMonoDetector",
-    "MonoFolddownDetector",
     "OneSidedSilenceDetector",
     "SubsonicDetector",
     "AudioClassifierDetector",

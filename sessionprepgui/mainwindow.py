@@ -2556,9 +2556,23 @@ class SessionPrepWindow(QMainWindow):
             1 for t in self._session.tracks
             if t.processed_filepath is not None
         )
-        msg = f"Prepare complete: {prepared} file(s) written"
-        self._prepare_progress.finish(msg)
-        self._status_bar.showMessage(msg)
+        errors = self._session.config.get("_prepare_errors", [])
+        if errors:
+            msg = f"Prepare complete: {prepared} file(s) written, {len(errors)} error(s)"
+            self._prepare_progress.finish(msg)
+            self._status_bar.showMessage(msg)
+            detail = "\n".join(f"• {fn}: {err}" for fn, err in errors)
+            QMessageBox.warning(
+                self, "Prepare — errors",
+                f"{len(errors)} file(s) could not be written:\n\n{detail}\n\n"
+                "This is usually caused by a file being open in another "
+                "application (e.g. the waveform player). Close the file "
+                "and try again.",
+            )
+        else:
+            msg = f"Prepare complete: {prepared} file(s) written"
+            self._prepare_progress.finish(msg)
+            self._status_bar.showMessage(msg)
         self._populate_setup_table()
 
     @Slot(str)

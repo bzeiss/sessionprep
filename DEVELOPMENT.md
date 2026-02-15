@@ -324,9 +324,8 @@ sessionpreplib/
         silence.py               # SilenceDetector
         clipping.py              # ClippingDetector
         dc_offset.py             # DCOffsetDetector
-        stereo_correlation.py    # StereoCorrelationDetector
+        stereo_compat.py         # StereoCompatDetector (correlation + mono folddown)
         dual_mono.py             # DualMonoDetector
-        mono_folddown.py         # MonoFolddownDetector
         one_sided_silence.py     # OneSidedSilenceDetector
         subsonic.py              # SubsonicDetector
         audio_classifier.py      # AudioClassifierDetector
@@ -620,6 +619,7 @@ Contains audio I/O, cached DSP helpers, and stateless DSP functions.
 
 - `detect_clipping_ranges(data, threshold_count, max_ranges) -> (int, list[tuple[int, int, int|None]])` — ranges are `(start, end, channel)`
 - `subsonic_stft_analysis(signal, samplerate, cutoff_hz, *, window_ms, hop_ms, abs_gate_db, silence_rms) -> (float, list[tuple[int, int, float]])` — single-pass STFT subsonic analysis on a 1-D signal; returns `(whole_file_ratio_db, per_window_ratios)`. Uses `scipy.signal.stft` with Hann windowing, vectorised band/total power computation, and silence + absolute power gates.
+- `windowed_stereo_correlation(left, right, samplerate, window_ms, silence_rms) -> (float, float, list[tuple[int, int, float, float]])` — windowed Pearson correlation + mono folddown loss for stereo L/R; returns `(whole_corr, whole_mono_loss_db, per_window_results)`. Vectorised numpy with per-window DC removal, silence gating, and whole-file aggregation from cumulative dot products.
 - `linear_to_db(linear) -> float`
 - `db_to_linear(db) -> float`
 - `format_duration(samples, samplerate) -> str`
@@ -700,12 +700,13 @@ cycles.
 - **Severity:** `ATTENTION` if exceeds threshold, `CLEAN` otherwise
 - **Hint:** `"consider DC removal"`
 
-#### 6.3.4 StereoCorrelationDetector (`stereo_correlation.py`)
+#### 6.3.4 StereoCompatDetector (`stereo_compat.py`)
 
-- **ID:** `stereo_correlation` | **Depends on:** `["silence"]`
-- **Config:** `corr_warn`
-- **Data:** `{"lr_corr": float | None, "corr_warn": bool}`
-- **Severity:** `INFO` if below threshold, `CLEAN` otherwise
+- **ID:** `stereo_compat` | **Depends on:** `["silence"]`
+- **Config:** `corr_warn`, `mono_loss_warn_db`, `corr_windowed`, `corr_window_ms`, `corr_max_regions`
+- **Data:** `{"lr_corr": float | None, "mono_loss_db": float | None, "corr_warn": bool, "mono_warn": bool, "windowed_regions": list}`
+- **Severity:** `ATTENTION` if windowed regions exceed threshold, `INFO` if whole-file only, `CLEAN` otherwise
+- **Windowed analysis:** per-window Pearson correlation + mono folddown loss, merged into regions with `IssueLocation` overlays
 
 #### 6.3.5 DualMonoDetector (`dual_mono.py`)
 
@@ -714,12 +715,7 @@ cycles.
 - **Data:** `{"dual_mono": bool}`
 - **Severity:** `INFO` if dual-mono, `CLEAN` otherwise
 
-#### 6.3.6 MonoFolddownDetector (`mono_folddown.py`)
-
-- **ID:** `mono_folddown` | **Depends on:** `["silence"]`
-- **Config:** `mono_loss_warn_db`
-- **Data:** `{"mono_loss_db": float | None, "mono_warn": bool}`
-- **Severity:** `INFO` if exceeds threshold, `CLEAN` otherwise
+#### 6.3.6 *(removed — merged into StereoCompatDetector)*
 
 #### 6.3.7 OneSidedSilenceDetector (`one_sided_silence.py`)
 
@@ -781,7 +777,7 @@ cycles.
 def default_detectors() -> list[TrackDetector | SessionDetector]:
     return [
         SilenceDetector(), ClippingDetector(), DCOffsetDetector(),
-        StereoCorrelationDetector(), DualMonoDetector(), MonoFolddownDetector(),
+        StereoCompatDetector(), DualMonoDetector(),
         OneSidedSilenceDetector(), SubsonicDetector(), AudioClassifierDetector(),
         TailExceedanceDetector(), FormatConsistencyDetector(), LengthConsistencyDetector(),
     ]
