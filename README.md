@@ -54,15 +54,24 @@ changes.  Re-analysis runs asynchronously with a progress bar.
 On first launch it creates a `sessionprep.config.json` in your user
 preferences directory with all default thresholds.
 
-Use **File → Preferences** to customize every detector and processor parameter
-through a tree-based settings dialog. Each parameter shows a description,
-expected type, valid range, and default value. A reset button next to each
-widget restores the default. Changes are saved to `sessionprep.config.json`
-and trigger an immediate re-analysis if a session is loaded.
+Use **File → Preferences** to customize settings through a two-tab dialog:
 
-The Preferences dialog also exposes a **HiDPI scale factor** (under General)
-that scales the entire UI — useful for high-DPI displays. Changing it requires
-an application restart.
+- **Global** — General (HiDPI scale, default project directory), Colors
+  (palette editor), and Groups (named group presets with color, gain-linking,
+  and DAW target columns).
+- **Config Presets** — named presets for Analysis, Detector, Processor, and
+  DAW Processor parameters. Add, duplicate, rename, or delete presets. Each
+  parameter shows a description, expected type, valid range, and default
+  value. A reset button next to each widget restores the default.
+
+Changes are saved to `sessionprep.config.json` and trigger an immediate
+re-analysis if a session is loaded.
+
+The analysis toolbar includes **Group:** and **Config:** dropdowns for quick
+preset switching. Changing the config preset with an active session warns you
+before re-analyzing (group assignments are preserved). Each session also has
+a **Config** tab where you can override any parameter for that session only,
+without affecting the global preset.
 
 **3. Or use the CLI** for scripting and batch workflows:
 

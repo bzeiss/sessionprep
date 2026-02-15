@@ -350,7 +350,8 @@ sessionprepgui/                  # GUI package (PySide6)
     report.py                    # HTML report rendering (summary, fader table, track detail)
     waveform.py                  # WaveformWidget (waveform + spectrogram display, dB/freq scales, markers, overlays, keyboard/mouse nav)
     playback.py                  # PlaybackController (sounddevice lifecycle + signals)
-    preferences.py               # PreferencesDialog (tree nav + per-param pages, reset-to-default)
+    param_widgets.py             # Reusable ParamSpec widget builders + GroupsTableWidget
+    preferences.py               # PreferencesDialog (two-tab layout: Global + Config Presets)
     mainwindow.py                # SessionPrepWindow (QMainWindow) + main()
 
 sessionprep.py                   # Thin CLI: argparse + Rich rendering + glue
@@ -1353,8 +1354,9 @@ group).
 | `report.py` | HTML rendering: `render_summary_html()`, `render_fader_table_html()`, `render_track_detail_html()` |
 | `waveform.py` | `WaveformWidget` — two display modes (waveform + spectrogram), vectorised NumPy peak/RMS downsampling, mel spectrogram (256 mel bins via `scipy.signal.stft`, configurable FFT/window/dB range/colormap), dB and frequency scales, peak/RMS markers, crosshair mouse guide (dBFS in waveform, Hz in spectrogram), mouse-wheel zoom/pan (Ctrl+wheel h-zoom, Ctrl+Shift+wheel v-zoom, Shift+Alt+wheel freq pan, Shift+wheel scroll), keyboard shortcuts (R/T zoom), detector issue overlays with optional frequency bounds, RMS L/R and RMS AVG envelopes, playback cursor, tooltips |
 | `playback.py` | `PlaybackController` — sounddevice OutputStream lifecycle, QTimer cursor updates, signal-based API |
-| `preferences.py` | `PreferencesDialog` — tree-navigated settings dialog, ParamSpec-driven widgets, reset-to-default, HiDPI scaling |
-| `mainwindow.py` | `SessionPrepWindow` (QMainWindow) — orchestrator, UI layout, slot handlers |
+| `param_widgets.py` | Reusable ParamSpec-driven widget builders (`_build_param_page`, `_read_widget`, `_set_widget_value`, `_build_tooltip`) + `GroupsTableWidget` (drag-reorderable group editor with color/gain-linked/DAW-target columns) |
+| `preferences.py` | `PreferencesDialog` — two-tab layout (Global + Config Presets), config preset CRUD, group preset CRUD, ParamSpec-driven widgets, reset-to-default, HiDPI scaling |
+| `mainwindow.py` | `SessionPrepWindow` (QMainWindow) — orchestrator, UI layout, slot handlers, toolbar config/group preset combos, session Config tab |
 
 ### 18.3 Dependency Direction
 
@@ -1459,11 +1461,28 @@ leaves. `preferences` reads `ParamSpec` metadata from detectors and processors.
     for horizontal scroll.
 - **report.py** contains pure HTML-building functions (no widget references),
   making them independently testable.
-- **PreferencesDialog** dynamically generates settings pages from each
-  component's `config_params()` metadata. Widget type, range, step size,
-  and decimal precision are all derived from the `ParamSpec`. Each parameter
-  gets a visible description subtext, a rich tooltip (with key name, default,
-  range), and a reset-to-default button using Qt's `SP_BrowserReload` icon.
+- **PreferencesDialog** uses a two-tab layout:
+  - **Global** tab — General (HiDPI scale, project dir, etc.), Colors
+    (palette editor), Groups (group preset CRUD + `GroupsTableWidget`).
+    Each has its own tree + stacked widget.
+  - **Config Presets** tab — toolbar with combo + Add/Duplicate/Rename/Delete
+    buttons. Below it: Analysis, Detectors (with presentation params),
+    Processors, DAW Processors pages. Each has its own tree + stacked widget.
+    Switching presets saves current widget values to the old preset and loads
+    the new one.
+  Widget type, range, step size, and decimal precision are all derived from
+  `ParamSpec` (via `param_widgets.py`). Each parameter gets a visible
+  description subtext, a rich tooltip (with key name, default, range), and a
+  reset-to-default button using Qt's `SP_BrowserReload` icon.
+- **Toolbar config preset chooser** — the analysis toolbar includes a
+  "Config:" combo that shows available config presets. Switching presets
+  with an active session warns the user, then resets session config and
+  triggers re-analysis while preserving group assignments.
+- **Session Config tab** — a per-session config override editor (tree +
+  stacked widget) that mirrors the Config Presets layout. Initialised from
+  the active global config preset on first analysis. Edits take effect
+  immediately via `_flat_config()` without needing to save. A "Reset to
+  Preset Defaults" button restores the global preset values.
 - **HiDPI scaling** is applied via `QT_SCALE_FACTOR` environment variable,
   read directly from the JSON config file before `QApplication` is created
   (bypassing the validate-and-merge path to avoid side effects).
@@ -1485,8 +1504,8 @@ leaves. `preferences` reads `ParamSpec` metadata from detectors and processors.
 
 ### 18.5 Persistent Configuration (`sessionprep.config.json`)
 
-The GUI stores all detector and processor default values in a JSON config
-file in the OS-specific user preferences directory:
+The GUI stores all settings in a JSON config file in the OS-specific user
+preferences directory:
 
 | OS      | Path |
 |---------|------|
@@ -1494,71 +1513,98 @@ file in the OS-specific user preferences directory:
 | macOS   | `~/Library/Application Support/sessionprep/sessionprep.config.json` |
 | Linux   | `$XDG_CONFIG_HOME/sessionprep/sessionprep.config.json` (defaults to `~/.config/`) |
 
-**Structured format** — organised by component, not a flat key list:
+**Four-section format** — separates global settings from named presets:
 
 ```json
 {
-    "gui": {
+    "app": {
         "scale_factor": 1.0,
-        "show_clean_detectors": false,
-        "default_project_dir": "",
+        "report_verbosity": "normal",
         "output_folder": "",
-        "verbosity": "normal",
-        "spectrogram_colormap": "magma"
+        "spectrogram_colormap": "magma",
+        "invert_scroll": "default",
+        "default_project_dir": "",
+        "active_config_preset": "Default",
+        "active_group_preset": "Default"
     },
-    "analysis": {
-        "window": 400,
-        "stereo_mode": "avg",
-        "rms_anchor": "percentile",
-        "rms_percentile": 95.0,
-        "gate_relative_db": 40.0,
-        "normalize_faders": false
+    "colors": [
+        { "name": "Guardsman Red", "argb": "#ffcc0000" },
+        { "name": "Dodger Blue Light", "argb": "#ff3399ff" },
+        "..."
+    ],
+    "config_presets": {
+        "Default": {
+            "analysis": { "window": 400, "stereo_mode": "avg", "..." : "..." },
+            "detectors": {
+                "clipping": { "clip_consecutive": 3 },
+                "dc_offset": { "dc_offset_warn_db": -40.0 },
+                "...": "..."
+            },
+            "processors": {
+                "bimodal_normalize": { "target_rms": -18.0, "target_peak": -6.0 }
+            },
+            "daw_processors": {
+                "protools": { "protools_enabled": true },
+                "...": "..."
+            },
+            "presentation": {
+                "show_clean_detectors": false
+            }
+        }
     },
-    "detectors": {
-        "clipping": { "clip_consecutive": 3, "clip_report_max_ranges": 10 },
-        "dc_offset": { "dc_offset_warn_db": -40.0 },
-        "...": "..."
-    },
-    "processors": {
-        "bimodal_normalize": { "target_rms": -18.0, "target_peak": -6.0 }
-    },
-    "daw_processors": {
-        "protools": { "protools_enabled": true, "protools_command_delay": 1.0 },
-        "dawproject": { "dawproject_enabled": true }
+    "group_presets": {
+        "Default": [
+            { "name": "Kick", "color": "Guardsman Red", "gain_linked": true, "daw_target": "Kick" },
+            { "name": "Snare", "color": "Dodger Blue Light", "gain_linked": true, "daw_target": "Snare" },
+            "..."
+        ]
     }
 }
 ```
 
-- **`gui`** — GUI-specific settings (HiDPI scale factor, show/hide clean
-  detectors, default project directory); not consumed by the analysis pipeline
-- **`analysis`** — shared RMS / loudness parameters and global processing
-  defaults (from `ANALYSIS_PARAMS`)
-- **`detectors.<id>`** — per-detector parameters (from each detector's `config_params()`)
-- **`processors.<id>`** — per-processor parameters (from each processor's `config_params()`)
-- **`daw_processors.<id>`** — per-DAW-processor parameters (from each DAW processor's `config_params()`)
+- **`app`** — global application settings (HiDPI scale, colormap, scroll
+  direction, default project directory, active preset names); not consumed
+  by the analysis pipeline
+- **`colors`** — global color palette (name + ARGB hex pairs), referenced
+  by group presets
+- **`config_presets`** — named config presets, each containing five
+  sub-sections: `analysis`, `detectors`, `processors`, `daw_processors`,
+  `presentation`. The active preset is identified by `app.active_config_preset`.
+  Managed via the Preferences dialog (Config Presets tab) and the toolbar
+  "Config:" combo.
+- **`group_presets`** — named group presets (lists of track group dicts
+  with name, color, gain-linked, daw-target). Managed via the Preferences
+  dialog (Global → Groups) and the toolbar "Group:" combo.
 
 Session-specific values (`force_transient`, `force_sustained`, `group`,
 `anchor`) are **not** stored in the config file — they are per-session
 and will be saved in session project files in the future.
 
+**Config presets vs. session config:**
+
+Config presets define the global defaults for analysis parameters, detector
+thresholds, processor targets, and DAW processor settings. When analysis
+starts, the active config preset is snapshot into the session's Config tab
+(`_session_config`). The user can then tweak per-session overrides without
+affecting the global preset. `_flat_config()` reads from the session config
+widgets when available, falling back to the global preset otherwise.
+
 **Lifecycle:**
 
-1. On first launch, `build_structured_defaults()` creates the file with
-   all built-in defaults from every component's `config_params()`.
-   GUI-specific defaults (`gui.scale_factor`) are injected by `settings.py`.
+1. On first launch, `build_defaults()` creates the file with all built-in
+   defaults from every component's `config_params()`. A "Default" config
+   preset and "Default" group preset are created.
 2. On subsequent launches, the file is deep-merged with current defaults
-   (forward-compatible for new keys/detectors) and validated via
-   `validate_structured_config()`. The `gui` section is preserved through
-   the merge even if analysis/detector/processor validation fails.
-3. If the file is corrupt or fails validation, analysis/detector/processor
-   sections are reset to defaults; the `gui` section is preserved. The
-   corrupt file is backed up as `*.bak`.
-4. `flatten_structured_config()` converts the structured dict into a flat
-   key-value dict that the pipeline and `AnalyzeWorker` consume (the `gui`
-   section is excluded from flattening — it is consumed only by the GUI).
-5. The **Preferences dialog** (`preferences.py`) provides a tree-navigated
-   UI for editing all parameters. On save, changes are written to the config
-   file and a re-analysis is triggered if a session is loaded.
+   (forward-compatible for new keys/detectors). Legacy flat-format configs
+   are migrated to the four-section structure by `_migrate_legacy_config()`.
+3. If the file is corrupt, it is backed up as `*.bak` and reset to defaults.
+4. `resolve_config_preset(config, name)` retrieves a named preset, merged
+   with defaults. `flatten_structured_config()` converts a preset into a
+   flat key-value dict for the pipeline and `AnalyzeWorker`.
+5. The **Preferences dialog** provides a two-tab UI for editing all settings.
+   On save, changes are written to the config file. If analysis-relevant
+   parameters changed and a session is loaded, re-analysis is triggered
+   automatically; presentation-only changes trigger a lightweight refresh.
 
 The CLI is **not** affected by this file — it continues to use its own
 `default_config()` + command-line arguments.

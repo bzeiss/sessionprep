@@ -25,7 +25,11 @@
 - [x] **DawCommand / DawCommandResult models**
   - Plain data + undo_params; processor executes via internal dispatch
 
-- [x] **Config/Settings/Preferences integration**
+- [x] **Config/Settings/Preferences integration** — four-section config
+  (`app`, `colors`, `config_presets`, `group_presets`), Preferences two-tab
+  layout (Global + Config Presets), config preset CRUD, group preset CRUD,
+  toolbar "Config:" and "Group:" combos, session Config tab with per-session
+  overrides, legacy config migration
 
 - [x] **Concrete: ProToolsProcessor** (PTSL) — `ProToolsDawProcessor` in `daw_processors/protools.py`.
   `check_connectivity()`, `fetch()` (folder hierarchy), `transfer()` (audio import + CIE L*a*b*
@@ -461,8 +465,9 @@
 | ~~Hard-coded processor ID in Pipeline~~ | — | ✅ Resolved |
 | ~~Report/JSON generation in CLI~~ | — | ✅ Resolved (moved to `sessionpreplib/reports.py`) |
 | ~~Docs reorganization~~ | — | ✅ Resolved (README, TECHNICAL, REFERENCE) |
-| ~~Preferences dialog~~ | — | ✅ Resolved (tree nav, ParamSpec-driven pages, reset-to-default) |
-| ~~HiDPI scaling~~ | — | ✅ Resolved (QT_SCALE_FACTOR, persisted in gui.scale_factor) |
+| ~~Preferences dialog~~ | — | ✅ Resolved (two-tab layout: Global + Config Presets; config preset CRUD; group preset CRUD; ParamSpec-driven pages; reset-to-default) |
+| ~~Config presets + session config~~ | — | ✅ Resolved (four-section config structure, named config presets, toolbar Config: combo, session Config tab, per-session overrides, legacy migration, group preservation on re-analysis) |
+| ~~HiDPI scaling~~ | — | ✅ Resolved (QT_SCALE_FACTOR, persisted in app.scale_factor) |
 | ~~Detector/processor help text~~ | — | ✅ Resolved (visible subtext + rich tooltips) |
 | ~~About dialog~~ | — | ✅ Resolved (version from importlib.metadata) |
 | ~~Waveform overlay controls~~ | — | ✅ Resolved (Detector Overlays dropdown with per-detector checkable items, filtered by is_relevant) |
