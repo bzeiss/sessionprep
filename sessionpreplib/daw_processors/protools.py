@@ -74,6 +74,40 @@ def _closest_palette_index(
     return best_idx
 
 
+def _extract_clip_ids(resp: dict) -> list[str]:
+    """Extract all clip IDs from a CId_ImportAudioToClipList response.
+
+    Stereo files produce two clip IDs (L + R); mono files produce one.
+    All must be passed to CId_SpotClipsByID for correct placement.
+
+    Expected path:
+      resp['file_list'][0]['destination_file_list'][0]['clip_id_list']
+    """
+    try:
+        ids = resp['file_list'][0]['destination_file_list'][0][
+            'clip_id_list']
+        if not ids:
+            raise ValueError("clip_id_list is empty")
+        return list(ids)
+    except (KeyError, IndexError, TypeError, ValueError) as e:
+        raise RuntimeError(
+            f"Failed to extract clip_ids from import response: {resp}"
+        ) from e
+
+
+def _extract_track_id(resp: dict) -> str:
+    """Extract the track ID from a CId_CreateNewTracks response.
+
+    Expected path: resp['created_track_ids'][0]
+    """
+    try:
+        return resp['created_track_ids'][0]
+    except (KeyError, IndexError, TypeError) as e:
+        raise RuntimeError(
+            f"Failed to extract track_id from create response: {resp}"
+        ) from e
+
+
 class ProToolsDawProcessor(DawProcessor):
     """DAW processor for Avid Pro Tools via the PTSL scripting SDK.
 
@@ -330,14 +364,16 @@ class ProToolsDawProcessor(DawProcessor):
                             if idx is not None:
                                 group_palette_idx[track.group] = idx
 
-            # Snapshot of track names before we start importing
-            before_tracks = {t.name for t in engine.track_list()}
+            # Resolve session "Audio Files" folder for copy/convert
+            session_ptx = engine.session_path()
+            audio_files_dir = os.path.join(
+                os.path.dirname(session_ptx), "Audio Files")
 
             for step, (fname, fid) in enumerate(work):
                 folder = folder_map.get(fid)
                 if not folder:
                     results.append(DawCommandResult(
-                        command=DawCommand("import_audio", fname,
+                        command=DawCommand("import_to_clip_list", fname,
                                            {"folder_id": fid}),
                         success=False, error=f"Folder {fid} not found",
                     ))
@@ -346,7 +382,7 @@ class ProToolsDawProcessor(DawProcessor):
                 tc = track_map.get(fname)
                 if not tc:
                     results.append(DawCommandResult(
-                        command=DawCommand("import_audio", fname,
+                        command=DawCommand("import_to_clip_list", fname,
                                            {"folder_name": folder["name"]}),
                         success=False, error=f"Track {fname} not in session",
                     ))
@@ -360,74 +396,123 @@ class ProToolsDawProcessor(DawProcessor):
                     filepath = os.path.abspath(tc.processed_filepath)
                 else:
                     filepath = os.path.abspath(tc.filepath)
-                import_cmd = DawCommand(
-                    "import_audio", fname,
-                    {"folder_name": folder_name, "filepath": filepath},
-                )
+                track_stem = os.path.splitext(fname)[0]
+                track_format = (
+                    "TF_Mono" if tc.channels == 1 else "TF_Stereo")
 
                 if progress_cb:
                     progress_cb(step, total,
                                 f"Importing {fname} → {folder_name}")
 
+                # --- Step 1: Import audio to clip list (copy/convert) ---
+                clip_cmd = DawCommand(
+                    "import_to_clip_list", fname,
+                    {"filepath": filepath,
+                     "destination": audio_files_dir},
+                )
                 try:
-                    # Select the target folder
+                    import_resp = engine.client.run_command(
+                        pt.CommandId.CId_ImportAudioToClipList,
+                        {
+                            "file_list": [filepath],
+                            "import_type": pt.IType_Audio,
+                            "audio_data": {
+                                "audio_operations":
+                                    pt.AOperations_ConvertAudio,
+                                "destination_path": audio_files_dir,
+                            },
+                        },
+                    )
+                    time.sleep(delay)
+                    clip_ids = _extract_clip_ids(import_resp)
+                    results.append(DawCommandResult(
+                        command=clip_cmd, success=True))
+                except Exception as e:
+                    results.append(DawCommandResult(
+                        command=clip_cmd, success=False, error=str(e)))
+                    continue
+
+                # --- Step 2: Create new track inside target folder ---
+                create_cmd = DawCommand(
+                    "create_track", fname,
+                    {"track_name": track_stem,
+                     "folder_name": folder_name,
+                     "format": track_format},
+                )
+                try:
+                    # Select the folder first so PT places the track inside it
                     engine.select_tracks_by_name([folder_name])
                     time.sleep(delay)
 
-                    # Import audio into new track at session start
-                    import_req = {
-                        "import_type": pt.IType_Audio,
-                        "audio_data": {
-                            "file_list": [filepath],
-                            "audio_operations": pt.AOperations_CopyAudio,
-                            "audio_destination": pt.MDestination_NewTrack,
-                            "audio_location": pt.MLocation_SessionStart,
-                            "location_data": {
+                    create_resp = engine.client.run_command(
+                        pt.CommandId.CId_CreateNewTracks,
+                        {
+                            "number_of_tracks": 1,
+                            "track_name": track_stem,
+                            "track_format": track_format,
+                            "track_type": "TT_Audio",
+                            "track_timebase": "TTB_Samples",
+                            "insertion_point_track_name": folder_name,
+                            "insertion_point_position": "TIPoint_Last",
+                        },
+                    )
+                    time.sleep(delay)
+                    new_track_id = _extract_track_id(create_resp)
+                    results.append(DawCommandResult(
+                        command=create_cmd, success=True))
+                except Exception as e:
+                    results.append(DawCommandResult(
+                        command=create_cmd, success=False, error=str(e)))
+                    continue
+
+                # --- Step 3: Spot clip on the new track at session start ---
+                spot_cmd = DawCommand(
+                    "spot_clip", fname,
+                    {"clip_ids": clip_ids, "track_id": new_track_id},
+                )
+                try:
+                    engine.client.run_command(
+                        pt.CommandId.CId_SpotClipsByID,
+                        {
+                            "src_clips": clip_ids,
+                            "dst_track_id": new_track_id,
+                            "dst_location_data": {
                                 "location_type": pt.SLType_Start,
                                 "location": {
                                     "location": "0",
-                                    "time_type": pt.TLType_Samples,
+                                    "time_type": "TLType_Samples",
                                 },
                             },
                         },
-                    }
-                    engine.client.run_command(
-                        pt.CommandId.CId_Import, import_req)
+                    )
                     time.sleep(delay)
-
                     results.append(DawCommandResult(
-                        command=import_cmd, success=True))
-
-                    # Identify newly created track
-                    after_tracks = {t.name for t in engine.track_list()}
-                    new_names = list(after_tracks - before_tracks)
-                    before_tracks = after_tracks
-
-                    # Colorize if group has a mapped color
-                    if new_names and tc.group in group_palette_idx:
-                        new_track_name = new_names[0]
-                        color_idx = group_palette_idx[tc.group]
-                        color_cmd = DawCommand(
-                            "set_track_color", new_track_name,
-                            {"color_index": color_idx,
-                             "group": tc.group},
-                        )
-                        try:
-                            engine.client.run_command(
-                                pt.CommandId.CId_SetTrackColor,
-                                {"track_names": [new_track_name],
-                                 "color_index": color_idx},
-                            )
-                            results.append(DawCommandResult(
-                                command=color_cmd, success=True))
-                        except Exception as e:
-                            results.append(DawCommandResult(
-                                command=color_cmd, success=False,
-                                error=str(e)))
-
+                        command=spot_cmd, success=True))
                 except Exception as e:
                     results.append(DawCommandResult(
-                        command=import_cmd, success=False, error=str(e)))
+                        command=spot_cmd, success=False, error=str(e)))
+                    continue
+
+                # --- Colorize if group has a mapped color ---
+                if tc.group in group_palette_idx:
+                    color_idx = group_palette_idx[tc.group]
+                    color_cmd = DawCommand(
+                        "set_track_color", track_stem,
+                        {"color_index": color_idx,
+                         "group": tc.group},
+                    )
+                    try:
+                        engine.client.run_command(
+                            pt.CommandId.CId_SetTrackColor,
+                            {"track_names": [track_stem],
+                             "color_index": color_idx},
+                        )
+                        results.append(DawCommandResult(
+                            command=color_cmd, success=True))
+                    except Exception as e:
+                        results.append(DawCommandResult(
+                            command=color_cmd, success=False,
+                            error=str(e)))
 
             # Store transfer snapshot for future sync()
             pt_state["last_transfer"] = {
