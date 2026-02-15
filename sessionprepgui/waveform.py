@@ -870,9 +870,8 @@ class WaveformWidget(QWidget):
             painter.drawPolyline(top_poly)
             painter.drawPolyline(bot_poly)
 
-            center_color = QColor(COLORS["accent"])
-            center_color.setAlpha(80)
-            painter.setPen(QPen(center_color, 1, Qt.DotLine))
+            center_color = QColor(160, 100, 220, 160)  # violet
+            painter.setPen(QPen(center_color, 2, Qt.DotLine))
             painter.drawLine(x0, int(mid_y), x0 + draw_w, int(mid_y))
 
             painter.setClipping(False)
