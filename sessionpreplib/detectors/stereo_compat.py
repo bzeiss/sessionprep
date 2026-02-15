@@ -49,13 +49,14 @@ class StereoCompatDetector(TrackDetector):
                 ),
             ),
             ParamSpec(
-                key="corr_window_ms", type=int, default=500,
+                key="corr_window_ms", type=int, default=250,
                 min=100, max=5000,
                 label="Analysis window (ms)",
                 description=(
-                    "Window length for windowed stereo analysis. 500 ms gives "
-                    "roughly musical-bar resolution at moderate tempos. Shorter "
-                    "windows reveal transient phase issues but are noisier."
+                    "Window length for windowed stereo analysis. 250 ms gives "
+                    "roughly 16th-note resolution at moderate tempos — short "
+                    "enough to catch reverb tails and widener artifacts, long "
+                    "enough for stable correlation values."
                 ),
             ),
             ParamSpec(

@@ -73,6 +73,7 @@ def build_diagnostic_summary(
         "problem": problems_groups,
         "attention": attention_groups,
         "information": info_groups,
+        "info": info_groups,
     }
 
     def _is_skipped(det_id: str) -> bool:
