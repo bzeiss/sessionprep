@@ -2,7 +2,7 @@
 
 Batch audio analyzer and normalizer for mix session preparation.
 
-SessionPrep audits and prepares raw audio tracks for professional mix sessions.
+SessionPrep audits and prepares raw audio tracks for mix sessions.
 It performs the mechanical, non-creative labor of checking files for problems and
 normalizing levels, so you can focus on mixing.
 
