@@ -186,7 +186,7 @@ class StereoCompatDetector(TrackDetector):
         if self.windowed and win_results:
             windowed_regions = self._windowed_analysis(
                 track, win_results, corr_threshold, mono_threshold,
-                issues, detail_lines,
+                issues, detail_lines, any_whole_warn,
             )
             result_data["windowed_regions"] = windowed_regions
             has_attention_regions = len(issues) > 0
@@ -274,6 +274,7 @@ class StereoCompatDetector(TrackDetector):
         mono_threshold: float,
         issues: list[IssueLocation],
         detail_lines: list[str],
+        any_whole_warn: bool = False,
     ) -> list[dict]:
         """Merge per-window results into contiguous regions.
 
@@ -290,8 +291,9 @@ class StereoCompatDetector(TrackDetector):
         regions = self._merge_regions(
             win_results, corr_threshold, mono_threshold)
 
-        # Fallback: if no regions found, mark active-signal windows
-        if not regions:
+        # Fallback: if no regions found but whole-file warned,
+        # mark active-signal windows so ATTENTION has at least one overlay
+        if not regions and any_whole_warn:
             regions = self._find_active_regions(
                 win_results, track.samplerate, int(self.window_ms))
 
