@@ -250,4 +250,4 @@ multiple groups a warning is printed.
 
 ## License
 
-GPL-3.0-or-later. See [LICENSE](LICENSE).
+LGPL-3.0-or-later. See [LICENSE](LICENSE).
