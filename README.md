@@ -145,20 +145,14 @@ distribution instructions.
 
 ## How It Works
 
-SessionPrep operates in four stages:
+SessionPrep operates in three stages:
 
 | Stage | Name | What happens | When |
 |-------|------|-------------|------|
-| **A** | Diagnostics | Format checks, clipping, DC offset, stereo sanity, silence, subsonic | Always |
-| **B** | Analysis | Peak, RMS windows, crest factor, classification, tail exceedance | Always |
-| **C** | Processing | Bimodal normalization (clip gain adjustment) | Execute mode (`-x`) |
-| **D** | Restoration | Fader offsets to restore the rough mix balance | In DAW (manual or automation) |
+| **1** | Analysis & Preparation | Format checks, clipping, DC offset, stereo compatibility, silence, subsonic, peak/RMS measurement, classification, tail exceedance | Always |
+| **2** | Processing | Bimodal normalization (clip gain adjustment) | GUI Prepare / CLI execute (`-x`) |
+| **3** | DAW Integration | Transfer tracks into DAW session, apply fader offsets to restore rough mix balance | GUI Transfer |
 
-**Dry-run mode** (default, no `-x`): runs Stages A+B and prints a session
-overview. No files are written.
-
-**Execute mode** (`-x`): runs all stages, writes processed files to `processed/`,
-and generates `sessionprep.txt` + `sessionprep.json`.
 
 ### Diagnostic categories
 
@@ -171,7 +165,7 @@ The output is organized into four categories:
 
 For details on every detector, see [REFERENCE.md](REFERENCE.md).
 
-### Processing: Bimodal normalization (CLI only)
+### Processing: Bimodal normalization
 
 Most normalizers treat a kick drum and a synth pad the same. SessionPrep
 classifies tracks using three metrics — crest factor, envelope decay rate,
