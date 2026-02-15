@@ -468,7 +468,7 @@ class SessionPrepWindow(QMainWindow):
         self._main_splitter.setStretchFactor(1, 2)
         self._main_splitter.setSizes([620, 480])
         analysis_layout.addWidget(self._main_splitter, 1)
-        self._phase_tabs.addTab(analysis_page, "Analysis")
+        self._phase_tabs.addTab(analysis_page, "Analysis && Preparation")
 
         # Tab 1 — Session Setup (placeholder)
         self._phase_tabs.addTab(self._build_setup_page(), "Session Setup")
@@ -613,12 +613,12 @@ class SessionPrepWindow(QMainWindow):
 
         self._setup_toolbar.addSeparator()
 
-        # ── Use Processed toggle ───────────────────────────────────────
-        self._use_processed_action = QAction("Use Processed: Off", self)
-        self._use_processed_action.setCheckable(True)
-        self._use_processed_action.setEnabled(False)
-        self._use_processed_action.toggled.connect(self._on_use_processed_toggled)
-        self._setup_toolbar.addAction(self._use_processed_action)
+        # ── Use Processed checkbox ─────────────────────────────────────
+        self._use_processed_cb = QCheckBox("Use Processed")
+        self._use_processed_cb.setLayoutDirection(Qt.RightToLeft)
+        self._use_processed_cb.setEnabled(False)
+        self._use_processed_cb.toggled.connect(self._on_use_processed_toggled)
+        self._setup_toolbar.addWidget(self._use_processed_cb)
 
         # ── Spacer ─────────────────────────────────────────────────────
         spacer = QWidget()
@@ -843,7 +843,7 @@ class SessionPrepWindow(QMainWindow):
             self._status_bar.showMessage(f"Fetch failed: {message}")
         self._update_daw_lifecycle_buttons()
 
-    # ── Use Processed toggle ────────────────────────────────────────────
+    # ── Use Processed checkbox ──────────────────────────────────────────
 
     @Slot(bool)
     def _on_use_processed_toggled(self, checked: bool):
@@ -852,22 +852,20 @@ class SessionPrepWindow(QMainWindow):
         self._update_use_processed_action()
 
     def _update_use_processed_action(self):
-        """Update the Use Processed toggle label, enabled state, and stale indicator."""
+        """Update the Use Processed checkbox enabled state and stale indicator."""
         if not self._session:
-            self._use_processed_action.setEnabled(False)
-            self._use_processed_action.setText("Use Processed: Off")
+            self._use_processed_cb.setEnabled(False)
+            self._use_processed_cb.setText("Use Processed")
             return
 
         state = self._session.prepare_state
         has_prepared = state in ("ready", "stale")
-        self._use_processed_action.setEnabled(has_prepared)
+        self._use_processed_cb.setEnabled(has_prepared)
 
-        checked = self._use_processed_action.isChecked()
-        on_off = "On" if checked else "Off"
-        if state == "stale" and checked:
-            self._use_processed_action.setText(f"Use Processed: {on_off} (!)")
+        if state == "stale" and self._use_processed_cb.isChecked():
+            self._use_processed_cb.setText("Use Processed (!)")
         else:
-            self._use_processed_action.setText(f"Use Processed: {on_off}")
+            self._use_processed_cb.setText("Use Processed")
 
     # ── DAW Transfer ─────────────────────────────────────────────────────
 

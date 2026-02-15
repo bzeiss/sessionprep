@@ -195,18 +195,23 @@ class BatchEditTableWidget(QTableWidget):
                 item.setBackground(brush)
             w = self.cellWidget(row, col)
             if w is not None:
-                ss = w.styleSheet()
-                lines = [ln for ln in ss.split(";")
-                         if "background-color" not in ln]
-                base = ";".join(ln for ln in lines if ln.strip())
+                # Snapshot the widget's original stylesheet on first visit
+                base_ss = w.property("_base_ss")
+                if base_ss is None:
+                    base_ss = w.styleSheet() or ""
+                    w.setProperty("_base_ss", base_ss)
+
                 if rgb_str:
-                    if base:
-                        base = base.rstrip().rstrip("}")
-                        base += f"; background-color: {rgb_str}; }}"
+                    trimmed = base_ss.rstrip().rstrip("}").rstrip()
+                    if trimmed:
+                        w.setStyleSheet(
+                            f"{trimmed} background-color: {rgb_str}; }}")
                     else:
                         wtype = type(w).__name__
-                        base = f"{wtype} {{ background-color: {rgb_str}; }}"
-                w.setStyleSheet(base)
+                        w.setStyleSheet(
+                            f"{wtype} {{ background-color: {rgb_str}; }}")
+                else:
+                    w.setStyleSheet(base_ss)
 
     def clear_row_color(self, row: int):
         """Remove any custom background from *row*."""
