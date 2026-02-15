@@ -345,7 +345,7 @@ sessionprepgui/                  # GUI package (PySide6)
     res/                         # Application icons (SVG, PNG, ICO)
     settings.py                  # Persistent config (load/save/validate, OS paths)
     theme.py                     # Colors, FILE_COLOR_* constants, dark theme
-    helpers.py                   # esc(), track_analysis_label(), fmt_time(), severity maps
+    helpers.py                   # esc(), track_analysis_label() (severity counts), fmt_time(), severity maps
     worker.py                    # QThread workers: AnalyzeWorker, BatchReanalyzeWorker, DawCheckWorker, DawFetchWorker, DawTransferWorker
     report.py                    # HTML report rendering (summary, fader table, track detail)
     waveform.py                  # WaveformWidget (waveform + spectrogram display, dB/freq scales, markers, overlays, keyboard/mouse nav)
@@ -703,7 +703,7 @@ cycles.
 #### 6.3.4 StereoCompatDetector (`stereo_compat.py`)
 
 - **ID:** `stereo_compat` | **Depends on:** `["silence"]`
-- **Config:** `corr_warn`, `mono_loss_warn_db`, `corr_windowed`, `corr_window_ms`, `corr_max_regions`
+- **Config:** `corr_warn`, `mono_loss_warn_db`, `corr_windowed`, `corr_window_ms` (default 250 ms), `corr_max_regions`
 - **Data:** `{"lr_corr": float | None, "mono_loss_db": float | None, "corr_warn": bool, "mono_warn": bool, "windowed_regions": list}`
 - **Severity:** `ATTENTION` if windowed regions exceed threshold, `INFO` if whole-file only, `CLEAN` otherwise
 - **Windowed analysis:** per-window Pearson correlation + mono folddown loss, merged into regions with `IssueLocation` overlays

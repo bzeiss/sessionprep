@@ -86,7 +86,7 @@ A detector earns its place if it meets at least one of these criteria:
   - correlation below `--corr_warn` and/or
   - mono fold-down loss above `--mono_loss_warn_db`
 - **Why it matters:** low or negative correlation indicates phase differences between channels that cause level loss or cancellation in mono playback (phone speakers, mono PA systems).
-- **Controls:** `--corr_warn`, `--mono_loss_warn_db`, `--corr_windowed`, `--corr_window_ms`, `--corr_max_regions`
+- **Controls:** `--corr_warn`, `--mono_loss_warn_db`, `--corr_windowed`, `--corr_window_ms` (default 250 ms), `--corr_max_regions`
 - **Windowed analysis:** when enabled, per-window Pearson correlation and mono folddown loss are computed. Contiguous windows exceeding either threshold are merged into regions with waveform overlays.
 - **Categorization:**
   - ATTENTION: localized regions with poor stereo compatibility detected.
@@ -451,7 +451,7 @@ are more consistent. Per-insert gain staging is still part of mixing.
 | **Waveform / Spectrogram ▾** | Switch between waveform and spectrogram display mode |
 | **Display ▾** | Spectrogram settings: FFT Size, Window, Color Theme, dB Floor, dB Ceiling (spectrogram mode only) |
 | **Detector Overlays ▾** | Toggle visibility of individual detector overlays (both modes) |
-| **Peak / RMS Max** | Toggle peak ("P") and max-RMS ("R") markers (waveform mode) |
+| **Peak / RMS Max** | Toggle peak ("P") and max-RMS ("R") markers (waveform mode, off by default) |
 | **RMS L/R** | Toggle per-channel RMS envelope (yellow, waveform mode) |
 | **RMS AVG** | Toggle combined RMS envelope (orange, waveform mode) |
 | **Fit** | Reset zoom to show entire file |
@@ -460,11 +460,37 @@ are more consistent. Per-insert gain staging is still part of mixing.
 | **↑** | Scale up (amplitude in waveform, frequency range in spectrogram) |
 | **↓** | Scale down (amplitude in waveform, frequency range in spectrogram) |
 
+### 6.4 Playback Controls
+
+| Button | Effect |
+|--------|--------|
+| **▶ Play** | Start playback from cursor position |
+| **■ Stop** | Stop playback and return cursor to start position |
+| **M** | Toggle mono playback — folds stereo to mono via (L+R)/2 for auditioning mono compatibility. Latched: toggle once, then play/stop freely. Orange when active. |
+| **Space** | Toggle play/stop (global shortcut) |
+
 ---
 
 ## 7. GUI Track Table Controls
 
-### 7.1 Selection
+### 7.1 Analysis Column
+
+The **Analysis** column displays per-track severity counts instead of a single
+worst-severity label.  Each severity level is color-coded and only non-zero
+counts are shown:
+
+| Display | Meaning |
+|---------|---------|
+| `2P 1A 5I` | 2 Problems (red), 1 Attention (orange), 5 Information (blue) |
+| `1A` | 1 Attention only |
+| `OK` | All detectors clean (green) |
+| `Error` | File could not be read (red) |
+
+The column is sortable — tracks with problems sort first, then attention, then
+clean.  Within the same worst severity, tracks with more total issues sort
+higher.
+
+### 7.2 Selection
 
 Standard Extended Selection applies to the track table:
 
@@ -474,7 +500,7 @@ Standard Extended Selection applies to the track table:
 | **Shift + click** | Extend selection to contiguous range |
 | **Ctrl + click** | Toggle individual rows (non-adjacent selection) |
 
-### 7.2 Batch Editing
+### 7.3 Batch Editing
 
 Hold **Alt+Shift** and click a dropdown in any selected row to apply the
 chosen value to **all** selected rows.  This mirrors the Pro Tools convention
@@ -496,7 +522,7 @@ Supported batch dropdowns:
 | **RMS Anchor** | 5 | Override per-track RMS anchor; triggers full re-analysis (detectors + processors) |
 | **Classification** | 3 | Override per-track classification; triggers processor-only re-calculation |
 
-### 7.3 RMS Anchor Override
+### 7.4 RMS Anchor Override
 
 Per-track dropdown overriding the global `rms_anchor` analysis setting.
 
@@ -513,7 +539,7 @@ Changing the anchor re-runs all detectors and processors for the affected
 track(s), since the anchor value influences both tail exceedance detection and
 gain calculation.
 
-### 7.4 Classification Override
+### 7.5 Classification Override
 
 Per-track dropdown overriding the auto-detected audio classification.
 

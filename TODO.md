@@ -550,3 +550,10 @@
 | ~~CLI grouping simplification~~ | — | ✅ Resolved (named groups via `Name:pattern` syntax, first-match-wins, overlap warnings, removed `--group_overlap`/union-find/merge) |
 | ~~Group levelling terminology~~ | — | ✅ Resolved ("equalize" → "group level" throughout codebase; `_equalize_group_gains` → `_apply_group_levels`) |
 | ~~Stereo compat windowed analysis~~ | — | ✅ Resolved (merged StereoCorrelation + MonoFolddown → StereoCompatDetector; windowed Pearson correlation + mono folddown loss; IssueLocation overlays) |
+| ~~Stereo compat false positive fix~~ | — | ✅ Resolved (`_windowed_analysis` fallback only runs when `any_whole_warn` is True; prevents unconditional active-region marking) |
+| ~~Stereo compat window default~~ | — | ✅ Resolved (default `corr_window_ms` changed from 500 ms to 250 ms for better localization) |
+| ~~Summary report\_as routing fix~~ | — | ✅ Resolved (`_buckets` dict in `rendering.py` was missing `"info"` key; `report_as` config choice `"info"` now routes correctly to info bucket) |
+| ~~Prepare error reporting~~ | — | ✅ Resolved (per-track write failures collected in `_prepare_errors`, displayed via `QMessageBox.warning` with file-locking guidance) |
+| ~~Mono playback button~~ | — | ✅ Resolved (checkable **M** button in playback controls; `PlaybackController.play(mono=True)` folds stereo to mono via (L+R)/2; orange when active) |
+| ~~Analysis column severity counts~~ | — | ✅ Resolved (replaced single worst-severity label with colored per-severity counts: `2P 1A 5I` format; QLabel cell widget with HTML rich text + hidden `_SortableItem` for sorting) |
+| ~~Peak/RMS Max markers default off~~ | — | ✅ Resolved (`_show_markers` and toggle default changed to `False`) |
