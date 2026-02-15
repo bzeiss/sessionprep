@@ -98,6 +98,17 @@ _SETUP_RIGHT_TREE = 1
 _SEVERITY_SORT = {"PROBLEMS": 0, "Error": 0, "ATTENTION": 1, "OK": 2, "": 3}
 
 
+def _make_analysis_cell(html: str, sort_key: int) -> tuple[QLabel, '_SortableItem']:
+    """Create a QLabel + hidden sort item for the Analysis column."""
+    lbl = QLabel(html)
+    lbl.setStyleSheet(
+        "QLabel { background: transparent; font-size: 8pt;"
+        " font-family: Consolas, monospace; padding: 0 4px; }")
+    lbl.setTextFormat(Qt.RichText)
+    item = _SortableItem("", sort_key)
+    return lbl, item
+
+
 class _HelpBrowser(QTextBrowser):
     """QTextBrowser that shows detector help tooltips on hover."""
 
@@ -1223,6 +1234,16 @@ class SessionPrepWindow(QMainWindow):
         self._stop_btn.clicked.connect(self._on_stop)
         controls.addWidget(self._stop_btn)
 
+        self._mono_btn = QPushButton("M")
+        self._mono_btn.setCheckable(True)
+        self._mono_btn.setToolTip("Play as mono (L+R)/2")
+        self._mono_btn.setFixedWidth(36)
+        self._mono_btn.setStyleSheet(
+            "QPushButton { font-weight: bold; }"
+            "QPushButton:checked { background-color: #cc8800; color: #000; }"
+        )
+        controls.addWidget(self._mono_btn)
+
         self._time_label = QLabel("00:00 / 00:00")
         self._time_label.setStyleSheet(
             "color: #888888; font-family: Consolas, monospace;"
@@ -1449,7 +1470,7 @@ class SessionPrepWindow(QMainWindow):
         self._markers_toggle.setText("Peak / RMS Max")
         self._markers_toggle.setToolTip("Toggle peak and maximum RMS markers on the waveform")
         self._markers_toggle.setCheckable(True)
-        self._markers_toggle.setChecked(True)
+        self._markers_toggle.setChecked(False)
         self._markers_toggle.setAutoRaise(True)
         self._markers_toggle.setStyleSheet(toggle_style)
         self._markers_toggle.toggled.connect(self._waveform.toggle_markers)
@@ -2350,10 +2371,10 @@ class SessionPrepWindow(QMainWindow):
         ch_item.setForeground(QColor(COLORS["dim"]))
         self._track_table.setItem(row, 1, ch_item)
         # Analysis column
-        label, color = track_analysis_label(track)
-        analysis_item = _SortableItem(label, _SEVERITY_SORT.get(label, 9))
-        analysis_item.setForeground(QColor(color))
-        self._track_table.setItem(row, 2, analysis_item)
+        _plain, html, _color, sort_key = track_analysis_label(track)
+        lbl, item = _make_analysis_cell(html, sort_key)
+        self._track_table.setItem(row, 2, item)
+        self._track_table.setCellWidget(row, 2, lbl)
 
     @Slot(str, object)
     def _on_track_planned(self, filename: str, track):
@@ -2364,10 +2385,10 @@ class SessionPrepWindow(QMainWindow):
 
         # Re-evaluate severity now that processor results inform is_relevant()
         dets = self._session.detectors if self._session else None
-        label, color = track_analysis_label(track, dets)
-        analysis_item = _SortableItem(label, _SEVERITY_SORT.get(label, 9))
-        analysis_item.setForeground(QColor(color))
-        self._track_table.setItem(row, 2, analysis_item)
+        _plain, html, _color, sort_key = track_analysis_label(track, dets)
+        lbl, item = _make_analysis_cell(html, sort_key)
+        self._track_table.setItem(row, 2, item)
+        self._track_table.setCellWidget(row, 2, lbl)
 
         # Remove previous cell widgets
         self._track_table.removeCellWidget(row, 3)
@@ -3000,12 +3021,12 @@ class SessionPrepWindow(QMainWindow):
             ch_item.setForeground(QColor(COLORS["dim"]))
             self._track_table.setItem(row, 1, ch_item)
 
-            # Column 2: worst severity (with is_relevant filtering)
+            # Column 2: severity counts
             dets = session.detectors if hasattr(session, 'detectors') else None
-            label, color = track_analysis_label(track, dets)
-            analysis_item = _SortableItem(label, _SEVERITY_SORT.get(label, 9))
-            analysis_item.setForeground(QColor(color))
-            self._track_table.setItem(row, 2, analysis_item)
+            _plain, html, _color, sort_key = track_analysis_label(track, dets)
+            lbl, item = _make_analysis_cell(html, sort_key)
+            self._track_table.setItem(row, 2, item)
+            self._track_table.setCellWidget(row, 2, lbl)
 
             # Column 3: classification (combo or static)
             # Column 4: gain (spin box or static)
@@ -3860,10 +3881,10 @@ class SessionPrepWindow(QMainWindow):
 
         # Analysis label
         dets = self._session.detectors
-        label, color = track_analysis_label(track, dets)
-        analysis_item = _SortableItem(label, _SEVERITY_SORT.get(label, 9))
-        analysis_item.setForeground(QColor(color))
-        self._track_table.setItem(row, 2, analysis_item)
+        _plain, html, _color, sort_key = track_analysis_label(track, dets)
+        lbl, item = _make_analysis_cell(html, sort_key)
+        self._track_table.setItem(row, 2, item)
+        self._track_table.setCellWidget(row, 2, lbl)
 
         # Gain spin box + sort item + classification
         pr = next(iter(track.processor_results.values()), None)
@@ -3946,7 +3967,8 @@ class SessionPrepWindow(QMainWindow):
             return
         self._on_stop()
         start = self._waveform._cursor_sample
-        self._playback.play(track.audio_data, track.samplerate, start)
+        self._playback.play(track.audio_data, track.samplerate, start,
+                            mono=self._mono_btn.isChecked())
         if self._playback.is_playing:
             self._play_btn.setEnabled(False)
             self._stop_btn.setEnabled(True)
@@ -4157,10 +4179,10 @@ class SessionPrepWindow(QMainWindow):
             track = track_map.get(fname_item.text())
             if not track:
                 continue
-            label, color = track_analysis_label(track, dets)
-            analysis_item = _SortableItem(label, _SEVERITY_SORT.get(label, 9))
-            analysis_item.setForeground(QColor(color))
-            self._track_table.setItem(row, 2, analysis_item)
+            _plain, html, _color, sort_key = track_analysis_label(track, dets)
+            lbl, item = _make_analysis_cell(html, sort_key)
+            self._track_table.setItem(row, 2, item)
+            self._track_table.setCellWidget(row, 2, lbl)
         self._track_table.setSortingEnabled(True)
 
     @Slot()

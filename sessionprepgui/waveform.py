@@ -350,7 +350,7 @@ class WaveformWidget(QWidget):
         # Overlay filtering
         self._enabled_overlays: set[str] = set()
         # Markers
-        self._show_markers: bool = True
+        self._show_markers: bool = False
         self._peak_sample: int = -1
         self._peak_channel: int = -1
         self._peak_db: float = float('-inf')
