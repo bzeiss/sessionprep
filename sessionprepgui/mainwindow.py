@@ -72,7 +72,7 @@ from .helpers import track_analysis_label, esc, fmt_time
 from .param_widgets import _build_param_page, _read_widget, _set_widget_value
 from .preferences import PreferencesDialog, _argb_to_qcolor
 from .report import render_summary_html, render_track_detail_html
-from .widgets import BatchEditTableWidget, BatchComboBox
+from .widgets import BatchEditTableWidget, BatchComboBox, ProgressPanel
 from .worker import (
     AnalyzeWorker, BatchReanalyzeWorker, DawCheckWorker, DawFetchWorker,
     DawTransferWorker, PrepareWorker,
@@ -724,20 +724,8 @@ class SessionPrepWindow(QMainWindow):
         tree_page_layout.addWidget(self._folder_tree, 1)
 
         # Transfer progress panel (hidden by default)
-        self._transfer_progress_panel = QWidget()
-        tp_layout = QVBoxLayout(self._transfer_progress_panel)
-        tp_layout.setContentsMargins(6, 4, 6, 6)
-        tp_layout.setSpacing(3)
-        self._transfer_status_label = QLabel("")
-        self._transfer_status_label.setStyleSheet(
-            f"color: {COLORS['text']}; font-size: 9pt;")
-        tp_layout.addWidget(self._transfer_status_label)
-        self._transfer_progress_bar = QProgressBar()
-        self._transfer_progress_bar.setTextVisible(False)
-        self._transfer_progress_bar.setFixedHeight(14)
-        tp_layout.addWidget(self._transfer_progress_bar)
-        self._transfer_progress_panel.setVisible(False)
-        tree_page_layout.addWidget(self._transfer_progress_panel)
+        self._transfer_progress = ProgressPanel()
+        tree_page_layout.addWidget(self._transfer_progress)
 
         self._setup_right_stack.addWidget(tree_page)
 
@@ -894,10 +882,7 @@ class SessionPrepWindow(QMainWindow):
     def _do_daw_transfer(self):
         """Actually start the transfer (called after successful connectivity check)."""
         self._status_bar.showMessage("Transferring to Pro Tools\u2026")
-        # Show progress panel
-        self._transfer_progress_bar.setValue(0)
-        self._transfer_status_label.setText("Preparing\u2026")
-        self._transfer_progress_panel.setVisible(True)
+        self._transfer_progress.start("Preparing\u2026")
         # Inject GUI config (groups + colors) into session.config so
         # transfer() can resolve group → color ARGB
         self._session.config.setdefault("gui", {})["groups"] = list(
@@ -914,31 +899,23 @@ class SessionPrepWindow(QMainWindow):
 
     @Slot(str)
     def _on_transfer_progress(self, message: str):
-        self._transfer_status_label.setText(message)
+        self._transfer_progress.set_message(message)
         self._status_bar.showMessage(message)
 
     @Slot(int, int)
     def _on_transfer_progress_value(self, current: int, total: int):
-        self._transfer_progress_bar.setMaximum(max(total, 1))
-        self._transfer_progress_bar.setValue(current)
+        self._transfer_progress.set_progress(current, total)
 
     @Slot(bool, str, object)
     def _on_daw_transfer_result(self, ok: bool, message: str, results):
         self._daw_transfer_worker = None
         self._update_daw_lifecycle_buttons()
         if ok:
-            self._transfer_status_label.setText(message)
-            self._transfer_progress_bar.setValue(
-                self._transfer_progress_bar.maximum())
+            self._transfer_progress.finish(message)
             self._status_bar.showMessage(message)
         else:
-            self._transfer_status_label.setText(f"Failed: {message}")
+            self._transfer_progress.fail(message)
             self._status_bar.showMessage(f"Transfer failed: {message}")
-        # Auto-hide progress panel after 2 seconds
-        QTimer.singleShot(2000, self._hide_transfer_progress)
-
-    def _hide_transfer_progress(self):
-        self._transfer_progress_panel.setVisible(False)
 
     def _populate_folder_tree(self):
         """Build the folder tree from daw_state['protools']['folders']."""
@@ -1522,7 +1499,18 @@ class SessionPrepWindow(QMainWindow):
             self._build_session_settings_tab(), "Config")
         self._detail_tabs.setTabEnabled(_TAB_SESSION, False)
 
-        self._right_stack.addWidget(self._detail_tabs)  # index 1
+        # Container for tabs + prepare progress panel
+        tabs_container = QWidget()
+        tabs_layout = QVBoxLayout(tabs_container)
+        tabs_layout.setContentsMargins(0, 0, 0, 0)
+        tabs_layout.setSpacing(0)
+        tabs_layout.addWidget(self._detail_tabs, 1)
+
+        # Prepare progress panel (hidden by default)
+        self._prepare_progress = ProgressPanel()
+        tabs_layout.addWidget(self._prepare_progress)
+
+        self._right_stack.addWidget(tabs_container)  # index 1
 
         # Start on the tabs page (summary empty until first analysis)
         self._right_stack.setCurrentIndex(_PAGE_TABS)
@@ -2509,15 +2497,25 @@ class SessionPrepWindow(QMainWindow):
 
         self._prepare_action.setEnabled(False)
         self._status_bar.showMessage("Preparing processed files\u2026")
+        self._prepare_progress.start("Preparing\u2026")
 
         self._prepare_worker = PrepareWorker(
             self._session, processors, output_dir)
-        self._prepare_worker.progress.connect(self._on_worker_progress)
+        self._prepare_worker.progress.connect(self._on_prepare_progress)
         self._prepare_worker.progress_value.connect(
-            self._on_worker_progress_value)
+            self._on_prepare_progress_value)
         self._prepare_worker.finished.connect(self._on_prepare_done)
         self._prepare_worker.error.connect(self._on_prepare_error)
         self._prepare_worker.start()
+
+    @Slot(str)
+    def _on_prepare_progress(self, message: str):
+        self._prepare_progress.set_message(message)
+        self._status_bar.showMessage(message)
+
+    @Slot(int, int)
+    def _on_prepare_progress_value(self, current: int, total: int):
+        self._prepare_progress.set_progress(current, total)
 
     @Slot()
     def _on_prepare_done(self):
@@ -2528,14 +2526,16 @@ class SessionPrepWindow(QMainWindow):
             1 for t in self._session.tracks
             if t.processed_filepath is not None
         )
-        self._status_bar.showMessage(
-            f"Prepare complete: {prepared} file(s) written")
+        msg = f"Prepare complete: {prepared} file(s) written"
+        self._prepare_progress.finish(msg)
+        self._status_bar.showMessage(msg)
         self._populate_setup_table()
 
     @Slot(str)
     def _on_prepare_error(self, message: str):
         self._prepare_worker = None
         self._prepare_action.setEnabled(True)
+        self._prepare_progress.fail(message)
         self._status_bar.showMessage(f"Prepare failed: {message}")
 
     def _update_prepare_button(self):

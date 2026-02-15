@@ -34,19 +34,82 @@ No app-specific dependencies.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QItemSelectionModel
+from PySide6.QtCore import Qt, QItemSelectionModel, QTimer
 from PySide6.QtGui import QBrush, QColor, QPainter
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QLabel,
+    QProgressBar,
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QTableWidget,
+    QVBoxLayout,
+    QWidget,
 )
+
+from .theme import COLORS
 
 
 _SELECTION_COLOR = QColor(42, 109, 181, 160)  # semi-transparent blue
+
+
+class ProgressPanel(QWidget):
+    """Hidden-by-default status label + progress bar panel.
+
+    Used as a bottom strip below content areas for async operations
+    (Transfer, Prepare, etc.).  Callers interact via the public API;
+    internal widgets are never accessed directly.
+    """
+
+    AUTO_HIDE_MS = 2000
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 4, 6, 6)
+        layout.setSpacing(3)
+        self._label = QLabel("")
+        self._label.setStyleSheet(
+            f"color: {COLORS['text']}; font-size: 9pt;")
+        layout.addWidget(self._label)
+        self._bar = QProgressBar()
+        self._bar.setTextVisible(False)
+        self._bar.setFixedHeight(14)
+        layout.addWidget(self._bar)
+        self.setVisible(False)
+
+    def start(self, text: str = "Preparing\u2026"):
+        """Reset bar to 0 and show the panel with *text*."""
+        self._bar.setValue(0)
+        self._label.setText(text)
+        self.setVisible(True)
+
+    def set_message(self, text: str):
+        """Update the status label text."""
+        self._label.setText(text)
+
+    def set_progress(self, current: int, total: int):
+        """Update the progress bar value."""
+        self._bar.setMaximum(max(total, 1))
+        self._bar.setValue(current)
+
+    def finish(self, text: str, auto_hide: bool = True):
+        """Mark operation as complete: fill the bar, show *text*, auto-hide."""
+        self._label.setText(text)
+        self._bar.setValue(self._bar.maximum())
+        if auto_hide:
+            QTimer.singleShot(self.AUTO_HIDE_MS, self._auto_hide)
+
+    def fail(self, text: str, auto_hide: bool = True):
+        """Show failure message and optionally auto-hide."""
+        self._label.setText(f"Failed: {text}")
+        if auto_hide:
+            QTimer.singleShot(self.AUTO_HIDE_MS, self._auto_hide)
+
+    def _auto_hide(self):
+        self.setVisible(False)
 
 
 class _RowTintDelegate(QStyledItemDelegate):
