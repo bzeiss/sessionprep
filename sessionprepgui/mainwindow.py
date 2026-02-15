@@ -1218,10 +1218,10 @@ class SessionPrepWindow(QMainWindow):
         self._detail_tabs.addTab(self._summary_view, "Summary")
 
         # File tab — vertical splitter (report + waveform)
-        file_splitter = QSplitter(Qt.Vertical)
+        self._file_splitter = QSplitter(Qt.Vertical)
 
         self._file_report = self._make_report_browser()
-        file_splitter.addWidget(self._file_report)
+        self._file_splitter.addWidget(self._file_report)
 
         self._waveform = WaveformWidget()
         self._waveform.position_clicked.connect(self._on_waveform_seek)
@@ -1455,13 +1455,13 @@ class SessionPrepWindow(QMainWindow):
         wf_layout.addWidget(toolbar_widget)
         wf_layout.addWidget(self._waveform, 1)
 
-        file_splitter.addWidget(wf_container)
+        self._file_splitter.addWidget(wf_container)
 
-        file_splitter.setStretchFactor(0, 3)
-        file_splitter.setStretchFactor(1, 1)
-        file_splitter.setSizes([500, 180])
+        self._file_splitter.setStretchFactor(0, 3)
+        self._file_splitter.setStretchFactor(1, 1)
+        self._file_splitter.setSizes([500, 180])
 
-        self._detail_tabs.addTab(file_splitter, "File")
+        self._detail_tabs.addTab(self._file_splitter, "File")
         self._detail_tabs.setTabEnabled(_TAB_FILE, False)
 
         # Groups tab — session-local group editor
@@ -1482,20 +1482,23 @@ class SessionPrepWindow(QMainWindow):
 
     @Slot(int)
     def _on_detail_tab_changed(self, index: int):
-        """Hide the waveform widget when leaving the File tab.
+        """Explicitly hide the File tab content when leaving it.
 
-        The waveform uses custom painting that can bleed through other
-        tabs if it remains visible while inactive.
+        QTabWidget with setDocumentMode(True) can fail to fully hide
+        the previous tab's widget (QSplitter + custom-painted waveform),
+        causing visual bleed-through on other tabs.  Work around this by
+        explicitly managing _file_splitter visibility.
         """
-        wf = getattr(self, "_waveform", None)
-        if wf is not None:
-            wf.setVisible(index == _TAB_FILE)
+        fs = getattr(self, "_file_splitter", None)
+        if fs is not None:
+            fs.setVisible(index == _TAB_FILE)
 
     # ── Groups tab (session-local group editor) ─────────────────────────
 
     def _build_groups_tab(self) -> QWidget:
         """Build the session-local Groups editor tab."""
         page = QWidget()
+        page.setAutoFillBackground(True)
         layout = QVBoxLayout(page)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
@@ -1564,6 +1567,7 @@ class SessionPrepWindow(QMainWindow):
     def _build_session_settings_tab(self) -> QWidget:
         """Build a tree+stack config editor for per-session overrides."""
         page = QWidget()
+        page.setAutoFillBackground(True)
         layout = QVBoxLayout(page)
         layout.setContentsMargins(4, 4, 4, 4)
 
@@ -2499,7 +2503,8 @@ class SessionPrepWindow(QMainWindow):
         has_audio = track.audio_data is not None and track.audio_data.size > 0
         if has_audio:
             self._waveform.set_loading(True)
-            self._waveform.setVisible(True)
+            if self._detail_tabs.currentIndex() == _TAB_FILE:
+                self._waveform.setVisible(True)
             self._play_btn.setEnabled(False)
             self._update_time_label(0)
 
@@ -2518,7 +2523,8 @@ class SessionPrepWindow(QMainWindow):
         else:
             self._waveform.set_audio(None, 44100)
             self._update_overlay_menu([])
-            self._waveform.setVisible(False)
+            if self._detail_tabs.currentIndex() == _TAB_FILE:
+                self._waveform.setVisible(False)
             self._play_btn.setEnabled(False)
             self._update_time_label(0)
 
