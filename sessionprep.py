@@ -99,8 +99,8 @@ def parse_arguments():
     # Balance restoration
     parser.add_argument("--anchor", type=str, default=None,
                         help="Anchor track filename (fader stays at 0dB)")
-    parser.add_argument("--normalize_faders", action="store_true",
-                        help="Shift all fader offsets so loudest track = 0dB")
+    parser.add_argument("--fader_headroom_db", type=float, default=8.0,
+                        help="Minimum dB of headroom at top of DAW fader range (default: 8.0, 0=disable)")
 
     parser.add_argument("--force_transient", nargs='+', default=[], action='extend',
         help="Keywords to force TRANSIENT mode. Supports: substring ('kick'), "
@@ -272,7 +272,7 @@ def process_files():
         "force_sustained": args.force_sustained,
         "group": args.group,
         "anchor": args.anchor,
-        "normalize_faders": args.normalize_faders,
+        "fader_headroom_db": args.fader_headroom_db,
         "execute": args.execute,
         "overwrite": args.overwrite,
         "output_folder": args.output_folder,

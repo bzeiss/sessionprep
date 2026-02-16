@@ -329,6 +329,17 @@
   - Note: Related to existing "Track duration mismatches" but different failure mode.
   - Categorization: ATTENTION
 
+- [ ] **Detector performance optimization** (Status: ❌) `NEW`
+  - Profiled with `SP_DEBUG=1` on 27-track session (8.17s total analyze, 302.6 ms/track avg).
+  - Top targets by per-file cost:
+    1. **`audio_classifier`**: 577–1470 ms/file — ~60% of total time, biggest win by far
+    2. **`subsonic`**: 460–1940 ms/file — worst on long stereo files (OH/Room ~1.9s)
+    3. **`stereo_compat`**: 470–600 ms/file on stereo (0 ms on mono — OK)
+  - Minor: `silence` (27–152 ms), `clipping` (24–168 ms), `dc_offset` (25–86 ms)
+  - Negligible: `dual_mono`, `one_sided_silence`, `tail_exceedance` (<60 ms)
+  - Processors are negligible (<1 ms each, plan phase ~65 ms total for 27 tracks)
+  - Ideas: cache shared FFT/STFT data across detectors, downsample before classification, vectorize hot loops
+
 ### Audio Cleanup & Processing
 
 - [ ] **Optional auto-HPF on processing** (Status: ❌)

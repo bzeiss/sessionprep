@@ -35,6 +35,7 @@ class DawProcessor(ABC):
 
     id: str = ""
     name: str = ""
+    fader_ceiling_db: float = 12.0
 
     @classmethod
     def config_params(cls) -> list[ParamSpec]:

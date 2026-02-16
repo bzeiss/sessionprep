@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
+
+try:
+    from sessionprepgui.log import dbg
+except ImportError:
+    def dbg(msg: str) -> None:  # type: ignore[misc]
+        pass
 
 import numpy as np
 
@@ -94,11 +101,15 @@ class Pipeline:
         """Run all track-level detectors for a single track (thread-safe)."""
         self._emit("track.analyze_start", filename=track.filename,
                    index=idx, total=total)
+        t_track_start = time.perf_counter()
         for det in self.track_detectors:
             try:
                 self._emit("detector.start", detector_id=det.id,
                            filename=track.filename)
+                t0 = time.perf_counter()
                 result = det.analyze(track)
+                dt = (time.perf_counter() - t0) * 1000
+                dbg(f"detector {det.id} on {track.filename}: {dt:.1f} ms")
                 track.detector_results[det.id] = result
                 self._emit("detector.complete", detector_id=det.id,
                            filename=track.filename,
@@ -111,6 +122,8 @@ class Pipeline:
                     data={},
                     error=str(e),
                 )
+        dt_track = (time.perf_counter() - t_track_start) * 1000
+        dbg(f"all detectors on {track.filename}: {dt_track:.1f} ms")
         self._emit("track.analyze_complete", filename=track.filename,
                    index=idx, total=total)
 
@@ -127,7 +140,9 @@ class Pipeline:
             if track.status == "OK"
         ]
 
-        workers = min(self.max_workers, len(ok_items)) if ok_items else 1
+        n = len(ok_items)
+        t_phase = time.perf_counter()
+        workers = min(self.max_workers, n) if ok_items else 1
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
                 pool.submit(self._analyze_track, track, idx, total): track
@@ -140,13 +155,20 @@ class Pipeline:
                     self._emit("track.analyze_complete",
                                filename=track.filename,
                                index=0, total=total)
+        dt_phase = (time.perf_counter() - t_phase) * 1000
+        if n:
+            dbg(f"analyze phase (track detectors): {n} tracks in "
+                f"{dt_phase:.1f} ms ({dt_phase / n:.1f} ms/track avg)")
 
         # Session-level detectors
         track_map = {t.filename: t for t in session.tracks}
         for det in self.session_detectors:
             try:
                 self._emit("session_detector.start", detector_id=det.id)
+                t0 = time.perf_counter()
                 results = det.analyze(session)
+                dt = (time.perf_counter() - t0) * 1000
+                dbg(f"session detector {det.id}: {dt:.1f} ms")
                 session.config[f"_session_det_{det.id}"] = results
                 # Distribute per-track results back into each track
                 for result in results:
@@ -178,11 +200,15 @@ class Pipeline:
         """Run all audio processors for a single track (thread-safe)."""
         self._emit("track.plan_start", filename=track.filename,
                    index=idx, total=total)
+        t_track_start = time.perf_counter()
         for proc in self.audio_processors:
             try:
                 self._emit("processor.start", processor_id=proc.id,
                            filename=track.filename)
+                t0 = time.perf_counter()
                 result = proc.process(track)
+                dt = (time.perf_counter() - t0) * 1000
+                dbg(f"processor {proc.id} on {track.filename}: {dt:.1f} ms")
                 track.processor_results[proc.id] = result
                 self._emit("processor.complete", processor_id=proc.id,
                            filename=track.filename)
@@ -194,6 +220,8 @@ class Pipeline:
                     method="None",
                     error=str(e),
                 )
+        dt_track = (time.perf_counter() - t_track_start) * 1000
+        dbg(f"all processors on {track.filename}: {dt_track:.1f} ms")
         self._emit("track.plan_complete", filename=track.filename,
                    index=idx, total=total)
 
@@ -213,7 +241,9 @@ class Pipeline:
             if track.status == "OK"
         ]
 
-        workers = min(self.max_workers, len(ok_items)) if ok_items else 1
+        n = len(ok_items)
+        t_phase = time.perf_counter()
+        workers = min(self.max_workers, n) if ok_items else 1
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
                 pool.submit(self._plan_track, track, idx, total): track
@@ -226,12 +256,22 @@ class Pipeline:
                     self._emit("track.plan_complete",
                                filename=track.filename,
                                index=0, total=total)
+        dt_phase = (time.perf_counter() - t_phase) * 1000
+        if n:
+            dbg(f"plan phase (processors): {n} tracks in "
+                f"{dt_phase:.1f} ms ({dt_phase / n:.1f} ms/track avg)")
 
         # --- Group gain levelling ---
+        t0 = time.perf_counter()
         self._apply_group_levels(session)
+        dt = (time.perf_counter() - t0) * 1000
+        dbg(f"group levelling: {dt:.1f} ms")
 
         # --- Fader offsets ---
+        t0 = time.perf_counter()
         self._compute_fader_offsets(session)
+        dt = (time.perf_counter() - t0) * 1000
+        dbg(f"fader offsets: {dt:.1f} ms")
 
         # Store configured processor instances on the session for render-time access
         session.processors = list(self.audio_processors)
@@ -270,7 +310,11 @@ class Pipeline:
                     m.processor_results[proc.id].gain_db = float(group_gain)
 
     def _compute_fader_offsets(self, session: SessionContext):
-        """Compute fader offsets (inverse of gain) with anchor adjustment."""
+        """Compute fader offsets (inverse of gain) with headroom rebalancing."""
+        ceiling = session.config.get("_fader_ceiling_db", 12.0)
+        headroom = self.config.get("fader_headroom_db", 8.0)
+        max_allowed = ceiling - headroom
+
         for proc in self.audio_processors:
             valid = []
             for track in session.tracks:
@@ -285,12 +329,30 @@ class Pipeline:
                     pr.data["fader_offset"] = -float(pr.gain_db)
                     valid.append(track)
 
-            # Anchor adjustment
-            anchor_name = self.config.get("anchor")
-            normalize_faders = self.config.get("normalize_faders", False)
+            # Headroom rebalancing: shift faders so max ≤ ceiling - headroom
+            rebalance_shift = 0.0
+            if headroom > 0.0 and valid:
+                fader_offsets = [
+                    t.processor_results[proc.id].data.get("fader_offset", 0.0)
+                    for t in valid
+                ]
+                max_fader = max(fader_offsets)
+                if max_fader > max_allowed:
+                    rebalance_shift = max_fader - max_allowed
+                    for track in valid:
+                        pr = track.processor_results.get(proc.id)
+                        if pr:
+                            pr.data["fader_offset"] -= rebalance_shift
+                            pr.data["fader_rebalance_shift"] = rebalance_shift
+            session.config[f"_fader_rebalance_{proc.id}"] = rebalance_shift
+            if rebalance_shift != 0.0:
+                dbg(f"fader rebalance ({proc.id}): shifted {rebalance_shift:+.1f} dB "
+                    f"(ceiling {ceiling}, headroom {headroom})")
 
+            # Anchor-track adjustment (user-selected anchor)
+            anchor_name = self.config.get("anchor")
             anchor_offset = 0.0
-            if anchor_name:
+            if anchor_name and valid:
                 anchor_track = next(
                     (t for t in valid
                      if anchor_name.lower() in t.filename.lower()),
@@ -300,12 +362,6 @@ class Pipeline:
                     pr = anchor_track.processor_results.get(proc.id)
                     if pr:
                         anchor_offset = pr.data.get("fader_offset", 0.0)
-            elif normalize_faders and valid:
-                fader_offsets = [
-                    t.processor_results[proc.id].data.get("fader_offset", 0.0)
-                    for t in valid
-                ]
-                anchor_offset = max(fader_offsets) if fader_offsets else 0.0
 
             # Store anchor offset for GUI-side recomputation
             session.config[f"_anchor_offset_{proc.id}"] = anchor_offset
