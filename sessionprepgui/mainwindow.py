@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+import time
 
 from PySide6.QtCore import Qt, Signal, Slot, QSize, QTimer, QUrl, QMimeData, QPoint
 from PySide6.QtGui import (
@@ -70,6 +71,7 @@ from .theme import (
     apply_dark_theme,
 )
 from .helpers import track_analysis_label, esc, fmt_time
+from .log import dbg
 from .param_widgets import _build_param_page, _read_widget, _set_widget_value
 from .preferences import PreferencesDialog, _argb_to_qcolor
 from .report import render_summary_html, render_track_detail_html
@@ -370,6 +372,7 @@ class _SortableItem(QTableWidgetItem):
 
 class SessionPrepWindow(QMainWindow):
     def __init__(self):
+        t_init = time.perf_counter()
         super().__init__()
         self.setWindowTitle("SessionPrep")
         self.setWindowIcon(_app_icon())
@@ -401,7 +404,11 @@ class SessionPrepWindow(QMainWindow):
         self._active_session_preset: str = "Default"
         self._session_config: dict[str, Any] | None = None
         self._session_widgets: dict[str, list[tuple[str, QWidget]]] = {}
+
+        t0 = time.perf_counter()
         self._detector_help = detector_help_map()
+        dbg(f"detector_help_map: {(time.perf_counter() - t0) * 1000:.1f} ms")
+
         self._daw_check_worker: DawCheckWorker | None = None
         self._pending_after_check = None
         self._daw_fetch_worker: DawFetchWorker | None = None
@@ -409,27 +416,42 @@ class SessionPrepWindow(QMainWindow):
         self._prepare_worker: PrepareWorker | None = None
 
         # Load persistent GUI configuration (four-section structure)
+        t0 = time.perf_counter()
         self._config = load_config()
+        dbg(f"load_config: {(time.perf_counter() - t0) * 1000:.1f} ms")
         self._active_config_preset_name: str = self._config.get(
             "app", {}).get("active_config_preset", "Default")
 
         # Instantiate and configure DAW processors
+        t0 = time.perf_counter()
         self._daw_processors = default_daw_processors()
         self._active_daw_processor = None
         self._configure_daw_processors()
+        dbg(f"daw_processors: {(time.perf_counter() - t0) * 1000:.1f} ms")
 
         # Playback controller
+        t0 = time.perf_counter()
         self._playback = PlaybackController(self)
         self._playback.cursor_updated.connect(self._on_cursor_updated)
         self._playback.playback_finished.connect(self._on_playback_finished)
         self._playback.error.connect(self._on_playback_error)
+        dbg(f"PlaybackController (sounddevice): "
+            f"{(time.perf_counter() - t0) * 1000:.1f} ms")
 
+        t0 = time.perf_counter()
         self._init_ui()
+        dbg(f"_init_ui: {(time.perf_counter() - t0) * 1000:.1f} ms")
+
+        t0 = time.perf_counter()
         apply_dark_theme(self)
+        dbg(f"apply_dark_theme: {(time.perf_counter() - t0) * 1000:.1f} ms")
 
         # Spacebar toggles play/stop
         self._space_shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
         self._space_shortcut.activated.connect(self._on_toggle_play)
+
+        dbg(f"SessionPrepWindow.__init__ total: "
+            f"{(time.perf_counter() - t_init) * 1000:.1f} ms")
 
     # ── Config helpers ───────────────────────────────────────────────────
 
@@ -4394,6 +4416,8 @@ def _app_icon() -> QIcon:
 
 
 def main():
+    t_main = time.perf_counter()
+
     # Apply HiDPI scale factor before QApplication is created.
     # Read directly from JSON to avoid the validate-and-overwrite path
     # in load_config() which could reset the file to defaults.
@@ -4408,11 +4432,20 @@ def main():
     except Exception:
         pass
 
+    t0 = time.perf_counter()
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setWindowIcon(_app_icon())
+    dbg(f"QApplication created: {(time.perf_counter() - t0) * 1000:.1f} ms")
 
+    t0 = time.perf_counter()
     window = SessionPrepWindow()
+    dbg(f"SessionPrepWindow created: {(time.perf_counter() - t0) * 1000:.1f} ms")
+
+    t0 = time.perf_counter()
     window.show()
+    dbg(f"window.show: {(time.perf_counter() - t0) * 1000:.1f} ms")
+
+    dbg(f"main() startup total: {(time.perf_counter() - t_main) * 1000:.1f} ms")
 
     sys.exit(app.exec())
