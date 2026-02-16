@@ -236,6 +236,18 @@ class BimodalNormalizeProcessor(AudioProcessor):
 
         html = summary + table
 
+        # Fader rebalance note
+        rebalance = d.get("fader_rebalance_shift", 0.0)
+        if rebalance != 0.0:
+            fader_off = d.get("fader_offset", 0.0)
+            html += (
+                f'<div style="margin-left:8px; margin-top:6px;'
+                f' color:#cc8844; font-size:9pt;">'
+                f'Fader rebalanced: {rebalance:+.1f} dB shift'
+                f' &rarr; fader offset {fader_off:+.1f} dB'
+                f'</div>'
+            )
+
         # Verbose: append classification analysis metrics
         if verbose and track is not None:
             cr = track.detector_results.get("audio_classifier")

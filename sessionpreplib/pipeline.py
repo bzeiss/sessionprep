@@ -310,7 +310,11 @@ class Pipeline:
                     m.processor_results[proc.id].gain_db = float(group_gain)
 
     def _compute_fader_offsets(self, session: SessionContext):
-        """Compute fader offsets (inverse of gain) with anchor adjustment."""
+        """Compute fader offsets (inverse of gain) with headroom rebalancing."""
+        ceiling = session.config.get("_fader_ceiling_db", 12.0)
+        headroom = self.config.get("fader_headroom_db", 8.0)
+        max_allowed = ceiling - headroom
+
         for proc in self.audio_processors:
             valid = []
             for track in session.tracks:
@@ -325,12 +329,30 @@ class Pipeline:
                     pr.data["fader_offset"] = -float(pr.gain_db)
                     valid.append(track)
 
-            # Anchor adjustment
-            anchor_name = self.config.get("anchor")
-            normalize_faders = self.config.get("normalize_faders", False)
+            # Headroom rebalancing: shift faders so max ≤ ceiling - headroom
+            rebalance_shift = 0.0
+            if headroom > 0.0 and valid:
+                fader_offsets = [
+                    t.processor_results[proc.id].data.get("fader_offset", 0.0)
+                    for t in valid
+                ]
+                max_fader = max(fader_offsets)
+                if max_fader > max_allowed:
+                    rebalance_shift = max_fader - max_allowed
+                    for track in valid:
+                        pr = track.processor_results.get(proc.id)
+                        if pr:
+                            pr.data["fader_offset"] -= rebalance_shift
+                            pr.data["fader_rebalance_shift"] = rebalance_shift
+            session.config[f"_fader_rebalance_{proc.id}"] = rebalance_shift
+            if rebalance_shift != 0.0:
+                dbg(f"fader rebalance ({proc.id}): shifted {rebalance_shift:+.1f} dB "
+                    f"(ceiling {ceiling}, headroom {headroom})")
 
+            # Anchor-track adjustment (user-selected anchor)
+            anchor_name = self.config.get("anchor")
             anchor_offset = 0.0
-            if anchor_name:
+            if anchor_name and valid:
                 anchor_track = next(
                     (t for t in valid
                      if anchor_name.lower() in t.filename.lower()),
@@ -340,12 +362,6 @@ class Pipeline:
                     pr = anchor_track.processor_results.get(proc.id)
                     if pr:
                         anchor_offset = pr.data.get("fader_offset", 0.0)
-            elif normalize_faders and valid:
-                fader_offsets = [
-                    t.processor_results[proc.id].data.get("fader_offset", 0.0)
-                    for t in valid
-                ]
-                anchor_offset = max(fader_offsets) if fader_offsets else 0.0
 
             # Store anchor offset for GUI-side recomputation
             session.config[f"_anchor_offset_{proc.id}"] = anchor_offset

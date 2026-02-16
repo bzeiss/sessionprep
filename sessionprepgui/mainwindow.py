@@ -2523,6 +2523,8 @@ class SessionPrepWindow(QMainWindow):
 
         config = self._flat_config()
         config["_source_dir"] = self._source_dir
+        if self._active_daw_processor:
+            config["_fader_ceiling_db"] = self._active_daw_processor.fader_ceiling_db
 
         self._progress_bar.setRange(0, 0)  # indeterminate until first value
 
@@ -3816,9 +3818,8 @@ class SessionPrepWindow(QMainWindow):
                 for m in members:
                     m.processor_results[pid].gain_db = float(group_gain)
 
-            # 3. Recompute fader offsets
-            anchor_offset = self._session.config.get(
-                f"_anchor_offset_{pid}", 0.0)
+            # 3. Recompute fader offsets with headroom rebalancing
+            valid = []
             for track in self._session.tracks:
                 if track.status != "OK":
                     continue
@@ -3828,7 +3829,37 @@ class SessionPrepWindow(QMainWindow):
                 if pr.classification == "Silent":
                     pr.data["fader_offset"] = 0.0
                 else:
-                    pr.data["fader_offset"] = -float(pr.gain_db) - anchor_offset
+                    pr.data["fader_offset"] = -float(pr.gain_db)
+                    valid.append(track)
+
+            # Headroom rebalancing
+            ceiling = self._session.config.get("_fader_ceiling_db", 12.0)
+            headroom = self._session.config.get("fader_headroom_db", 8.0)
+            max_allowed = ceiling - headroom
+            rebalance_shift = 0.0
+            if headroom > 0.0 and valid:
+                fader_offsets = [
+                    t.processor_results[pid].data.get("fader_offset", 0.0)
+                    for t in valid
+                ]
+                max_fader = max(fader_offsets)
+                if max_fader > max_allowed:
+                    rebalance_shift = max_fader - max_allowed
+                    for track in valid:
+                        pr = track.processor_results.get(pid)
+                        if pr:
+                            pr.data["fader_offset"] -= rebalance_shift
+                            pr.data["fader_rebalance_shift"] = rebalance_shift
+            self._session.config[f"_fader_rebalance_{pid}"] = rebalance_shift
+
+            # Anchor-track adjustment
+            anchor_offset = self._session.config.get(
+                f"_anchor_offset_{pid}", 0.0)
+            if anchor_offset != 0.0:
+                for track in valid:
+                    pr = track.processor_results.get(pid)
+                    if pr:
+                        pr.data["fader_offset"] = pr.data.get("fader_offset", 0.0) - anchor_offset
 
         # 4. Update UI
         self._track_table.setSortingEnabled(False)

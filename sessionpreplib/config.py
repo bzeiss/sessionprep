@@ -83,7 +83,7 @@ def default_config() -> dict[str, Any]:
         "force_sustained": [],
         "group": [],
         "anchor": None,
-        "normalize_faders": False,
+        "fader_headroom_db": 8.0,
         "execute": False,
         "overwrite": False,
         "output_folder": "processed",
@@ -224,9 +224,15 @@ ANALYSIS_PARAMS: list[ParamSpec] = [
     ),
     # -- Global processing defaults ------------------------------------------
     ParamSpec(
-        key="normalize_faders", type=bool, default=False,
-        label="Normalize fader offsets",
-        description="Shift fader offsets so the smallest is 0 dB.",
+        key="fader_headroom_db", type=(int, float), default=8.0,
+        min=0.0,
+        label="Fader headroom (dB)",
+        description=(
+            "Minimum dB of headroom to reserve at the top of the DAW fader "
+            "range for mixing moves. Fader offsets are shifted so the highest "
+            "fader stays this many dB below the DAW's fader ceiling. "
+            "Set to 0 to disable rebalancing."
+        ),
     ),
 ]
 
