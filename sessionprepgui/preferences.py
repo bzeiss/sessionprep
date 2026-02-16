@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any
 
 from PySide6.QtCore import Qt
@@ -67,7 +68,7 @@ class PreferencesDialog(QDialog):
     def __init__(self, config: dict[str, Any], parent=None):
         super().__init__(parent)
         self.setWindowTitle("Preferences")
-        self.resize(900, 550)
+        self.resize(1150, 550)
         self._config = copy.deepcopy(config)
         self._widgets: dict[str, list[tuple[str, QWidget]]] = {}
         self._general_widgets: list[tuple[str, QWidget]] = []
@@ -638,6 +639,14 @@ class PreferencesDialog(QDialog):
         self._delete_preset_btn.clicked.connect(self._on_group_preset_delete)
         preset_row.addWidget(self._delete_preset_btn)
 
+        preset_row.addStretch()
+
+        reset_default_btn = QPushButton("Reset to Default")
+        reset_default_btn.setToolTip(
+            "Replace the current preset's groups with the built-in defaults")
+        reset_default_btn.clicked.connect(self._on_group_preset_reset_default)
+        preset_row.addWidget(reset_default_btn)
+
         layout.addLayout(preset_row)
 
         # ── Groups table (reusable widget) ───────────────────────────
@@ -796,6 +805,20 @@ class PreferencesDialog(QDialog):
         self._prev_group_preset = "Default"
         self._load_groups_for_preset("Default")
         self._update_group_preset_buttons()
+
+    def _on_group_preset_reset_default(self):
+        """Replace the current preset's groups with the built-in defaults."""
+        current = self._group_preset_combo.currentText()
+        reply = QMessageBox.question(
+            self, "Reset to Default",
+            f"Replace all groups in \u201c{current}\u201d with the "
+            f"built-in defaults?\n\nThis cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+        from .settings import _DEFAULT_GROUPS
+        self._group_presets_data[current] = copy.deepcopy(_DEFAULT_GROUPS)
+        self._load_groups_for_preset(current)
 
     # ── Config preset helpers ──────────────────────────────────────
 
@@ -1074,6 +1097,23 @@ class PreferencesDialog(QDialog):
 
         # ── Group presets ─────────────────────────────────────────────
         self._save_current_preset()
+
+        # Validate regex patterns in all group presets
+        for preset_name, groups in self._group_presets_data.items():
+            for g in groups:
+                if g.get("match_method") == "regex" and g.get("match_pattern", ""):
+                    try:
+                        re.compile(g["match_pattern"])
+                    except re.error as e:
+                        QMessageBox.warning(
+                            self, "Invalid Regex Pattern",
+                            f"Group \u201c{g['name']}\u201d in preset "
+                            f"\u201c{preset_name}\u201d has an invalid "
+                            f"regular expression:\n\n"
+                            f"{g['match_pattern']}\n\n{e}",
+                        )
+                        return
+
         self._config["group_presets"] = copy.deepcopy(
             self._group_presets_data)
 

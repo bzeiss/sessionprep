@@ -7,6 +7,7 @@ and the Session Settings tab.
 from __future__ import annotations
 
 import copy
+import re
 from decimal import Decimal
 from typing import Any, Callable
 
@@ -339,9 +340,10 @@ class GroupsTableWidget(QWidget):
         layout.setSpacing(6)
 
         self._table = QTableWidget()
-        self._table.setColumnCount(4)
+        self._table.setColumnCount(6)
         self._table.setHorizontalHeaderLabels(
-            ["Name", "Color", "Gain-Linked", "DAW Target"])
+            ["Name", "Color", "Gain-Linked", "DAW Target",
+             "Match", "Match Pattern"])
         vh = self._table.verticalHeader()
         vh.setSectionsMovable(True)
         vh.sectionMoved.connect(self._on_row_moved)
@@ -356,8 +358,12 @@ class GroupsTableWidget(QWidget):
         gh.resizeSection(2, 80)
         gh.setSectionResizeMode(3, QHeaderView.Interactive)
         gh.resizeSection(3, 140)
+        gh.setSectionResizeMode(4, QHeaderView.Fixed)
+        gh.resizeSection(4, 90)
+        gh.setSectionResizeMode(5, QHeaderView.Interactive)
+        gh.resizeSection(5, 200)
 
-        self._table.cellChanged.connect(self._on_name_changed)
+        self._table.cellChanged.connect(self._on_cell_changed)
 
         layout.addWidget(self._table, 1)
 
@@ -392,7 +398,9 @@ class GroupsTableWidget(QWidget):
         for row, g in enumerate(groups):
             self._set_row(
                 row, g.get("name", ""), g.get("color", ""),
-                g.get("gain_linked", False), g.get("daw_target", ""))
+                g.get("gain_linked", False), g.get("daw_target", ""),
+                g.get("match_method", "contains"),
+                g.get("match_pattern", ""))
         self._table.blockSignals(False)
 
     def get_groups(self) -> list[dict]:
@@ -407,7 +415,9 @@ class GroupsTableWidget(QWidget):
     # ── Row helpers ───────────────────────────────────────────────────
 
     def _set_row(self, row: int, name: str, color: str,
-                 gain_linked: bool, daw_target: str = ""):
+                 gain_linked: bool, daw_target: str = "",
+                 match_method: str = "contains",
+                 match_pattern: str = ""):
         """Populate one row in the groups table."""
         name_item = QTableWidgetItem(name)
         self._table.setItem(row, 0, name_item)
@@ -439,6 +449,22 @@ class GroupsTableWidget(QWidget):
         daw_item = QTableWidgetItem(daw_target)
         self._table.setItem(row, 3, daw_item)
 
+        # Match method dropdown
+        match_combo = QComboBox()
+        match_combo.addItems(["contains", "regex"])
+        mi = match_combo.findText(match_method)
+        if mi >= 0:
+            match_combo.setCurrentIndex(mi)
+        match_combo.setProperty("_row", row)
+        match_combo.currentTextChanged.connect(
+            lambda _text, r=row: self._validate_pattern_cell(r))
+        self._table.setCellWidget(row, 4, match_combo)
+
+        # Match pattern text
+        pattern_item = QTableWidgetItem(match_pattern)
+        self._table.setItem(row, 5, pattern_item)
+        self._validate_pattern_cell(row)
+
     def _read_groups(self) -> list[dict]:
         """Read all rows (logical order) into a list of group dicts."""
         groups: list[dict] = []
@@ -459,11 +485,17 @@ class GroupsTableWidget(QWidget):
                     gain_linked = chk.isChecked()
             daw_item = self._table.item(row, 3)
             daw_target = daw_item.text().strip() if daw_item else ""
+            match_combo = self._table.cellWidget(row, 4)
+            match_method = match_combo.currentText() if match_combo else "contains"
+            pattern_item = self._table.item(row, 5)
+            match_pattern = pattern_item.text().strip() if pattern_item else ""
             groups.append({
                 "name": name,
                 "color": color,
                 "gain_linked": gain_linked,
                 "daw_target": daw_target,
+                "match_method": match_method,
+                "match_pattern": match_pattern,
             })
         return groups
 
@@ -490,8 +522,13 @@ class GroupsTableWidget(QWidget):
                     gl = chk.isChecked()
             daw_item = self._table.item(logical, 3)
             dt = daw_item.text().strip() if daw_item else ""
+            mc = self._table.cellWidget(logical, 4)
+            mm = mc.currentText() if mc else "contains"
+            pi = self._table.item(logical, 5)
+            mp = pi.text().strip() if pi else ""
             groups.append({"name": name, "color": color,
-                           "gain_linked": gl, "daw_target": dt})
+                           "gain_linked": gl, "daw_target": dt,
+                           "match_method": mm, "match_pattern": mp})
         return groups
 
     # ── Name dedup ────────────────────────────────────────────────────
@@ -521,20 +558,47 @@ class GroupsTableWidget(QWidget):
             n += 1
         return f"{base} {n}"
 
-    def _on_name_changed(self, row: int, col: int):
-        """Revert a group name edit if it creates a duplicate."""
-        if col != 0:
-            return
-        item = self._table.item(row, 0)
-        if not item:
-            return
-        name = item.text().strip()
-        others = self._group_names_in_table(self._table, exclude_row=row)
-        if name in others:
-            self._table.blockSignals(True)
-            item.setText(self._unique_name(name))
-            self._table.blockSignals(False)
+    def _on_cell_changed(self, row: int, col: int):
+        """Handle cell edits: name dedup (col 0), pattern validation (col 5)."""
+        if col == 0:
+            item = self._table.item(row, 0)
+            if not item:
+                return
+            name = item.text().strip()
+            others = self._group_names_in_table(self._table, exclude_row=row)
+            if name in others:
+                self._table.blockSignals(True)
+                item.setText(self._unique_name(name))
+                self._table.blockSignals(False)
+        elif col == 5:
+            self._validate_pattern_cell(row)
         self.groups_changed.emit()
+
+    def _validate_pattern_cell(self, row: int):
+        """Validate the match pattern cell and set visual indicator.
+
+        When match_method is "regex", tries to compile the pattern.
+        Sets the cell foreground to green (valid / empty) or red (invalid).
+        For "contains" mode, always shows green.
+        """
+        match_combo = self._table.cellWidget(row, 4)
+        pattern_item = self._table.item(row, 5)
+        if not pattern_item:
+            return
+        method = match_combo.currentText() if match_combo else "contains"
+        pattern = pattern_item.text().strip()
+
+        if method == "regex" and pattern:
+            try:
+                re.compile(pattern)
+                pattern_item.setForeground(QColor("#4ec94e"))  # green
+                pattern_item.setToolTip("")
+            except re.error as e:
+                pattern_item.setForeground(QColor("#e05050"))  # red
+                pattern_item.setToolTip(f"Invalid regex: {e}")
+        else:
+            pattern_item.setForeground(QColor("#cccccc"))  # default
+            pattern_item.setToolTip("")
 
     # ── Row operations ────────────────────────────────────────────────
 
@@ -568,7 +632,9 @@ class GroupsTableWidget(QWidget):
         for row, entry in enumerate(ordered):
             self._set_row(
                 row, entry["name"], entry["color"],
-                entry["gain_linked"], entry.get("daw_target", ""))
+                entry["gain_linked"], entry.get("daw_target", ""),
+                entry.get("match_method", "contains"),
+                entry.get("match_pattern", ""))
         self._table.blockSignals(False)
         vh.blockSignals(False)
         self.groups_changed.emit()
@@ -582,6 +648,8 @@ class GroupsTableWidget(QWidget):
         for row, entry in enumerate(groups):
             self._set_row(
                 row, entry["name"], entry["color"],
-                entry["gain_linked"], entry.get("daw_target", ""))
+                entry["gain_linked"], entry.get("daw_target", ""),
+                entry.get("match_method", "contains"),
+                entry.get("match_pattern", ""))
         self._table.blockSignals(False)
         self.groups_changed.emit()

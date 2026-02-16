@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import sys
 
 from PySide6.QtCore import Qt, Signal, Slot, QSize, QTimer, QUrl, QMimeData, QPoint
@@ -562,7 +563,12 @@ class SessionPrepWindow(QMainWindow):
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._analysis_toolbar.addWidget(spacer)
 
-        # ── Right: Prepare button ──────────────────────────────────────
+        # ── Right: Auto-Group + Prepare buttons ──────────────────────
+        self._auto_group_action = QAction("Auto-Group", self)
+        self._auto_group_action.setEnabled(False)
+        self._auto_group_action.triggered.connect(self._on_auto_group)
+        self._analysis_toolbar.addAction(self._auto_group_action)
+
         self._prepare_action = QAction("Prepare", self)
         self._prepare_action.setEnabled(False)
         self._prepare_action.triggered.connect(self._on_prepare)
@@ -1600,9 +1606,10 @@ class SessionPrepWindow(QMainWindow):
         layout.addWidget(desc)
 
         self._groups_tab_table = QTableWidget()
-        self._groups_tab_table.setColumnCount(4)
+        self._groups_tab_table.setColumnCount(6)
         self._groups_tab_table.setHorizontalHeaderLabels(
-            ["Name", "Color", "Gain-Linked", "DAW Target"])
+            ["Name", "Color", "Gain-Linked", "DAW Target",
+             "Match", "Match Pattern"])
         vh = self._groups_tab_table.verticalHeader()
         vh.setSectionsMovable(True)
         vh.sectionMoved.connect(self._on_groups_tab_row_moved)
@@ -1617,6 +1624,10 @@ class SessionPrepWindow(QMainWindow):
         gh.resizeSection(2, 80)
         gh.setSectionResizeMode(3, QHeaderView.Interactive)
         gh.resizeSection(3, 140)
+        gh.setSectionResizeMode(4, QHeaderView.Fixed)
+        gh.resizeSection(4, 90)
+        gh.setSectionResizeMode(5, QHeaderView.Interactive)
+        gh.resizeSection(5, 200)
 
         self._groups_tab_table.cellChanged.connect(
             self._on_groups_tab_name_changed)
@@ -1950,7 +1961,9 @@ class SessionPrepWindow(QMainWindow):
         return QIcon(pm)
 
     def _set_groups_tab_row(self, row: int, name: str, color: str,
-                            gain_linked: bool, daw_target: str = ""):
+                            gain_linked: bool, daw_target: str = "",
+                            match_method: str = "contains",
+                            match_pattern: str = ""):
         """Populate one row in the session-local groups table."""
         name_item = QTableWidgetItem(name)
         self._groups_tab_table.setItem(row, 0, name_item)
@@ -1981,6 +1994,22 @@ class SessionPrepWindow(QMainWindow):
         daw_item = QTableWidgetItem(daw_target)
         self._groups_tab_table.setItem(row, 3, daw_item)
 
+        # Match method dropdown
+        match_combo = QComboBox()
+        match_combo.addItems(["contains", "regex"])
+        mi = match_combo.findText(match_method)
+        if mi >= 0:
+            match_combo.setCurrentIndex(mi)
+        match_combo.setProperty("_row", row)
+        match_combo.currentTextChanged.connect(
+            lambda _text, r=row: self._validate_groups_tab_pattern(r))
+        self._groups_tab_table.setCellWidget(row, 4, match_combo)
+
+        # Match pattern text
+        pattern_item = QTableWidgetItem(match_pattern)
+        self._groups_tab_table.setItem(row, 5, pattern_item)
+        self._validate_groups_tab_pattern(row)
+
     def _populate_groups_tab(self):
         """Populate the groups tab table from self._session_groups."""
         self._groups_tab_table.blockSignals(True)
@@ -1989,7 +2018,9 @@ class SessionPrepWindow(QMainWindow):
         for row, g in enumerate(self._session_groups):
             self._set_groups_tab_row(
                 row, g["name"], g.get("color", ""),
-                g.get("gain_linked", False), g.get("daw_target", "")
+                g.get("gain_linked", False), g.get("daw_target", ""),
+                g.get("match_method", "contains"),
+                g.get("match_pattern", ""),
             )
         self._groups_tab_table.blockSignals(False)
 
@@ -2013,11 +2044,17 @@ class SessionPrepWindow(QMainWindow):
                     gain_linked = chk.isChecked()
             daw_item = self._groups_tab_table.item(row, 3)
             daw_target = daw_item.text().strip() if daw_item else ""
+            match_combo = self._groups_tab_table.cellWidget(row, 4)
+            match_method = match_combo.currentText() if match_combo else "contains"
+            pattern_item = self._groups_tab_table.item(row, 5)
+            match_pattern = pattern_item.text().strip() if pattern_item else ""
             groups.append({
                 "name": name,
                 "color": color,
                 "gain_linked": gain_linked,
                 "daw_target": daw_target,
+                "match_method": match_method,
+                "match_pattern": match_pattern,
             })
         return groups
 
@@ -2047,9 +2084,14 @@ class SessionPrepWindow(QMainWindow):
         return f"{base} {n}"
 
     def _on_groups_tab_name_changed(self, row: int, col: int):
-        """Handle cell edits in the groups tab (name or DAW target)."""
+        """Handle cell edits in the groups tab (name, DAW target, pattern)."""
         if col == 3:
             # DAW Target changed — sync groups so auto-assign picks it up
+            self._sync_session_groups()
+            return
+        if col == 5:
+            # Match pattern changed — validate and sync
+            self._validate_groups_tab_pattern(row)
             self._sync_session_groups()
             return
         if col != 0:
@@ -2065,6 +2107,32 @@ class SessionPrepWindow(QMainWindow):
             item.setText(self._unique_session_group_name(name))
             self._groups_tab_table.blockSignals(False)
         self._sync_session_groups()
+
+    def _validate_groups_tab_pattern(self, row: int):
+        """Validate the match pattern cell and set visual indicator.
+
+        When match_method is "regex", tries to compile the pattern.
+        Sets the cell foreground to green (valid / empty) or red (invalid).
+        For "contains" mode, always shows default color.
+        """
+        match_combo = self._groups_tab_table.cellWidget(row, 4)
+        pattern_item = self._groups_tab_table.item(row, 5)
+        if not pattern_item:
+            return
+        method = match_combo.currentText() if match_combo else "contains"
+        pattern = pattern_item.text().strip()
+
+        if method == "regex" and pattern:
+            try:
+                re.compile(pattern)
+                pattern_item.setForeground(QColor("#4ec94e"))  # green
+                pattern_item.setToolTip("")
+            except re.error as e:
+                pattern_item.setForeground(QColor("#e05050"))  # red
+                pattern_item.setToolTip(f"Invalid regex: {e}")
+        else:
+            pattern_item.setForeground(QColor("#cccccc"))  # default
+            pattern_item.setToolTip("")
 
     def _sync_session_groups(self):
         """Read the groups tab table into _session_groups and refresh combos."""
@@ -2114,8 +2182,13 @@ class SessionPrepWindow(QMainWindow):
                     gl = chk.isChecked()
             daw_item = table.item(log_idx, 3)
             dt = daw_item.text().strip() if daw_item else ""
+            mc = table.cellWidget(log_idx, 4)
+            mm = mc.currentText() if mc else "contains"
+            pi = table.item(log_idx, 5)
+            mp = pi.text().strip() if pi else ""
             ordered.append({"name": name, "color": color,
-                            "gain_linked": gl, "daw_target": dt})
+                            "gain_linked": gl, "daw_target": dt,
+                            "match_method": mm, "match_pattern": mp})
         # Reset visual mapping, repopulate
         vh.blockSignals(True)
         table.blockSignals(True)
@@ -2126,7 +2199,9 @@ class SessionPrepWindow(QMainWindow):
         for row, entry in enumerate(ordered):
             self._set_groups_tab_row(
                 row, entry["name"], entry["color"],
-                entry["gain_linked"], entry.get("daw_target", ""))
+                entry["gain_linked"], entry.get("daw_target", ""),
+                entry.get("match_method", "contains"),
+                entry.get("match_pattern", ""))
         table.blockSignals(False)
         vh.blockSignals(False)
         self._session_groups = ordered
@@ -2162,6 +2237,103 @@ class SessionPrepWindow(QMainWindow):
         self._populate_groups_tab()
         self._refresh_group_combos()
         self._populate_setup_table()
+
+    # ── Auto-Group ────────────────────────────────────────────────────
+
+    @Slot()
+    def _on_auto_group(self):
+        """Auto-assign groups to all tracks based on filename matching rules."""
+        if not self._session:
+            return
+        ok_tracks = [t for t in self._session.tracks if t.status == "OK"]
+        if not ok_tracks:
+            return
+
+        reply = QMessageBox.question(
+            self, "Auto-Group",
+            f"Auto-Group will reassign all {len(ok_tracks)} tracks "
+            f"based on matching rules.\n\nContinue?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if reply != QMessageBox.Yes:
+            return
+
+        assigned = 0
+        glm = self._gain_linked_map()
+        gcm = self._group_color_map()
+        grm = self._group_rank_map()
+
+        self._track_table.setSortingEnabled(False)
+
+        for track in ok_tracks:
+            stem = os.path.splitext(track.filename)[0].lower()
+            matched_group: str | None = None
+            best_len = 0
+
+            for g in self._session_groups:
+                pattern = g.get("match_pattern", "").strip()
+                if not pattern:
+                    continue
+                method = g.get("match_method", "contains")
+
+                if method == "regex":
+                    try:
+                        m = re.search(pattern, stem, re.IGNORECASE)
+                        if m:
+                            span = m.end() - m.start()
+                            if span > best_len:
+                                best_len = span
+                                matched_group = g["name"]
+                    except re.error:
+                        continue
+                else:
+                    # contains: comma-separated tokens — pick longest hit
+                    tokens = [t.strip().lower() for t in pattern.split(",")
+                              if t.strip()]
+                    for tok in tokens:
+                        if tok in stem and len(tok) > best_len:
+                            best_len = len(tok)
+                            matched_group = g["name"]
+
+            # Apply the match (or clear to None)
+            track.group = matched_group
+            if matched_group:
+                assigned += 1
+
+            # Update table combo
+            row = self._find_table_row(track.filename)
+            if row >= 0:
+                w = self._track_table.cellWidget(row, 6)
+                if isinstance(w, BatchComboBox):
+                    w.blockSignals(True)
+                    if matched_group:
+                        for ci in range(w.count()):
+                            if w.itemData(ci, Qt.UserRole) == matched_group:
+                                w.setCurrentIndex(ci)
+                                break
+                    else:
+                        w.setCurrentIndex(0)  # (None)
+                    w.blockSignals(False)
+
+                # Update sort item
+                display = (self._group_display_name(matched_group, glm)
+                           if matched_group else self._GROUP_NONE_LABEL)
+                rank = (grm.get(matched_group, len(grm))
+                        if matched_group else len(grm))
+                sort_item = self._track_table.item(row, 6)
+                if sort_item:
+                    sort_item.setText(display)
+                    sort_item._sort_key = rank
+
+                # Update row color
+                self._apply_row_group_color(row, matched_group, gcm)
+
+        self._track_table.setSortingEnabled(True)
+        self._auto_fit_group_column()
+        self._apply_linked_group_levels()
+        self._populate_setup_table()
+
+        self._status_bar.showMessage(
+            f"Auto-Group: assigned {assigned} of {len(ok_tracks)} tracks")
 
     # ── Group preset switching (Analysis toolbar) ─────────────────────
 
@@ -2608,10 +2780,12 @@ class SessionPrepWindow(QMainWindow):
         if not self._session:
             self._prepare_action.setEnabled(False)
             self._prepare_action.setText("Prepare")
+            self._auto_group_action.setEnabled(False)
             return
 
         state = self._session.prepare_state
         self._prepare_action.setEnabled(True)
+        self._auto_group_action.setEnabled(True)
         if state == "ready":
             self._prepare_action.setText("Prepare \u2713")
         elif state == "stale":

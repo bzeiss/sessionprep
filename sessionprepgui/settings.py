@@ -71,31 +71,31 @@ _APP_DEFAULTS: dict[str, Any] = {
 
 _DEFAULT_GROUPS: list[dict[str, Any]] = [
     # Drums
-    {"name": "Kick",    "color": "Guardsman Red",        "gain_linked": True,  "daw_target": ""},
-    {"name": "Snare",   "color": "Dodger Blue Light",    "gain_linked": True,  "daw_target": ""},
-    {"name": "Toms",    "color": "Tia Maria",            "gain_linked": True,  "daw_target": ""},
-    {"name": "HH",      "color": "La Rioja",             "gain_linked": False, "daw_target": ""},
-    {"name": "OH",      "color": "Java",                 "gain_linked": True,  "daw_target": ""},
-    {"name": "Room",    "color": "Purple",               "gain_linked": False, "daw_target": ""},
-    {"name": "Perc",    "color": "Corn Harvest",         "gain_linked": False, "daw_target": ""},
-    {"name": "Loops",   "color": "Apricot",              "gain_linked": False, "daw_target": ""},
+    {"name": "Kick",    "color": "Guardsman Red",        "gain_linked": True,  "daw_target": "Kick", "match_method": "contains", "match_pattern": "kick,kik,kck,bd"},
+    {"name": "Snare",   "color": "Dodger Blue Light",    "gain_linked": True,  "daw_target": "Snare", "match_method": "contains", "match_pattern": "snare,snr"},
+    {"name": "Toms",    "color": "Tia Maria",            "gain_linked": True,  "daw_target": "Toms", "match_method": "contains", "match_pattern": "tom,floor tom"},
+    {"name": "OH",      "color": "Java",                 "gain_linked": True,  "daw_target": "OH", "match_method": "contains", "match_pattern": "oh,overhead,hh,hihat,hi-hat,hi hat,cymbal"},
+    {"name": "Room",    "color": "Purple",               "gain_linked": False, "daw_target": "Room", "match_method": "contains", "match_pattern": "room,rm,ambient"},
+    {"name": "Perc",    "color": "Corn Harvest",         "gain_linked": False, "daw_target": "Perc", "match_method": "contains", "match_pattern": "perc,shaker,tamb,conga,bongo"},
+    {"name": "Loops",   "color": "Cafe Royale Light",              "gain_linked": False, "daw_target": "Loops", "match_method": "contains", "match_pattern": "loop"},
     # Bass
-    {"name": "Bass",    "color": "Christi",              "gain_linked": False, "daw_target": ""},
+    {"name": "Bass",    "color": "Christi",              "gain_linked": False, "daw_target": "Bass", "match_method": "contains", "match_pattern": "bass,bas"},
     # Guitars
-    {"name": "E.Gtr",   "color": "Pizza",               "gain_linked": False, "daw_target": ""},
-    {"name": "A.Gtr",   "color": "Lima Dark",            "gain_linked": False, "daw_target": ""},
+    {"name": "E.Gtr",   "color": "Pizza",               "gain_linked": False, "daw_target": "E.Gtr", "match_method": "contains", "match_pattern": "e.gtr,egtr,elecgtr,elec gtr,electric guitar,dist gtr"},
+    {"name": "A.Gtr",   "color": "Lima Dark",            "gain_linked": False, "daw_target": "A.Gtr", "match_method": "contains", "match_pattern": "a.gtr,agtr,acoustic gtr,ac gtr,acoustic guitar,nylon"},
     # Keys & Synths
-    {"name": "Keys",    "color": "Malachite",            "gain_linked": False, "daw_target": ""},
-    {"name": "Synths",  "color": "Electric Violet Light", "gain_linked": False, "daw_target": ""},
+    {"name": "Keys",    "color": "Malachite",            "gain_linked": False, "daw_target": "Keys", "match_method": "contains", "match_pattern": "keys,piano,pno,organ,rhodes,wurli"},
+    {"name": "Synths",  "color": "Electric Violet Light", "gain_linked": False, "daw_target": "Synths", "match_method": "contains", "match_pattern": "synth,moog"},
+    {"name": "Leads",   "color": "Electric Violet Dark",       "gain_linked": False, "daw_target": "Leads", "match_method": "contains", "match_pattern": "lead"},
     # Strings & Pads
-    {"name": "Strings", "color": "Eastern Blue",         "gain_linked": False, "daw_target": ""},
-    {"name": "Pads",    "color": "Flirt",                "gain_linked": False, "daw_target": ""},
-    {"name": "Brass",   "color": "Milano Red",           "gain_linked": False, "daw_target": ""},
+    {"name": "Strings", "color": "Eastern Blue",         "gain_linked": False, "daw_target": "Strings", "match_method": "contains", "match_pattern": "string,violin,viola,cello,fiddle"},
+    {"name": "Pads",    "color": "Flirt",                "gain_linked": False, "daw_target": "Pads", "match_method": "contains", "match_pattern": "pad"},
+    {"name": "Brass",   "color": "Milano Red",           "gain_linked": False, "daw_target": "Brass", "match_method": "contains", "match_pattern": "brass,trumpet,trombone,sax,horn"},
     # Vocals
-    {"name": "VOX",     "color": "Dodger Blue Dark",     "gain_linked": False, "daw_target": ""},
-    {"name": "BGs",     "color": "Matisse",              "gain_linked": False, "daw_target": ""},
+    {"name": "VOX",     "color": "Dodger Blue Dark",     "gain_linked": False, "daw_target": "VOX", "match_method": "contains", "match_pattern": "vox,vocal,lead voc,main voc,voice"},
+    {"name": "BGs",     "color": "Matisse",              "gain_linked": False, "daw_target": "BGs", "match_method": "contains", "match_pattern": "bg vox,backingvox,bgv,backing,harmony,choir,bg"},
     # Effects
-    {"name": "FX",      "color": "Lipstick",             "gain_linked": False, "daw_target": ""},
+    {"name": "FX",      "color": "Lipstick",             "gain_linked": False, "daw_target": "FX", "match_method": "contains", "match_pattern": "fx,sfx,effect"},
 ]
 
 
