@@ -92,8 +92,8 @@ _DEFAULT_GROUPS: list[dict[str, Any]] = [
     {"name": "Pads",    "color": "Flirt",                "gain_linked": False, "daw_target": "Pads", "match_method": "contains", "match_pattern": "pad"},
     {"name": "Brass",   "color": "Milano Red",           "gain_linked": False, "daw_target": "Brass", "match_method": "contains", "match_pattern": "brass,trumpet,trombone,sax,horn"},
     # Vocals
-    {"name": "VOX",     "color": "Dodger Blue Dark",     "gain_linked": False, "daw_target": "VOX", "match_method": "contains", "match_pattern": "vox,vocal,lead voc,main voc,voice"},
-    {"name": "BGs",     "color": "Matisse",              "gain_linked": False, "daw_target": "BGs", "match_method": "contains", "match_pattern": "bg vox,backingvox,bgv,backing,harmony,choir,bg"},
+    {"name": "VOX",     "color": "Dodger Blue Dark",     "gain_linked": False, "daw_target": "VOX", "match_method": "contains", "match_pattern": "vox,vocal,lead voc,main voc,voice,leadvox"},
+    {"name": "BGs",     "color": "Matisse",              "gain_linked": False, "daw_target": "BGs", "match_method": "contains", "match_pattern": "bg vox,backingvox,bgv,backing,harmony,choir,bg,backingvox"},
     # Effects
     {"name": "FX",      "color": "Lipstick",             "gain_linked": False, "daw_target": "FX", "match_method": "contains", "match_pattern": "fx,sfx,effect"},
 ]
