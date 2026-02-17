@@ -50,7 +50,10 @@ from sessionpreplib.config import (
     ANALYSIS_PARAMS, PRESENTATION_PARAMS, default_config,
     flatten_structured_config,
 )
-from sessionpreplib.daw_processors import default_daw_processors
+from sessionpreplib.daw_processors import (
+    default_daw_processors,
+    create_runtime_daw_processors,
+)
 from sessionpreplib.detector import TrackDetector
 from sessionpreplib.detectors import default_detectors, detector_help_map
 from sessionpreplib.processors import default_processors
@@ -245,7 +248,7 @@ class _FolderDropTree(QTreeWidget):
     drag-and-drop to reorder tracks within / across folders.
     """
 
-    # (filenames, folder_pt_id, insert_index)  -1 = append
+    # (filenames, folder_id, insert_index)  -1 = append
     tracks_dropped = Signal(list, str, int)
     tracks_unassigned = Signal(list)  # [filenames]
 
@@ -289,7 +292,7 @@ class _FolderDropTree(QTreeWidget):
             return False
 
     def _resolve_drop(self, pos):
-        """Return (folder_pt_id, insert_index) for a drop at *pos*.
+        """Return (folder_id, insert_index) for a drop at *pos*.
 
         Uses the item geometry to decide above / on / below placement.
         Returns (None, -1) if the drop target is invalid.
@@ -424,7 +427,7 @@ class SessionPrepWindow(QMainWindow):
 
         # Instantiate and configure DAW processors
         t0 = time.perf_counter()
-        self._daw_processors = default_daw_processors()
+        self._daw_processors: list = []
         self._active_daw_processor = None
         self._configure_daw_processors()
         dbg(f"daw_processors: {(time.perf_counter() - t0) * 1000:.1f} ms")
@@ -782,10 +785,13 @@ class SessionPrepWindow(QMainWindow):
     # ── DAW processor helpers ─────────────────────────────────────────────
 
     def _configure_daw_processors(self):
-        """Configure all DAW processors from the current flat config."""
+        """Rebuild DAW processor list from the current flat config.
+
+        Uses the runtime factory so DAWProject templates are expanded
+        into individual processor instances.
+        """
         flat = self._flat_config()
-        for dp in self._daw_processors:
-            dp.configure(flat)
+        self._daw_processors = create_runtime_daw_processors(flat)
 
     def _populate_daw_combo(self):
         """Fill the DAW dropdown with enabled processors."""
@@ -804,12 +810,13 @@ class SessionPrepWindow(QMainWindow):
         """Enable/disable Fetch/Transfer/Sync based on active processor state."""
         has_processor = self._active_daw_processor is not None
         self._fetch_action.setEnabled(has_processor)
-        pt_state = (
-            self._session.daw_state.get("protools", {})
-            if self._session else {}
+        dp_id = self._active_daw_processor.id if has_processor else None
+        dp_state = (
+            self._session.daw_state.get(dp_id, {})
+            if self._session and dp_id else {}
         )
-        has_folders = bool(pt_state.get("folders"))
-        has_assignments = bool(pt_state.get("assignments"))
+        has_folders = bool(dp_state.get("folders"))
+        has_assignments = bool(dp_state.get("assignments"))
         self._auto_assign_action.setEnabled(has_folders)
         self._transfer_action.setEnabled(has_processor and has_assignments)
         self._sync_action.setEnabled(False)
@@ -955,16 +962,16 @@ class SessionPrepWindow(QMainWindow):
             self._status_bar.showMessage(f"Transfer failed: {message}")
 
     def _populate_folder_tree(self):
-        """Build the folder tree from daw_state['protools']['folders']."""
+        """Build the folder tree from the active DAW processor's daw_state."""
         self._folder_tree.clear()
-        if not self._session:
+        if not self._session or not self._active_daw_processor:
             return
-        pt_state = self._session.daw_state.get("protools", {})
-        folders = pt_state.get("folders", [])
-        assignments = pt_state.get("assignments", {})
+        dp_state = self._session.daw_state.get(self._active_daw_processor.id, {})
+        folders = dp_state.get("folders", [])
+        assignments = dp_state.get("assignments", {})
 
-        # Build lookup: pt_id -> folder dict
-        folder_map = {f["pt_id"]: f for f in folders}
+        # Build lookup: id -> folder dict
+        folder_map = {f["id"]: f for f in folders}
         # Build children map: parent_id -> [child folders]
         children_map: dict[str | None, list] = {}
         for f in folders:
@@ -977,7 +984,7 @@ class SessionPrepWindow(QMainWindow):
 
         # Build inverse assignments: folder_id -> [filenames]
         # Use track_order for stable ordering, fall back to sorted
-        track_order = pt_state.get("track_order", {})
+        track_order = dp_state.get("track_order", {})
         folder_tracks: dict[str, list[str]] = {}
         for fname, fid in assignments.items():
             folder_tracks.setdefault(fid, []).append(fname)
@@ -1011,7 +1018,7 @@ class SessionPrepWindow(QMainWindow):
         def add_folder(parent_widget, folder):
             item = QTreeWidgetItem(parent_widget)
             item.setText(0, folder["name"])
-            item.setData(0, Qt.UserRole, folder["pt_id"])
+            item.setData(0, Qt.UserRole, folder["id"])
             item.setData(0, Qt.UserRole + 1, "folder")
             if folder["folder_type"] == "routing":
                 item.setIcon(0, routing_icon)
@@ -1022,7 +1029,7 @@ class SessionPrepWindow(QMainWindow):
                 & ~Qt.ItemIsDragEnabled)
 
             # Add assigned tracks as children
-            for fname in folder_tracks.get(folder["pt_id"], []):
+            for fname in folder_tracks.get(folder["id"], []):
                 track_item = QTreeWidgetItem(item)
                 track_item.setText(0, fname)
                 track_item.setData(0, Qt.UserRole, fname)
@@ -1038,7 +1045,7 @@ class SessionPrepWindow(QMainWindow):
                         track_item.setBackground(0, tint)
 
             # Recurse into child folders
-            for child in children_map.get(folder["pt_id"], []):
+            for child in children_map.get(folder["id"], []):
                 add_folder(item, child)
 
             item.setExpanded(True)
@@ -1051,13 +1058,13 @@ class SessionPrepWindow(QMainWindow):
 
     @Slot(list, str, int)
     def _assign_tracks_to_folder(self, filenames: list[str],
-                                  folder_pt_id: str, insert_index: int = -1):
-        """Assign session tracks to a PT folder in the local data model."""
-        if not self._session:
+                                  folder_id: str, insert_index: int = -1):
+        """Assign session tracks to a DAW folder in the local data model."""
+        if not self._session or not self._active_daw_processor:
             return
-        pt_state = self._session.daw_state.setdefault("protools", {})
-        assignments = pt_state.setdefault("assignments", {})
-        track_order = pt_state.setdefault("track_order", {})
+        dp_state = self._session.daw_state.setdefault(self._active_daw_processor.id, {})
+        assignments = dp_state.setdefault("assignments", {})
+        track_order = dp_state.setdefault("track_order", {})
 
         # Remove tracks from their previous folder order lists
         for fname in filenames:
@@ -1070,10 +1077,10 @@ class SessionPrepWindow(QMainWindow):
 
         # Update assignment mapping
         for fname in filenames:
-            assignments[fname] = folder_pt_id
+            assignments[fname] = folder_id
 
         # Insert into track_order for the target folder
-        order = track_order.setdefault(folder_pt_id, [])
+        order = track_order.setdefault(folder_id, [])
         # Remove duplicates already in the list
         for fname in filenames:
             try:
@@ -1093,13 +1100,13 @@ class SessionPrepWindow(QMainWindow):
     @Slot(list)
     def _unassign_tracks(self, filenames: list[str]):
         """Remove track-to-folder assignments and refresh UI."""
-        if not self._session:
+        if not self._session or not self._active_daw_processor:
             return
-        pt_state = self._session.daw_state.get("protools")
-        if not pt_state:
+        dp_state = self._session.daw_state.get(self._active_daw_processor.id)
+        if not dp_state:
             return
-        assignments = pt_state.get("assignments", {})
-        track_order = pt_state.get("track_order", {})
+        assignments = dp_state.get("assignments", {})
+        track_order = dp_state.get("track_order", {})
         for fname in filenames:
             fid = assignments.pop(fname, None)
             if fid and fid in track_order:
@@ -1114,20 +1121,21 @@ class SessionPrepWindow(QMainWindow):
     @Slot()
     def _on_auto_assign(self):
         """Auto-assign unassigned tracks to folders based on group DAW targets."""
-        if not self._session:
+        if not self._session or not self._active_daw_processor:
             return
-        pt_state = self._session.daw_state.get("protools", {})
-        folders = pt_state.get("folders", [])
-        assignments = pt_state.get("assignments", {})
+        dp_id = self._active_daw_processor.id
+        dp_state = self._session.daw_state.get(dp_id, {})
+        folders = dp_state.get("folders", [])
+        assignments = dp_state.get("assignments", {})
         if not folders:
             return
 
-        # Build folder name lookup: lowered+trimmed name → pt_id
+        # Build folder name lookup: lowered+trimmed name → folder id
         folder_by_name: dict[str, str] = {}
         for f in folders:
             key = f["name"].strip().lower()
             if key and key not in folder_by_name:
-                folder_by_name[key] = f["pt_id"]
+                folder_by_name[key] = f["id"]
 
         # Build group → daw_target lookup from session groups
         group_target: dict[str, str] = {}
@@ -1141,10 +1149,10 @@ class SessionPrepWindow(QMainWindow):
                 self, "Auto-Assign",
                 "No DAW targets are configured.\n\n"
                 "Open the Groups tab and set a DAW Target for each "
-                "group that should be mapped to a Pro Tools folder.")
+                "group that should be mapped to a DAW folder.")
             return
 
-        # Collect assignments: folder_pt_id → [filenames]
+        # Collect assignments: folder_id → [filenames]
         batch: dict[str, list[str]] = {}
         no_group = 0
         no_target = 0
@@ -1937,6 +1945,7 @@ class SessionPrepWindow(QMainWindow):
 
         # DAW Processors
         daw_procs: dict[str, dict] = {}
+        global_dp = self._active_preset().get("daw_processors", {})
         for dp in default_daw_processors():
             wkey = f"daw_processors.{dp.id}"
             if wkey not in self._session_widgets:
@@ -1944,6 +1953,10 @@ class SessionPrepWindow(QMainWindow):
             section = {}
             for key, widget in self._session_widgets[wkey]:
                 section[key] = _read_widget(widget)
+            # Carry forward non-widget keys (e.g. dawproject_templates)
+            for gk, gv in global_dp.get(dp.id, {}).items():
+                if gk not in section:
+                    section[gk] = gv
             daw_procs[dp.id] = section
         cfg["daw_processors"] = daw_procs
 
@@ -3344,11 +3357,12 @@ class SessionPrepWindow(QMainWindow):
         gcm_rank = self._group_rank_map()
         glm = self._gain_linked_map()
 
-        # Determine which tracks are assigned to a PT folder
+        # Determine which tracks are assigned to a DAW folder
         assignments = {}
-        if self._session.daw_state:
-            pt_state = self._session.daw_state.get("protools", {})
-            assignments = pt_state.get("assignments", {})
+        if self._session.daw_state and self._active_daw_processor:
+            dp_state = self._session.daw_state.get(
+                self._active_daw_processor.id, {})
+            assignments = dp_state.get("assignments", {})
 
         for row, track in enumerate(ok_tracks):
             pr = (

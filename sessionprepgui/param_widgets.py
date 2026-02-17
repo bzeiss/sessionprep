@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -653,3 +654,150 @@ class GroupsTableWidget(QWidget):
                 entry.get("match_pattern", ""))
         self._table.blockSignals(False)
         self.groups_changed.emit()
+
+
+# ---------------------------------------------------------------------------
+# DawProjectTemplatesWidget — template list for DAWProject processor
+# ---------------------------------------------------------------------------
+
+class DawProjectTemplatesWidget(QWidget):
+    """Editable table of DAWProject mix templates.
+
+    Each row has a *Name*, a *Template Path* (with Browse button),
+    and a *Fader Ceiling (dB)* spinbox.  The widget stores its data as
+    ``[{name, template_path, fader_ceiling_db}, ...]``.
+    """
+
+    templates_changed = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        lbl = QLabel("<b>Mix Templates</b>")
+        layout.addWidget(lbl)
+
+        self._table = QTableWidget()
+        self._table.setColumnCount(3)
+        self._table.setHorizontalHeaderLabels(
+            ["Name", "Template Path", "Fader Ceiling (dB)"])
+        gh = self._table.horizontalHeader()
+        gh.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        gh.setSectionResizeMode(0, QHeaderView.Interactive)
+        gh.resizeSection(0, 180)
+        gh.setSectionResizeMode(1, QHeaderView.Stretch)
+        gh.setSectionResizeMode(2, QHeaderView.Fixed)
+        gh.resizeSection(2, 120)
+        self._table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._table.setSelectionMode(QTableWidget.SingleSelection)
+        layout.addWidget(self._table, 1)
+
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.setSpacing(6)
+        add_btn = QPushButton("Add")
+        add_btn.clicked.connect(self._on_add)
+        btn_row.addWidget(add_btn)
+        remove_btn = QPushButton("Remove")
+        remove_btn.clicked.connect(self._on_remove)
+        btn_row.addWidget(remove_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+    # ── Public API ────────────────────────────────────────────────────
+
+    def set_templates(self, templates: list[dict]):
+        """Populate the table from a list of template dicts."""
+        self._table.blockSignals(True)
+        self._table.setRowCount(0)
+        self._table.setRowCount(len(templates))
+        for row, tpl in enumerate(templates):
+            self._set_row(
+                row,
+                tpl.get("name", ""),
+                tpl.get("template_path", ""),
+                float(tpl.get("fader_ceiling_db", 24.0)),
+            )
+        self._table.blockSignals(False)
+
+    def get_templates(self) -> list[dict]:
+        """Read the table back into a list of template dicts."""
+        templates: list[dict] = []
+        for row in range(self._table.rowCount()):
+            name_item = self._table.item(row, 0)
+            name = name_item.text().strip() if name_item else ""
+            # Path is inside a container widget (QLineEdit + browse btn)
+            path = ""
+            path_container = self._table.cellWidget(row, 1)
+            if path_container:
+                le = path_container.findChild(QLineEdit)
+                if le:
+                    path = le.text().strip()
+            ceiling_widget = self._table.cellWidget(row, 2)
+            ceiling = ceiling_widget.value() if ceiling_widget else 24.0
+            if name or path:
+                templates.append({
+                    "name": name,
+                    "template_path": path,
+                    "fader_ceiling_db": ceiling,
+                })
+        return templates
+
+    # ── Row helpers ───────────────────────────────────────────────────
+
+    def _set_row(self, row: int, name: str, template_path: str,
+                 fader_ceiling_db: float = 24.0):
+        self._table.setItem(row, 0, QTableWidgetItem(name))
+
+        # Path cell: read-only text item + browse button via cell widget
+        path_container = QWidget()
+        path_layout = QHBoxLayout(path_container)
+        path_layout.setContentsMargins(2, 0, 2, 0)
+        path_layout.setSpacing(4)
+        path_edit = QLineEdit(template_path)
+        path_edit.setPlaceholderText("Path to .dawproject file")
+        path_layout.addWidget(path_edit, 1)
+        browse_btn = QPushButton("Browse\u2026")
+        browse_btn.setFixedWidth(80)
+        browse_btn.setToolTip("Browse for .dawproject template")
+        browse_btn.clicked.connect(
+            lambda _checked=False, le=path_edit: self._browse_template(le))
+        path_layout.addWidget(browse_btn)
+        self._table.setCellWidget(row, 1, path_container)
+
+        # Fader ceiling spinbox
+        ceiling_spin = QDoubleSpinBox()
+        ceiling_spin.setRange(0.0, 48.0)
+        ceiling_spin.setDecimals(1)
+        ceiling_spin.setSuffix(" dB")
+        ceiling_spin.setValue(fader_ceiling_db)
+        self._table.setCellWidget(row, 2, ceiling_spin)
+
+    def _browse_template(self, line_edit: QLineEdit):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select DAWProject Template",
+            line_edit.text(),
+            "DAWProject Files (*.dawproject);;All Files (*)")
+        if path:
+            line_edit.setText(path)
+            self.templates_changed.emit()
+
+    # ── Button handlers ──────────────────────────────────────────────
+
+    def _on_add(self):
+        row = self._table.rowCount()
+        self._table.setRowCount(row + 1)
+        self._set_row(row, "", "", 24.0)
+        self.templates_changed.emit()
+
+    def _on_remove(self):
+        row = self._table.currentRow()
+        if row < 0:
+            return
+        self._table.removeRow(row)
+        self.templates_changed.emit()

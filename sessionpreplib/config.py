@@ -444,6 +444,11 @@ def build_structured_defaults() -> dict[str, Any]:
         params = dp.config_params()
         if params:
             structured["daw_processors"][dp.id] = {p.key: p.default for p in params}
+        # DAWProject: include templates list default
+        if dp.id == "dawproject":
+            structured["daw_processors"].setdefault(dp.id, {})
+            structured["daw_processors"][dp.id].setdefault(
+                "dawproject_templates", [])
 
     return structured
 

@@ -203,7 +203,7 @@ class ProToolsDawProcessor(DawProcessor):
                         else "basic"
                     )
                     folders.append({
-                        "pt_id": track.id,
+                        "id": track.id,
                         "name": track.name,
                         "folder_type": folder_type,
                         "index": track.index,
@@ -213,7 +213,7 @@ class ProToolsDawProcessor(DawProcessor):
             # Preserve existing assignments where folder IDs still match
             pt_state = session.daw_state.get(self.id, {})
             old_assignments: dict[str, str] = pt_state.get("assignments", {})
-            valid_ids = {f["pt_id"] for f in folders}
+            valid_ids = {f["id"] for f in folders}
             assignments = {
                 fname: fid for fname, fid in old_assignments.items()
                 if fid in valid_ids
@@ -309,7 +309,7 @@ class ProToolsDawProcessor(DawProcessor):
             return []
 
         # Build lookups
-        folder_map = {f["pt_id"]: f for f in folders}
+        folder_map = {f["id"]: f for f in folders}
         track_map = {t.filename: t for t in session.tracks}
 
         # Build ordered work list: [(filename, folder_id), ...]

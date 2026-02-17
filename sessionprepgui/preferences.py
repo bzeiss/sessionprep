@@ -45,6 +45,7 @@ from .param_widgets import (
     _build_tooltip,
     _read_widget,
     _set_widget_value,
+    DawProjectTemplatesWidget,
     GroupsTableWidget,
     sanitize_output_folder,
 )
@@ -68,7 +69,7 @@ class PreferencesDialog(QDialog):
     def __init__(self, config: dict[str, Any], parent=None):
         super().__init__(parent)
         self.setWindowTitle("Preferences")
-        self.resize(1150, 550)
+        self.resize(1150, 700)
         self._config = copy.deepcopy(config)
         self._widgets: dict[str, list[tuple[str, QWidget]]] = {}
         self._general_widgets: list[tuple[str, QWidget]] = []
@@ -455,6 +456,16 @@ class PreferencesDialog(QDialog):
             values = dp_sections.get(dp.id, {})
             page, widgets = _build_param_page(params, values)
             self._widgets[f"daw_processors.{dp.id}"] = widgets
+
+            # DAWProject: append templates widget below the param widgets
+            if dp.id == "dawproject":
+                tpl_widget = DawProjectTemplatesWidget()
+                templates = values.get("dawproject_templates", [])
+                tpl_widget.set_templates(templates)
+                self._dawproject_templates_widget = tpl_widget
+                page.layout().insertWidget(
+                    page.layout().count() - 1, tpl_widget)
+
             self._add_preset_page(child, page)
 
     # ── Colors page ────────────────────────────────────────────────────
@@ -863,6 +874,10 @@ class PreferencesDialog(QDialog):
             section = daw_procs.setdefault(dp.id, {})
             for key, widget in self._widgets[wkey]:
                 section[key] = _read_widget(widget)
+            # DAWProject: persist templates list
+            if dp.id == "dawproject" and hasattr(self, "_dawproject_templates_widget"):
+                section["dawproject_templates"] = (
+                    self._dawproject_templates_widget.get_templates())
 
         # Presentation
         presentation = preset.setdefault("presentation", {})
@@ -911,6 +926,10 @@ class PreferencesDialog(QDialog):
             for key, widget in self._widgets[wkey]:
                 if key in values:
                     _set_widget_value(widget, values[key])
+            # DAWProject: restore templates list
+            if dp.id == "dawproject" and hasattr(self, "_dawproject_templates_widget"):
+                self._dawproject_templates_widget.set_templates(
+                    values.get("dawproject_templates", []))
 
         # Presentation
         pres = preset.get("presentation", {})
