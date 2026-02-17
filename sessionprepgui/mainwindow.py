@@ -47,13 +47,10 @@ from PySide6.QtWidgets import (
 
 from sessionpreplib.audio import get_window_samples
 from sessionpreplib.config import (
-    ANALYSIS_PARAMS, PRESENTATION_PARAMS, default_config,
+    default_config,
     flatten_structured_config,
 )
-from sessionpreplib.daw_processors import (
-    default_daw_processors,
-    create_runtime_daw_processors,
-)
+from sessionpreplib.daw_processors import create_runtime_daw_processors
 from sessionpreplib.detector import TrackDetector
 from sessionpreplib.detectors import default_detectors, detector_help_map
 from sessionpreplib.processors import default_processors
@@ -75,7 +72,10 @@ from .theme import (
 )
 from .helpers import track_analysis_label, esc, fmt_time
 from .log import dbg
-from .param_widgets import _build_param_page, _read_widget, _set_widget_value
+from .param_widgets import (
+    _build_param_page, _read_widget, _set_widget_value,
+    build_config_pages, load_config_widgets, read_config_widgets,
+)
 from .preferences import PreferencesDialog, _argb_to_qcolor
 from .report import render_summary_html, render_track_detail_html
 from .widgets import BatchEditTableWidget, BatchComboBox, ProgressPanel
@@ -651,6 +651,7 @@ class SessionPrepWindow(QMainWindow):
 
         self._daw_check_label = QLabel("")
         self._daw_check_label.setContentsMargins(6, 0, 0, 0)
+        self._daw_check_label.setMaximumWidth(260)
         self._setup_toolbar.addWidget(self._daw_check_label)
 
         self._setup_toolbar.addSeparator()
@@ -853,9 +854,13 @@ class SessionPrepWindow(QMainWindow):
             if cb:
                 cb()
         else:
-            self._daw_check_label.setText(message)
+            self._daw_check_label.setText("Connection failed")
             self._daw_check_label.setStyleSheet(f"color: {COLORS['problems']};")
             self._pending_after_check = None
+            QMessageBox.warning(
+                self, "Connection Failed",
+                f"{self._active_daw_processor.name} connection could "
+                f"not be established.\n\n{message}")
         self._update_daw_lifecycle_buttons()
 
     # ── DAW Fetch + Folder Tree ───────────────────────────────────────────
@@ -928,6 +933,9 @@ class SessionPrepWindow(QMainWindow):
         dp_name = self._active_daw_processor.name if self._active_daw_processor else "DAW"
         self._status_bar.showMessage(f"Transferring to {dp_name}\u2026")
         self._transfer_progress.start("Preparing\u2026")
+        # Refresh pipeline config from current session widgets so that
+        # processor enabled/disabled changes made after analysis take effect.
+        self._session.config.update(self._flat_config())
         # Inject GUI config (groups + colors) into session.config so
         # transfer() can resolve group → color ARGB
         self._session.config.setdefault("gui", {})["groups"] = list(
@@ -1752,87 +1760,18 @@ class SessionPrepWindow(QMainWindow):
 
     def _build_session_pages(self):
         """Populate the session config tree + stack from the active preset."""
-        preset = self._active_preset()
 
-        # Analysis
-        item = QTreeWidgetItem(self._session_tree, ["Analysis"])
-        values = preset.get("analysis", {})
-        pg, wdg = _build_param_page(ANALYSIS_PARAMS, values)
-        self._session_widgets["analysis"] = wdg
-        idx = self._session_stack.addWidget(pg)
-        self._session_page_index[id(item)] = idx
+        def _register_page(tree_item, page):
+            idx = self._session_stack.addWidget(page)
+            self._session_page_index[id(tree_item)] = idx
 
-        # Detectors (parent shows presentation params)
-        det_parent = QTreeWidgetItem(self._session_tree, ["Detectors"])
-        pres_values = preset.get("presentation", {})
-        pg, wdg = _build_param_page(PRESENTATION_PARAMS, pres_values)
-        self._session_widgets["_presentation"] = wdg
-        idx = self._session_stack.addWidget(pg)
-        self._session_page_index[id(det_parent)] = idx
-
-        det_sections = preset.get("detectors", {})
-        for det in default_detectors():
-            params = det.config_params()
-            if not params:
-                continue
-            child = QTreeWidgetItem(det_parent, [det.name])
-            vals = det_sections.get(det.id, {})
-            pg, wdg = _build_param_page(params, vals)
-            self._session_widgets[f"detectors.{det.id}"] = wdg
-            idx = self._session_stack.addWidget(pg)
-            self._session_page_index[id(child)] = idx
-
-        # Processors
-        proc_parent = QTreeWidgetItem(self._session_tree, ["Processors"])
-        placeholder = QWidget()
-        pl = QVBoxLayout(placeholder)
-        pl.setContentsMargins(12, 12, 12, 12)
-        pl.addWidget(QLabel("Select a processor from the tree to configure."))
-        pl.addStretch()
-        idx = self._session_stack.addWidget(placeholder)
-        self._session_page_index[id(proc_parent)] = idx
-
-        proc_sections = preset.get("processors", {})
-        for proc in default_processors():
-            params = proc.config_params()
-            if not params:
-                continue
-            child = QTreeWidgetItem(proc_parent, [proc.name])
-            vals = proc_sections.get(proc.id, {})
-            pg, wdg = _build_param_page(params, vals)
-            self._session_widgets[f"processors.{proc.id}"] = wdg
-            idx = self._session_stack.addWidget(pg)
-            self._session_page_index[id(child)] = idx
-
-            # Connect processor enabled toggle to live-update Processing column
-            enabled_key = f"{proc.id}_enabled"
-            for key, widget in wdg:
-                if key == enabled_key and isinstance(widget, QCheckBox):
-                    widget.toggled.connect(self._on_processor_enabled_changed)
-                    break
-
-        # DAW Processors
-        daw_parent = QTreeWidgetItem(self._session_tree, ["DAW Processors"])
-        placeholder2 = QWidget()
-        pl2 = QVBoxLayout(placeholder2)
-        pl2.setContentsMargins(12, 12, 12, 12)
-        pl2.addWidget(QLabel(
-            "Select a DAW processor from the tree to configure."))
-        pl2.addStretch()
-        idx = self._session_stack.addWidget(placeholder2)
-        self._session_page_index[id(daw_parent)] = idx
-
-        dp_sections = preset.get("daw_processors", {})
-        for dp in default_daw_processors():
-            params = dp.config_params()
-            if not params:
-                continue
-            child = QTreeWidgetItem(daw_parent, [dp.name])
-            vals = dp_sections.get(dp.id, {})
-            pg, wdg = _build_param_page(params, vals)
-            self._session_widgets[f"daw_processors.{dp.id}"] = wdg
-            idx = self._session_stack.addWidget(pg)
-            self._session_page_index[id(child)] = idx
+        self._session_dawproject_templates_widget = build_config_pages(
+            self._session_tree,
+            self._active_preset(),
+            self._session_widgets,
+            _register_page,
+            on_processor_enabled=self._on_processor_enabled_changed,
+        )
 
     def _on_session_tree_selection(self, current, _previous):
         if current is None:
@@ -1863,109 +1802,18 @@ class SessionPrepWindow(QMainWindow):
 
     def _load_session_widgets_inner(self, preset: dict[str, Any]):
         """Inner loader — sets widget values without triggering column refresh."""
-        # Analysis
-        analysis = preset.get("analysis", {})
-        for key, widget in self._session_widgets.get("analysis", []):
-            if key in analysis:
-                _set_widget_value(widget, analysis[key])
-
-        # Presentation
-        pres = preset.get("presentation", {})
-        for key, widget in self._session_widgets.get("_presentation", []):
-            if key in pres:
-                _set_widget_value(widget, pres[key])
-
-        # Detectors
-        det_sections = preset.get("detectors", {})
-        for det in default_detectors():
-            wkey = f"detectors.{det.id}"
-            if wkey not in self._session_widgets:
-                continue
-            vals = det_sections.get(det.id, {})
-            for key, widget in self._session_widgets[wkey]:
-                if key in vals:
-                    _set_widget_value(widget, vals[key])
-
-        # Processors
-        proc_sections = preset.get("processors", {})
-        for proc in default_processors():
-            wkey = f"processors.{proc.id}"
-            if wkey not in self._session_widgets:
-                continue
-            vals = proc_sections.get(proc.id, {})
-            for key, widget in self._session_widgets[wkey]:
-                if key in vals:
-                    _set_widget_value(widget, vals[key])
-
-        # DAW Processors
-        dp_sections = preset.get("daw_processors", {})
-        for dp in default_daw_processors():
-            wkey = f"daw_processors.{dp.id}"
-            if wkey not in self._session_widgets:
-                continue
-            vals = dp_sections.get(dp.id, {})
-            for key, widget in self._session_widgets[wkey]:
-                if key in vals:
-                    _set_widget_value(widget, vals[key])
+        load_config_widgets(
+            self._session_widgets, preset,
+            self._session_dawproject_templates_widget)
 
     def _read_session_config(self) -> dict[str, Any]:
         """Read current session widget values into a structured config dict."""
-        cfg: dict[str, Any] = {}
-
-        # Analysis
-        analysis: dict[str, Any] = {}
-        for key, widget in self._session_widgets.get("analysis", []):
-            analysis[key] = _read_widget(widget)
-        cfg["analysis"] = analysis
-
-        # Presentation
-        presentation: dict[str, Any] = {}
-        for key, widget in self._session_widgets.get("_presentation", []):
-            presentation[key] = _read_widget(widget)
-        cfg["presentation"] = presentation
-
-        # Detectors
-        detectors: dict[str, dict] = {}
-        for det in default_detectors():
-            wkey = f"detectors.{det.id}"
-            if wkey not in self._session_widgets:
-                continue
-            section: dict[str, Any] = {}
-            for key, widget in self._session_widgets[wkey]:
-                section[key] = _read_widget(widget)
-            detectors[det.id] = section
-        cfg["detectors"] = detectors
-
-        # Processors
-        processors: dict[str, dict] = {}
-        for proc in default_processors():
-            wkey = f"processors.{proc.id}"
-            if wkey not in self._session_widgets:
-                continue
-            section = {}
-            for key, widget in self._session_widgets[wkey]:
-                section[key] = _read_widget(widget)
-            processors[proc.id] = section
-        cfg["processors"] = processors
-
-        # DAW Processors
-        daw_procs: dict[str, dict] = {}
-        global_dp = self._active_preset().get("daw_processors", {})
-        for dp in default_daw_processors():
-            wkey = f"daw_processors.{dp.id}"
-            if wkey not in self._session_widgets:
-                continue
-            section = {}
-            for key, widget in self._session_widgets[wkey]:
-                section[key] = _read_widget(widget)
-            # Carry forward non-widget keys (e.g. dawproject_templates)
-            for gk, gv in global_dp.get(dp.id, {}).items():
-                if gk not in section:
-                    section[gk] = gv
-            daw_procs[dp.id] = section
-        cfg["daw_processors"] = daw_procs
-
-        return cfg
+        return read_config_widgets(
+            self._session_widgets,
+            self._session_dawproject_templates_widget,
+            fallback_daw_sections=self._active_preset().get(
+                "daw_processors", {}),
+        )
 
     def _on_session_config_reset(self):
         """Reset session config to the global config preset defaults."""
@@ -2753,6 +2601,10 @@ class SessionPrepWindow(QMainWindow):
         output_folder = self._config.get("app", {}).get(
             "output_folder", "processed")
         output_dir = os.path.join(self._source_dir, output_folder)
+
+        # Refresh pipeline config from current session widgets so that
+        # processor enabled/disabled changes made after analysis take effect.
+        self._session.config.update(self._flat_config())
 
         # Use the session's configured processors
         processors = list(self._session.processors) if self._session.processors else []

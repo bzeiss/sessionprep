@@ -12,7 +12,7 @@ from decimal import Decimal
 from typing import Any, Callable
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QColor, QIcon, QPixmap
+from PySide6.QtGui import QColor, QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -721,7 +722,7 @@ class DawProjectTemplatesWidget(QWidget):
                 row,
                 tpl.get("name", ""),
                 tpl.get("template_path", ""),
-                float(tpl.get("fader_ceiling_db", 24.0)),
+                float(tpl.get("fader_ceiling_db", 6.0)),
             )
         self._table.blockSignals(False)
 
@@ -751,7 +752,7 @@ class DawProjectTemplatesWidget(QWidget):
     # ── Row helpers ───────────────────────────────────────────────────
 
     def _set_row(self, row: int, name: str, template_path: str,
-                 fader_ceiling_db: float = 24.0):
+                 fader_ceiling_db: float = 6.0):
         self._table.setItem(row, 0, QTableWidgetItem(name))
 
         # Path cell: read-only text item + browse button via cell widget
@@ -792,7 +793,7 @@ class DawProjectTemplatesWidget(QWidget):
     def _on_add(self):
         row = self._table.rowCount()
         self._table.setRowCount(row + 1)
-        self._set_row(row, "", "", 24.0)
+        self._set_row(row, "", "", 6.0)
         self.templates_changed.emit()
 
     def _on_remove(self):
@@ -801,3 +802,281 @@ class DawProjectTemplatesWidget(QWidget):
             return
         self._table.removeRow(row)
         self.templates_changed.emit()
+
+
+# ---------------------------------------------------------------------------
+# Shared config page builder / loader / reader
+# ---------------------------------------------------------------------------
+# Used by both PreferencesDialog and the session Config tab to avoid
+# duplicating tree+page construction, widget loading, and reading logic.
+
+def build_config_pages(
+    tree,
+    preset: dict[str, Any],
+    widgets_dict: dict,
+    register_page: Callable[[QTreeWidgetItem, QWidget], None],
+    *,
+    on_processor_enabled: Callable | None = None,
+) -> DawProjectTemplatesWidget | None:
+    """Build the common config tree pages.
+
+    Creates Analysis, Detectors (with Presentation parent), Processors,
+    and DAW Processors sections in *tree*, populating *widgets_dict*.
+
+    Parameters
+    ----------
+    tree:
+        QTreeWidget to add top-level items to.
+    preset:
+        Config preset dict with ``analysis``, ``detectors``, etc. sections.
+    widgets_dict:
+        Mutable dict to store ``(key, widget)`` lists per section key.
+    register_page:
+        Callback ``(tree_item, page_widget) -> None`` that adds the page
+        to the host's QStackedWidget (and optionally wraps in QScrollArea).
+    on_processor_enabled:
+        Optional slot connected to every processor's *enabled* checkbox.
+
+    Returns
+    -------
+    The :class:`DawProjectTemplatesWidget` instance if a DAWProject page
+    was created, otherwise ``None``.
+    """
+    from sessionpreplib.config import ANALYSIS_PARAMS, PRESENTATION_PARAMS
+    from sessionpreplib.detectors import default_detectors
+    from sessionpreplib.processors import default_processors
+    from sessionpreplib.daw_processors import default_daw_processors
+
+    dawproject_tpl_widget: DawProjectTemplatesWidget | None = None
+
+    # ── Analysis ──────────────────────────────────────────────────
+    item = QTreeWidgetItem(tree, ["Analysis"])
+    item.setFont(0, QFont("", -1, QFont.Bold))
+    values = preset.get("analysis", {})
+    pg, wdg = _build_param_page(ANALYSIS_PARAMS, values)
+    widgets_dict["analysis"] = wdg
+    register_page(item, pg)
+
+    # ── Detectors (parent shows presentation params) ──────────────
+    det_parent = QTreeWidgetItem(tree, ["Detectors"])
+    det_parent.setFont(0, QFont("", -1, QFont.Bold))
+    pres_values = preset.get("presentation", {})
+    pg, wdg = _build_param_page(PRESENTATION_PARAMS, pres_values)
+    widgets_dict["_presentation"] = wdg
+    register_page(det_parent, pg)
+
+    det_sections = preset.get("detectors", {})
+    for det in default_detectors():
+        params = det.config_params()
+        if not params:
+            continue
+        child = QTreeWidgetItem(det_parent, [det.name])
+        vals = det_sections.get(det.id, {})
+        pg, wdg = _build_param_page(params, vals)
+        widgets_dict[f"detectors.{det.id}"] = wdg
+        register_page(child, pg)
+
+    # ── Processors ────────────────────────────────────────────────
+    proc_parent = QTreeWidgetItem(tree, ["Processors"])
+    proc_parent.setFont(0, QFont("", -1, QFont.Bold))
+    placeholder = QWidget()
+    pl = QVBoxLayout(placeholder)
+    pl.setContentsMargins(12, 12, 12, 12)
+    pl.addWidget(QLabel("Select a processor from the tree to configure."))
+    pl.addStretch()
+    register_page(proc_parent, placeholder)
+
+    proc_sections = preset.get("processors", {})
+    for proc in default_processors():
+        params = proc.config_params()
+        if not params:
+            continue
+        child = QTreeWidgetItem(proc_parent, [proc.name])
+        vals = proc_sections.get(proc.id, {})
+        pg, wdg = _build_param_page(params, vals)
+        widgets_dict[f"processors.{proc.id}"] = wdg
+        register_page(child, pg)
+
+        if on_processor_enabled is not None:
+            enabled_key = f"{proc.id}_enabled"
+            for key, widget in wdg:
+                if key == enabled_key and isinstance(widget, QCheckBox):
+                    widget.toggled.connect(on_processor_enabled)
+                    break
+
+    # ── DAW Processors ────────────────────────────────────────────
+    daw_parent = QTreeWidgetItem(tree, ["DAW Processors"])
+    daw_parent.setFont(0, QFont("", -1, QFont.Bold))
+    placeholder2 = QWidget()
+    pl2 = QVBoxLayout(placeholder2)
+    pl2.setContentsMargins(12, 12, 12, 12)
+    pl2.addWidget(QLabel(
+        "Select a DAW processor from the tree to configure."))
+    pl2.addStretch()
+    register_page(daw_parent, placeholder2)
+
+    dp_sections = preset.get("daw_processors", {})
+    for dp in default_daw_processors():
+        params = dp.config_params()
+        if not params:
+            continue
+        child = QTreeWidgetItem(daw_parent, [dp.name])
+        vals = dp_sections.get(dp.id, {})
+        pg, wdg = _build_param_page(params, vals)
+        widgets_dict[f"daw_processors.{dp.id}"] = wdg
+
+        if dp.id == "dawproject":
+            tpl_widget = DawProjectTemplatesWidget()
+            templates = vals.get("dawproject_templates", [])
+            tpl_widget.set_templates(templates)
+            dawproject_tpl_widget = tpl_widget
+            pg.layout().insertWidget(
+                pg.layout().count() - 1, tpl_widget)
+
+        register_page(child, pg)
+
+    return dawproject_tpl_widget
+
+
+def load_config_widgets(
+    widgets_dict: dict,
+    preset: dict[str, Any],
+    dawproject_tpl_widget: DawProjectTemplatesWidget | None = None,
+) -> None:
+    """Load values from *preset* into widgets stored in *widgets_dict*.
+
+    Shared between PreferencesDialog._load_cfg_preset_widgets and
+    SessionPrepWindow._load_session_widgets_inner.
+    """
+    from sessionpreplib.detectors import default_detectors
+    from sessionpreplib.processors import default_processors
+    from sessionpreplib.daw_processors import default_daw_processors
+
+    # Analysis
+    analysis = preset.get("analysis", {})
+    for key, widget in widgets_dict.get("analysis", []):
+        if key in analysis:
+            _set_widget_value(widget, analysis[key])
+
+    # Presentation
+    pres = preset.get("presentation", {})
+    for key, widget in widgets_dict.get("_presentation", []):
+        if key in pres:
+            _set_widget_value(widget, pres[key])
+
+    # Detectors
+    det_sections = preset.get("detectors", {})
+    for det in default_detectors():
+        wkey = f"detectors.{det.id}"
+        if wkey not in widgets_dict:
+            continue
+        vals = det_sections.get(det.id, {})
+        for key, widget in widgets_dict[wkey]:
+            if key in vals:
+                _set_widget_value(widget, vals[key])
+
+    # Processors
+    proc_sections = preset.get("processors", {})
+    for proc in default_processors():
+        wkey = f"processors.{proc.id}"
+        if wkey not in widgets_dict:
+            continue
+        vals = proc_sections.get(proc.id, {})
+        for key, widget in widgets_dict[wkey]:
+            if key in vals:
+                _set_widget_value(widget, vals[key])
+
+    # DAW Processors
+    dp_sections = preset.get("daw_processors", {})
+    for dp in default_daw_processors():
+        wkey = f"daw_processors.{dp.id}"
+        if wkey not in widgets_dict:
+            continue
+        vals = dp_sections.get(dp.id, {})
+        for key, widget in widgets_dict[wkey]:
+            if key in vals:
+                _set_widget_value(widget, vals[key])
+        if dp.id == "dawproject" and dawproject_tpl_widget is not None:
+            dawproject_tpl_widget.set_templates(
+                vals.get("dawproject_templates", []))
+
+
+def read_config_widgets(
+    widgets_dict: dict,
+    dawproject_tpl_widget: DawProjectTemplatesWidget | None = None,
+    fallback_daw_sections: dict[str, dict] | None = None,
+) -> dict[str, Any]:
+    """Read current widget values into a structured config dict.
+
+    Shared between PreferencesDialog._save_cfg_preset_widgets and
+    SessionPrepWindow._read_session_config.
+
+    Parameters
+    ----------
+    fallback_daw_sections:
+        Optional dict of DAW-processor sections whose non-widget keys
+        are carried forward (used by session config to inherit global
+        preset keys that have no widget representation).
+    """
+    from sessionpreplib.detectors import default_detectors
+    from sessionpreplib.processors import default_processors
+    from sessionpreplib.daw_processors import default_daw_processors
+
+    cfg: dict[str, Any] = {}
+
+    # Analysis
+    analysis: dict[str, Any] = {}
+    for key, widget in widgets_dict.get("analysis", []):
+        analysis[key] = _read_widget(widget)
+    cfg["analysis"] = analysis
+
+    # Presentation
+    presentation: dict[str, Any] = {}
+    for key, widget in widgets_dict.get("_presentation", []):
+        presentation[key] = _read_widget(widget)
+    cfg["presentation"] = presentation
+
+    # Detectors
+    detectors: dict[str, dict] = {}
+    for det in default_detectors():
+        wkey = f"detectors.{det.id}"
+        if wkey not in widgets_dict:
+            continue
+        section: dict[str, Any] = {}
+        for key, widget in widgets_dict[wkey]:
+            section[key] = _read_widget(widget)
+        detectors[det.id] = section
+    cfg["detectors"] = detectors
+
+    # Processors
+    processors: dict[str, dict] = {}
+    for proc in default_processors():
+        wkey = f"processors.{proc.id}"
+        if wkey not in widgets_dict:
+            continue
+        section: dict[str, Any] = {}
+        for key, widget in widgets_dict[wkey]:
+            section[key] = _read_widget(widget)
+        processors[proc.id] = section
+    cfg["processors"] = processors
+
+    # DAW Processors
+    daw_procs: dict[str, dict] = {}
+    for dp in default_daw_processors():
+        wkey = f"daw_processors.{dp.id}"
+        if wkey not in widgets_dict:
+            continue
+        section: dict[str, Any] = {}
+        for key, widget in widgets_dict[wkey]:
+            section[key] = _read_widget(widget)
+        if dp.id == "dawproject" and dawproject_tpl_widget is not None:
+            section["dawproject_templates"] = (
+                dawproject_tpl_widget.get_templates())
+        if fallback_daw_sections:
+            for gk, gv in fallback_daw_sections.get(dp.id, {}).items():
+                if gk not in section:
+                    section[gk] = gv
+        daw_procs[dp.id] = section
+    cfg["daw_processors"] = daw_procs
+
+    return cfg

@@ -11,6 +11,12 @@ from typing import Any
 from ..daw_processor import DawProcessor
 from ..models import DawCommand, DawCommandResult, SessionContext
 
+try:
+    from sessionprepgui.log import dbg
+except ImportError:
+    def dbg(msg):  # noqa: E302
+        pass
+
 log = logging.getLogger(__name__)
 
 
@@ -42,7 +48,7 @@ class DawProjectDawProcessor(DawProcessor):
 
     id = "dawproject"
     name = "DAWproject"
-    fader_ceiling_db: float = 24.0
+    fader_ceiling_db: float = 6.0
 
     def __init__(
         self,
@@ -50,7 +56,7 @@ class DawProjectDawProcessor(DawProcessor):
         instance_index: int | None = None,
         template_name: str = "",
         template_path: str = "",
-        template_fader_ceiling_db: float = 24.0,
+        template_fader_ceiling_db: float = 6.0,
     ):
         self._instance_index = instance_index
         self._template_name = template_name
@@ -83,7 +89,7 @@ class DawProjectDawProcessor(DawProcessor):
                 continue
             name = tpl.get("name", "").strip()
             path = tpl.get("template_path", "").strip()
-            ceiling = float(tpl.get("fader_ceiling_db", 24.0))
+            ceiling = float(tpl.get("fader_ceiling_db", 6.0))
             if not name or not path:
                 continue
             instances.append(cls(
@@ -191,9 +197,10 @@ class DawProjectDawProcessor(DawProcessor):
                  progress_cb=None) -> list[DawCommandResult]:
         try:
             from dawproject import (
-                Arrangement, Audio, Channel, Clips, ContentType,
-                DawProject, FileReference, Lanes, MetaData,
-                MixerRole, RealParameter, Referenceable, TimeUnit,
+                Arrangement, Audio, AutomationTarget, Channel,
+                Clips, ContentType, DawProject, ExpressionType,
+                FileReference, Lanes, MetaData, MixerRole, Points,
+                RealParameter, RealPoint, Referenceable, TimeUnit,
                 Track, Unit, Utility,
             )
         except ImportError:
@@ -271,6 +278,12 @@ class DawProjectDawProcessor(DawProcessor):
 
         use_processed = session.config.get("_use_processed", False)
 
+        proc_id = "bimodal_normalize"
+        bn_enabled = session.config.get(f"{proc_id}_enabled", True)
+
+        dbg(f"transfer: use_processed={use_processed}, "
+            f"bn_enabled={bn_enabled}")
+
         # ── Create tracks and clips ───────────────────────────────
         for step, (fname, fid) in enumerate(work):
             folder_track = folder_track_map.get(fid)
@@ -286,18 +299,35 @@ class DawProjectDawProcessor(DawProcessor):
                 continue
 
             # Resolve audio file path
-            if (use_processed and tc.processed_filepath
-                    and os.path.isfile(tc.processed_filepath)):
+            actually_processed = (
+                use_processed and tc.processed_filepath
+                and os.path.isfile(tc.processed_filepath))
+            if actually_processed:
                 audio_path = os.path.abspath(tc.processed_filepath)
             else:
                 audio_path = os.path.abspath(tc.filepath)
 
-            # Compute fader volume (linear)
+            # Compute fader volume and clip gain
             fader_db = 0.0
-            if tc.processor_results:
-                pr = next(iter(tc.processor_results.values()), None)
-                if pr and pr.data:
+            clip_gain_db = 0.0
+            pr = tc.processor_results.get(proc_id)
+            skip = proc_id in getattr(tc, "processor_skip", set())
+            dbg(
+                f"  {fname}: bn_enabled={bn_enabled}, "
+                f"actually_processed={actually_processed}, "
+                f"has_pr={pr is not None}, "
+                f"classification={pr.classification if pr else None}, "
+                f"skip={skip}, "
+                f"gain_db={pr.gain_db if pr else None}, "
+                f"fader_offset={pr.data.get('fader_offset') if pr else None}"
+            )
+            if bn_enabled and pr:
+                if pr.classification not in ("Silent", "Skip") and not skip:
                     fader_db = pr.data.get("fader_offset", 0.0)
+                    if not actually_processed:
+                        clip_gain_db = pr.gain_db
+            dbg(f"  → fader_db={fader_db:.2f}, "
+                f"clip_gain_db={clip_gain_db:.2f}")
             volume_linear = _db_to_linear(fader_db)
 
             # Resolve group color → #rrggbb
@@ -341,18 +371,37 @@ class DawProjectDawProcessor(DawProcessor):
                 content=audio, time=0.0, duration=tc.duration_sec)
             clips = Utility.create_clips(clip)
 
+            # Build lane contents for this track
+            lane_contents = [clips]
+
+            # TODO not working
+            # Add expression gain (clip gain) when processor is
+            # enabled but files are not baked into the audio.
+            if clip_gain_db != 0.0:
+                gain_linear = _db_to_linear(clip_gain_db)
+                gain_points = Points(
+                    target=AutomationTarget(
+                        expression=ExpressionType.GAIN),
+                    points=[RealPoint(time=0.0, value=gain_linear)],
+                    unit="linear",
+                    time_unit=TimeUnit.SECONDS,
+                )
+                lane_contents.append(gain_points)
+
             # Create a Lanes entry for this track in the arrangement
             track_lane = Lanes(
                 track=new_track,
                 time_unit=TimeUnit.SECONDS,
-                lanes=[clips],
+                lanes=lane_contents,
             )
             project.arrangement.lanes.lanes.append(track_lane)
 
             results.append(DawCommandResult(
                 command=DawCommand("add_track", fname,
                                    {"folder": folder_dict.get("name", ""),
-                                    "fader_db": fader_db}),
+                                    "fader_db": fader_db,
+                                    "clip_gain_db": clip_gain_db}),
+
                 success=True))
 
             if progress_cb:

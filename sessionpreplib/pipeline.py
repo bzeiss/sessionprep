@@ -384,15 +384,15 @@ class Pipeline:
     ) -> SessionContext:
         """Apply enabled processors and write processed files.
 
-        Wipes *output_dir* before writing so stale files are never left
-        behind.  Respects ``track.processor_skip`` for per-track
-        exclusions.
+        Removes stale *audio* files from *output_dir* before writing,
+        while preserving non-audio artefacts (e.g. ``.dawproject``).
+        Respects ``track.processor_skip`` for per-track exclusions.
 
         Parameters
         ----------
         session : SessionContext
         output_dir : str
-            Target directory (wiped and recreated).
+            Target directory (stale audio files removed, then created).
         progress_cb : callable(current, total, message) or None
             Optional progress reporter.
 
@@ -403,9 +403,13 @@ class Pipeline:
             ``applied_processors`` updated per track and
             ``prepare_state`` set to ``"ready"``.
         """
-        # Clean output dir (best-effort: skip locked files on Windows)
+        # Clean stale *audio* files from output dir, preserving non-audio
+        # artefacts (e.g. .dawproject files written by DAW transfer).
+        from .audio import AUDIO_EXTENSIONS
         if os.path.isdir(output_dir):
             for entry in os.listdir(output_dir):
+                if not os.path.splitext(entry)[1].lower() in AUDIO_EXTENSIONS:
+                    continue
                 fp = os.path.join(output_dir, entry)
                 try:
                     if os.path.isfile(fp):

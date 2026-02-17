@@ -34,10 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from sessionpreplib.config import ANALYSIS_PARAMS, PRESENTATION_PARAMS, ParamSpec
-from sessionpreplib.detectors import default_detectors
-from sessionpreplib.processors import default_processors
-from sessionpreplib.daw_processors import default_daw_processors
+from sessionpreplib.config import ParamSpec
 from .param_widgets import (
     _argb_to_qcolor,
     _build_param_page,
@@ -45,7 +42,9 @@ from .param_widgets import (
     _build_tooltip,
     _read_widget,
     _set_widget_value,
-    DawProjectTemplatesWidget,
+    build_config_pages,
+    load_config_widgets,
+    read_config_widgets,
     GroupsTableWidget,
     sanitize_output_folder,
 )
@@ -204,10 +203,7 @@ class PreferencesDialog(QDialog):
         self._build_colors_page()
         self._build_groups_page()
 
-        self._build_analysis_page()
-        self._build_detector_pages()
-        self._build_processor_pages()
-        self._build_daw_processor_pages()
+        self._build_pipeline_pages()
 
         # Select first items
         self._global_tree.expandAll()
@@ -372,101 +368,15 @@ class PreferencesDialog(QDialog):
         self._general_widgets = widgets
         self._add_global_page(item, page)
 
-    # ── Analysis page ─────────────────────────────────────────────────
+    # ── Pipeline config pages (shared builder) ──────────────────────
 
-    def _build_analysis_page(self):
-        item = QTreeWidgetItem(self._preset_tree, ["Analysis"])
-        item.setFont(0, QFont("", -1, QFont.Bold))
-
-        preset = self._active_preset()
-        values = preset.get("analysis", {})
-        page, widgets = _build_param_page(ANALYSIS_PARAMS, values)
-        self._widgets["analysis"] = widgets
-        self._add_preset_page(item, page)
-
-    # ── Detector pages ────────────────────────────────────────────────
-
-    def _build_detector_pages(self):
-        parent_item = QTreeWidgetItem(self._preset_tree, ["Detectors"])
-        parent_item.setFont(0, QFont("", -1, QFont.Bold))
-
-        # Parent page: presentation params (config-preset-scoped)
-        preset = self._active_preset()
-        pres_values = preset.get("presentation", {})
-        parent_page, pres_widgets = _build_param_page(
-            PRESENTATION_PARAMS, pres_values)
-        self._widgets["_presentation"] = pres_widgets
-        self._add_preset_page(parent_item, parent_page)
-
-        det_sections = preset.get("detectors", {})
-        for det in default_detectors():
-            params = det.config_params()
-            if not params:
-                continue
-            child = QTreeWidgetItem(parent_item, [det.name])
-            values = det_sections.get(det.id, {})
-            page, widgets = _build_param_page(params, values)
-            self._widgets[f"detectors.{det.id}"] = widgets
-            self._add_preset_page(child, page)
-
-    # ── Processor pages ───────────────────────────────────────────────
-
-    def _build_processor_pages(self):
-        parent_item = QTreeWidgetItem(self._preset_tree, ["Processors"])
-        parent_item.setFont(0, QFont("", -1, QFont.Bold))
-
-        parent_page = QWidget()
-        pl = QVBoxLayout(parent_page)
-        pl.setContentsMargins(12, 12, 12, 12)
-        pl.addWidget(QLabel("Select a processor from the tree to configure it."))
-        pl.addStretch()
-        self._add_preset_page(parent_item, parent_page)
-
-        preset = self._active_preset()
-        proc_sections = preset.get("processors", {})
-        for proc in default_processors():
-            params = proc.config_params()
-            if not params:
-                continue
-            child = QTreeWidgetItem(parent_item, [proc.name])
-            values = proc_sections.get(proc.id, {})
-            page, widgets = _build_param_page(params, values)
-            self._widgets[f"processors.{proc.id}"] = widgets
-            self._add_preset_page(child, page)
-
-    def _build_daw_processor_pages(self):
-        parent_item = QTreeWidgetItem(self._preset_tree, ["DAW Processors"])
-        parent_item.setFont(0, QFont("", -1, QFont.Bold))
-
-        parent_page = QWidget()
-        pl = QVBoxLayout(parent_page)
-        pl.setContentsMargins(12, 12, 12, 12)
-        pl.addWidget(QLabel(
-            "Select a DAW processor from the tree to configure it."))
-        pl.addStretch()
-        self._add_preset_page(parent_item, parent_page)
-
-        preset = self._active_preset()
-        dp_sections = preset.get("daw_processors", {})
-        for dp in default_daw_processors():
-            params = dp.config_params()
-            if not params:
-                continue
-            child = QTreeWidgetItem(parent_item, [dp.name])
-            values = dp_sections.get(dp.id, {})
-            page, widgets = _build_param_page(params, values)
-            self._widgets[f"daw_processors.{dp.id}"] = widgets
-
-            # DAWProject: append templates widget below the param widgets
-            if dp.id == "dawproject":
-                tpl_widget = DawProjectTemplatesWidget()
-                templates = values.get("dawproject_templates", [])
-                tpl_widget.set_templates(templates)
-                self._dawproject_templates_widget = tpl_widget
-                page.layout().insertWidget(
-                    page.layout().count() - 1, tpl_widget)
-
-            self._add_preset_page(child, page)
+    def _build_pipeline_pages(self):
+        self._dawproject_templates_widget = build_config_pages(
+            self._preset_tree,
+            self._active_preset(),
+            self._widgets,
+            self._add_preset_page,
+        )
 
     # ── Colors page ────────────────────────────────────────────────────
 
@@ -839,103 +749,14 @@ class PreferencesDialog(QDialog):
         if not name:
             return
         preset = self._config_presets_data.setdefault(name, {})
-
-        # Analysis
-        analysis = preset.setdefault("analysis", {})
-        for key, widget in self._widgets.get("analysis", []):
-            analysis[key] = _read_widget(widget)
-
-        # Detectors
-        detectors = preset.setdefault("detectors", {})
-        for det in default_detectors():
-            wkey = f"detectors.{det.id}"
-            if wkey not in self._widgets:
-                continue
-            section = detectors.setdefault(det.id, {})
-            for key, widget in self._widgets[wkey]:
-                section[key] = _read_widget(widget)
-
-        # Processors
-        processors = preset.setdefault("processors", {})
-        for proc in default_processors():
-            wkey = f"processors.{proc.id}"
-            if wkey not in self._widgets:
-                continue
-            section = processors.setdefault(proc.id, {})
-            for key, widget in self._widgets[wkey]:
-                section[key] = _read_widget(widget)
-
-        # DAW Processors
-        daw_procs = preset.setdefault("daw_processors", {})
-        for dp in default_daw_processors():
-            wkey = f"daw_processors.{dp.id}"
-            if wkey not in self._widgets:
-                continue
-            section = daw_procs.setdefault(dp.id, {})
-            for key, widget in self._widgets[wkey]:
-                section[key] = _read_widget(widget)
-            # DAWProject: persist templates list
-            if dp.id == "dawproject" and hasattr(self, "_dawproject_templates_widget"):
-                section["dawproject_templates"] = (
-                    self._dawproject_templates_widget.get_templates())
-
-        # Presentation
-        presentation = preset.setdefault("presentation", {})
-        for key, widget in self._widgets.get("_presentation", []):
-            presentation[key] = _read_widget(widget)
+        preset.update(read_config_widgets(
+            self._widgets, self._dawproject_templates_widget))
 
     def _load_cfg_preset_widgets(self, preset_name: str):
         """Load config preset values into pipeline widgets."""
         preset = self._config_presets_data.get(preset_name, {})
-
-        # Analysis
-        analysis = preset.get("analysis", {})
-        for key, widget in self._widgets.get("analysis", []):
-            if key in analysis:
-                _set_widget_value(widget, analysis[key])
-
-        # Detectors
-        det_sections = preset.get("detectors", {})
-        for det in default_detectors():
-            wkey = f"detectors.{det.id}"
-            if wkey not in self._widgets:
-                continue
-            values = det_sections.get(det.id, {})
-            for key, widget in self._widgets[wkey]:
-                if key in values:
-                    _set_widget_value(widget, values[key])
-
-        # Processors
-        proc_sections = preset.get("processors", {})
-        for proc in default_processors():
-            wkey = f"processors.{proc.id}"
-            if wkey not in self._widgets:
-                continue
-            values = proc_sections.get(proc.id, {})
-            for key, widget in self._widgets[wkey]:
-                if key in values:
-                    _set_widget_value(widget, values[key])
-
-        # DAW Processors
-        dp_sections = preset.get("daw_processors", {})
-        for dp in default_daw_processors():
-            wkey = f"daw_processors.{dp.id}"
-            if wkey not in self._widgets:
-                continue
-            values = dp_sections.get(dp.id, {})
-            for key, widget in self._widgets[wkey]:
-                if key in values:
-                    _set_widget_value(widget, values[key])
-            # DAWProject: restore templates list
-            if dp.id == "dawproject" and hasattr(self, "_dawproject_templates_widget"):
-                self._dawproject_templates_widget.set_templates(
-                    values.get("dawproject_templates", []))
-
-        # Presentation
-        pres = preset.get("presentation", {})
-        for key, widget in self._widgets.get("_presentation", []):
-            if key in pres:
-                _set_widget_value(widget, pres[key])
+        load_config_widgets(
+            self._widgets, preset, self._dawproject_templates_widget)
 
     def _update_cfg_preset_buttons(self):
         """Enable/disable Rename and Delete for config presets."""
