@@ -289,6 +289,7 @@ sudo dnf install gcc patchelf ccache libatomic-static
 | `PySide6` | Optional (gui) | `sessionprepgui` (Qt widgets, main window, waveform) |
 | `sounddevice` | Optional (gui) | `sessionprepgui/playback.py` (audio playback via PortAudio) |
 | `py-ptsl` | Optional (gui) | `sessionpreplib/daw_processors/protools.py` (Pro Tools Scripting SDK gRPC client) |
+| `dawproject` | Optional (gui) | `sessionpreplib/daw_processors/dawproject.py` (DAWproject file format library) |
 | `pytest` | Dev | Test runner |
 | `pytest-cov` | Dev | Coverage reporting |
 | `pyinstaller` | Dev | Standalone executable builds |
@@ -339,9 +340,11 @@ sessionpreplib/
     daw_processors/
         __init__.py              # Exports all DAW processors; provides default_daw_processors()
         protools.py              # ProToolsDawProcessor — Pro Tools integration via py-ptsl gRPC SDK
+        dawproject.py            # DawProjectDawProcessor — .dawproject file generation from templates
 
 sessionprepgui/                  # GUI package (PySide6)
     __init__.py                  # Exports main()
+    log.py                       # Lightweight debug logging (SP_DEBUG env var gated)
     res/                         # Application icons (SVG, PNG, ICO)
     settings.py                  # Persistent config (load/save/validate, OS paths)
     theme.py                     # Colors, FILE_COLOR_* constants, dark theme
@@ -853,8 +856,16 @@ After all processors run, grouped tracks receive the minimum gain of the group.
 ### 7.6 Fader Offsets
 
 Implemented in `Pipeline._compute_fader_offsets()`. Calculates inverse of gain,
-applies anchor adjustment (`--anchor` or `--normalize_faders`). Stored in
+applies headroom rebalancing and optional anchor adjustment. Stored in
 `ProcessorResult.data["fader_offset"]`.
+
+**Headroom rebalancing:** Ensures no fader exceeds `ceiling - headroom`.
+The ceiling is set per-DAW processor via `_fader_ceiling_db` (e.g. +6 dB for
+DAWproject, +12 dB for Pro Tools). The headroom margin is configured via
+`fader_headroom_db` (default 8 dB). If the highest fader offset exceeds
+`ceiling - headroom`, all fader offsets are shifted down uniformly by the
+excess amount. The shift is stored in `ProcessorResult.data["fader_rebalance_shift"]`
+and logged via `dbg()` when `SP_DEBUG` is active.
 
 ### 7.7 Registration
 
@@ -984,6 +995,8 @@ processors:
 ```python
 def default_daw_processors() -> list[DawProcessor]:
     return [ProToolsDawProcessor()]
+    # DawProjectDawProcessor instances are created dynamically
+    # via create_instances() based on configured templates.
 ```
 
 ### 8.9 ProToolsDawProcessor (`protools.py`)
@@ -1001,10 +1014,18 @@ through the `py-ptsl` Python client.
 
 | Method | Behaviour |
 |--------|-----------|
-| `check_connectivity()` | Opens a `ptsl.Engine`, calls `ptsl.open()`, returns success/failure + Pro Tools session name |
+| `check_connectivity()` | Opens a `ptsl.Engine`, calls `ptsl.open()`, returns success/failure + PTSL protocol version. On failure, the GUI shows a `QMessageBox.warning` dialog with the error and keeps the toolbar functional. |
 | `fetch(session)` | Retrieves the folder track hierarchy and stores it in `session.daw_state["protools"]["folders"]`. Populates the GUI folder tree for drag-and-drop track assignment. |
-| `transfer(session)` | Imports audio files into their assigned Pro Tools folders, sets track colors based on group → CIE L\*a\*b\* perceptual matching against the Pro Tools color palette. Accepts a `progress_callback(step, total, message)` for GUI progress reporting. Results are appended to `session.daw_command_log`. |
+| `transfer(session)` | Wrapped in a PTSL batch job for modal progress + user-lock. Phases: (1) batch import all audio files in one call, (2) per-track create + spot clip (parallel, 6 workers), (3) batch colorize by group, (4) set fader offsets (when bimodal normalization is enabled and processed files are used). Accepts a `progress_callback(step, total, message)` for GUI progress. Results appended to `session.daw_command_log`. |
 | `sync(session)` | Not yet implemented (raises `NotImplementedError`). |
+
+**Batch import optimisation:** All audio files are imported to the Pro Tools
+clip list in a single `CId_ImportData` call (instead of one per track),
+significantly reducing round-trip overhead on large sessions.
+
+**Automatic fader adjustment:** When bimodal normalization is enabled and
+processed files are used (`_use_processed`), fader offsets from the processor
+results are applied to newly created tracks via `CId_SetTrackVolume`.
 
 **Color matching:**
 
@@ -1021,6 +1042,44 @@ group. The matching pipeline is:
 5. Apply `CId_SetTrackColor` with the matched palette index.
 
 Tracks with no group assignment skip colorization.
+
+### 8.10 DawProjectDawProcessor (`dawproject.py`)
+
+File-based `DawProcessor` that generates `.dawproject` interchange files from
+a template. Unlike Pro Tools, this processor does not communicate with a
+running DAW — it reads/writes `.dawproject` ZIP archives directly.
+
+- **ID:** `dawproject` (base); `dawproject_0`, `dawproject_1`, … (per-template instances)
+- **Config:** `dawproject_templates` — list of template dicts, each with
+  `name`, `template_path`, and optional `fader_ceiling_db` (default 6.0 dB)
+
+**Template-based instantiation:** The session Config tab includes a Mix
+Templates widget where users configure one or more `.dawproject` template
+files. Each template produces a separate `DawProjectDawProcessor` instance
+(via `create_instances()`), which appears as its own entry in the DAW
+processor dropdown (e.g. "DAWproject – MyTemplate").
+
+**Lifecycle implementation:**
+
+| Method | Behaviour |
+|--------|-----------|
+| `check_connectivity()` | Validates template file exists and is a valid ZIP; returns `(True, "Template OK")` or failure message. |
+| `fetch(session)` | Loads the template's folder track hierarchy into `session.daw_state`. Populates the GUI folder tree for drag-and-drop assignment. |
+| `transfer(session)` | Loads template project, creates new audio tracks with clips in the arrangement, sets fader volumes and group colors, writes the result to `<output_folder>/<template_name>.dawproject`. When bimodal normalization is enabled and files are not processed, expression gain (clip gain) is written as automation points (TODO: not yet working — see XML structure issue with dawproject-py). |
+
+**Gain application logic:**
+
+- `fader_db` → mapped to track channel volume (linear)
+- `clip_gain_db` → expression gain automation (`Points` with `ExpressionType.GAIN`)
+- Both are only set when bimodal normalization is enabled, the track is not
+  silent/skipped, and the processor is not in `track.processor_skip`
+- `clip_gain_db` is set only when the track's actual audio file is the
+  original (not a processed/baked file)
+
+**Config refresh:** Both `_do_daw_transfer` and `_on_prepare` in the GUI
+refresh `session.config` from the live session config widgets before starting
+the worker, ensuring that processor enabled/disabled changes made after
+analysis are reflected.
 
 ---
 
@@ -1065,7 +1124,8 @@ originals.
 
 **Behaviour:**
 
-1. Wipe `output_dir` (clean slate on every run).
+1. Remove stale *audio* files from `output_dir`, preserving non-audio
+   artefacts (e.g. `.dawproject` files written by DAW transfer).
 2. For each OK track, determine applicable processors: all enabled processors
    whose ID is **not** in `track.processor_skip`.
 3. Filter to processors with a valid (non-error) `ProcessorResult`.
@@ -1083,7 +1143,31 @@ whenever gain, classification, RMS anchor, per-track processor selection, or
 re-analysis changes occur. The Prepare button and Use Processed toggle reflect
 the current state.
 
-### 9.5 Parallel Execution
+### 9.5 Profiling & Debugging
+
+When the `SP_DEBUG` environment variable is set to `1` or `true`, the pipeline
+emits per-component timing via `dbg()` (from `sessionprepgui/log.py`).
+Output goes to stderr with timestamps and caller class names.
+
+**Instrumented phases:**
+
+- **analyze:** per-detector per-track timing, per-track total, phase total
+  with per-track average
+- **plan:** per-processor per-track timing, per-track total, phase total
+  with per-track average, group levelling time, fader offset time (including
+  rebalance shift if applied)
+- **transfer (DAWproject):** per-track gain decision trace (`bn_enabled`,
+  `actually_processed`, `has_pr`, `classification`, `skip`, `gain_db`,
+  `fader_offset` → final `fader_db`, `clip_gain_db`)
+
+Example output:
+```
+[22:29:05.304 Pipeline] detector audio_classifier on 01_KickTrigger.wav: 577.3 ms
+[22:29:05.304 Pipeline] all detectors on 01_KickTrigger.wav: 1203.4 ms
+[22:29:05.304 Pipeline] analyze phase (track detectors): 27 tracks in 8170.2 ms (302.6 ms/track avg)
+```
+
+### 9.6 Parallel Execution
 
 All three parallelizable stages use `concurrent.futures.ThreadPoolExecutor`:
 
@@ -1116,7 +1200,7 @@ at the number of tracks.
 - `_apply_group_levels()` — grouped tracks get minimum gain
 - `_compute_fader_offsets()` — inverse gain + anchor adjustment
 
-### 9.6 `load_session()` Helper
+### 9.7 `load_session()` Helper
 
 ```python
 def load_session(source_dir, config, event_bus=None) -> SessionContext
@@ -1125,7 +1209,7 @@ def load_session(source_dir, config, event_bus=None) -> SessionContext
 Loads all WAVs from `source_dir` in parallel, assigns groups (named,
 first-match-wins), appends overlap warnings to `session.warnings`.
 
-### 9.7 Topological Sort
+### 9.8 Topological Sort
 
 `_topo_sort_detectors()` uses Kahn's algorithm. Raises `ConfigError` on
 cycles or missing dependencies.
@@ -1415,6 +1499,7 @@ group).
 | `theme.py` | `COLORS` dict, `FILE_COLOR_*` constants, dark palette + stylesheet |
 | `helpers.py` | `esc()`, `track_analysis_label(track, detectors=None)` (filters via `is_relevant()`), `fmt_time()`, severity maps |
 | `widgets.py` | `BatchEditTableWidget`, `BatchComboBox` — reusable batch-edit base classes preserving multi-row selection across cell-widget clicks (zero app imports) |
+| `log.py` | `dbg(msg)` — lightweight debug logging to stderr, gated by `SP_DEBUG` env var. Timestamped output with caller class name. Used by `pipeline.py`, `dawproject.py`, and other modules via conditional import. |
 | `worker.py` | QThread workers: `AnalyzeWorker` (pipeline in background, thread-safe progress, per-track signals), `BatchReanalyzeWorker` (subset re-analysis after batch overrides), `PrepareWorker` (runs `Pipeline.prepare()` in background with progress), `DawCheckWorker` (connectivity check), `DawFetchWorker` (folder fetch), `DawTransferWorker` (transfer with progress + progress_value signals) |
 | `report.py` | HTML rendering: `render_summary_html()`, `render_fader_table_html()`, `render_track_detail_html()` |
 | `waveform.py` | `WaveformWidget` — two display modes (waveform + spectrogram), vectorised NumPy peak/RMS downsampling, mel spectrogram (256 mel bins via `scipy.signal.stft`, configurable FFT/window/dB range/colormap), dB and frequency scales, peak/RMS markers, crosshair mouse guide (dBFS in waveform, Hz in spectrogram), mouse-wheel zoom/pan (Ctrl+wheel h-zoom, Ctrl+Shift+wheel v-zoom, Shift+Alt+wheel freq pan, Shift+wheel scroll), keyboard shortcuts (R/T zoom), detector issue overlays with optional frequency bounds, RMS L/R and RMS AVG envelopes, playback cursor, tooltips |
@@ -1591,6 +1676,24 @@ leaves. `preferences` reads `ParamSpec` metadata from detectors and processors.
   expensive phase (channel split, peak finding, per-channel RMS cumsum,
   spectrogram) and exits early if set, preventing CPU pileup from stacked
   background threads.
+- **Auto-Group** — the analysis toolbar includes an "Auto-Group" button
+  (right-aligned, next to Prepare). When clicked, it reassigns all OK tracks
+  to groups based on the active group preset's keyword matching rules (using
+  `matches_keywords()` from `utils.py`). Tracks are matched against each
+  group's patterns in order; unmatched tracks are unassigned. A confirmation
+  dialog shows the track count before proceeding. After assignment, the
+  analysis table, setup table, and group combos are refreshed. The fader
+  table in the report is also rebuilt to reflect the new groupings.
+- **DAW connection error handling** — when `check_connectivity()` fails
+  (e.g. Pro Tools not running), the GUI shows a `QMessageBox.warning` dialog
+  with the error message, constrains the status label width to prevent
+  toolbar overflow, and keeps all toolbar buttons functional for retry.
+- **Config refresh before transfer/prepare** — both `_do_daw_transfer` and
+  `_on_prepare` call `self._session.config.update(self._flat_config())`
+  before starting the worker, ensuring that processor enabled/disabled
+  changes made in the session Config tab after analysis take effect in the
+  Pipeline (which re-configures and re-filters processors from `session.config`
+  in its constructor).
 - The GUI contains **zero** analysis, detection, processing, or DSP logic —
   all analysis runs through `sessionpreplib` via `AnalyzeWorker`.
 

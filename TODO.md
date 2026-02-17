@@ -34,7 +34,10 @@
 - [x] **Concrete: ProToolsProcessor** (PTSL) — `ProToolsDawProcessor` in `daw_processors/protools.py`.
   `check_connectivity()`, `fetch()` (folder hierarchy), `transfer()` (audio import + CIE L*a*b*
   perceptual color matching). `sync()` not yet implemented. Configurable command delay.
-- [ ] **Concrete: DAWProjectProcessor** (.dawproject files)
+- [x] **Concrete: DAWProjectProcessor** (.dawproject files) — `DawProjectDawProcessor` in
+  `daw_processors/dawproject.py`. Template-based `.dawproject` file generation with track/clip
+  creation, fader volumes, group colors. Expression gain (clip gain) automation partially
+  implemented (TODO: XML structure issue with dawproject-py library).
 - [x] **GUI toolbar dropdown** for active DAW processor selection — combo box + Check/Fetch/Transfer/Sync actions in Session Setup toolbar
 - [ ] **GUI DAW Tools panel** (color picker, etc. → execute_commands)
 - [ ] **Undo execution** (rollback last transfer/sync batch)
@@ -497,7 +500,7 @@
 | **6** | Auto-fix capabilities | DC removal, SRC |
 | ~~**7**~~ | ~~Classification v2~~ | ~~Crest improvements~~ → ✅ Done (audio classifier with decay metric) |
 | ~~**7b**~~ | ~~Simplify CLI grouping~~ | ~~Overlap policies, anonymous IDs~~ → ✅ Done (named groups, first-match-wins, no overlap policy) |
-| **8** | DAW scripting | ~~DawProcessor ABC~~, ~~PTSL integration (check/fetch/transfer)~~, sync, DAWProject backend |
+| **8** | DAW scripting | ~~DawProcessor ABC~~, ~~PTSL integration (check/fetch/transfer)~~, ~~PT batch import~~, ~~PT fader levels~~, ~~DAWProject backend~~, sync, DAWProject expression gain fix |
 | ~~**9**~~ | ~~File-based processing~~ | ~~AudioProcessor enabled toggle, Pipeline.prepare(), Prepare button, Processing column, Use Processed toggle, staleness, MonoDownmix stub~~ → ✅ Done |
 | ~~**10**~~ | ~~Stereo compatibility~~ | ~~Merge StereoCorrelation + MonoFolddown, windowed analysis, waveform overlays~~ → ✅ Done |
 | **Ongoing** | Low-hanging fruit | Stereo narrowness, Start offset, Name mismatch, `rich` optional |
@@ -568,3 +571,13 @@
 | ~~Mono playback button~~ | — | ✅ Resolved (checkable **M** button in playback controls; `PlaybackController.play(mono=True)` folds stereo to mono via (L+R)/2; orange when active) |
 | ~~Analysis column severity counts~~ | — | ✅ Resolved (replaced single worst-severity label with colored per-severity counts: `2P 1A 5I` format; QLabel cell widget with HTML rich text + hidden `_SortableItem` for sorting) |
 | ~~Peak/RMS Max markers default off~~ | — | ✅ Resolved (`_show_markers` and toggle default changed to `False`) |
+| ~~Auto-Group files by keywords~~ | — | ✅ Resolved (Auto-Group button in analysis toolbar; assigns tracks to groups via `matches_keywords()` pattern matching; confirmation dialog, refreshes tables + report) |
+| ~~Pro Tools quicker imports~~ | — | ✅ Resolved (batch import: single `CId_ImportData` call for all files instead of one per track; PTSL batch job wraps entire transfer for modal progress) |
+| ~~Pro Tools automatic fader levels~~ | — | ✅ Resolved (`CId_SetTrackVolume` applies fader offsets from bimodal normalization when processed files are used) |
+| ~~Fader headroom rebalancing~~ | — | ✅ Resolved (`_compute_fader_offsets` ensures max fader ≤ ceiling − headroom; uniform downshift stored in `fader_rebalance_shift`; per-DAW ceiling via `_fader_ceiling_db`) |
+| ~~Detector/processor profiling~~ | — | ✅ Resolved (per-component `time.perf_counter` timing via `dbg()` in pipeline.py; per-detector, per-processor, per-phase totals with averages; gated by `SP_DEBUG` env var) |
+| ~~DAWProject processor~~ | — | ✅ Resolved (template-based `.dawproject` generation with tracks, clips, fader volumes, group colors; expression gain TODO) |
+| ~~Mix Templates widget~~ | — | ✅ Resolved (session Config tab widget for configuring `.dawproject` template files with name, path, fader ceiling) |
+| ~~Fetch error dialog~~ | — | ✅ Resolved (QMessageBox.warning on connectivity failure; status label width constrained; toolbar stays functional) |
+| ~~Prepare preserves .dawproject~~ | — | ✅ Resolved (prepare phase removes only audio files from output dir, preserving `.dawproject` and other non-audio artefacts) |
+| ~~Config refresh before transfer/prepare~~ | — | ✅ Resolved (`session.config.update(_flat_config())` in both `_do_daw_transfer` and `_on_prepare` ensures widget changes take effect) |
