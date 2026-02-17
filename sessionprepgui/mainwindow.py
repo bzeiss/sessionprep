@@ -925,7 +925,8 @@ class SessionPrepWindow(QMainWindow):
 
     def _do_daw_transfer(self):
         """Actually start the transfer (called after successful connectivity check)."""
-        self._status_bar.showMessage("Transferring to Pro Tools\u2026")
+        dp_name = self._active_daw_processor.name if self._active_daw_processor else "DAW"
+        self._status_bar.showMessage(f"Transferring to {dp_name}\u2026")
         self._transfer_progress.start("Preparing\u2026")
         # Inject GUI config (groups + colors) into session.config so
         # transfer() can resolve group → color ARGB
@@ -933,6 +934,10 @@ class SessionPrepWindow(QMainWindow):
             self._session_groups)
         colors = self._config.get("colors", PT_DEFAULT_COLORS)
         self._session.config["gui"]["colors"] = colors
+        # Inject source dir and output folder for file-based processors
+        self._session.config["_source_dir"] = self._source_dir
+        self._session.config["_output_folder"] = self._config.get(
+            "app", {}).get("output_folder", "processed")
         self._daw_transfer_worker = DawTransferWorker(
             self._active_daw_processor, self._session)
         self._daw_transfer_worker.progress.connect(self._on_transfer_progress)

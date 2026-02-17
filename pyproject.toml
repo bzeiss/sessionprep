@@ -19,6 +19,9 @@ sessionprep = "sessionprep:process_files"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.hatch.version]
 path = "sessionpreplib/_version.py"
 
@@ -33,7 +36,12 @@ pythonpath = ["."]
 
 [project.optional-dependencies]
 cli = ["rich>=13.0"]
-gui = ["PySide6>=6.10.2", "sounddevice>=0.5.5", "py-ptsl>=600.2.0"]
+gui = [
+    "PySide6>=6.10.2",
+    "sounddevice>=0.5.5",
+    "py-ptsl>=600.2.0",
+    "dawproject @ git+https://github.com/roex-audio/dawproject-py.git@e848bd06b00408018ff97dfb54942f3fa303a6a6",
+]
 
 [dependency-groups]
 dev = [
