@@ -263,8 +263,12 @@ class ProToolsDawProcessor(DawProcessor):
             address=address,
         )
 
-    def transfer(self, session: SessionContext,
-                 progress_cb=None) -> list[DawCommandResult]:
+    def transfer(
+        self,
+        session: SessionContext,
+        output_path: str,
+        progress_cb=None,
+    ) -> list[DawCommandResult]:
         """Import assigned tracks into Pro Tools folders and colorize.
 
         Uses a PTSL batch job to wrap all operations, providing a

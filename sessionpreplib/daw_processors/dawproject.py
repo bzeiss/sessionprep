@@ -193,8 +193,39 @@ class DawProjectDawProcessor(DawProcessor):
                     track.tracks, folders, parent_id=track.id,
                     counter=counter)
 
-    def transfer(self, session: SessionContext,
-                 progress_cb=None) -> list[DawCommandResult]:
+    def resolve_output_path(
+        self,
+        session: SessionContext,
+        parent_widget=None,
+    ) -> str | None:
+        """Compute default .dawproject path and show a save-file dialog.
+
+        Returns the chosen path, or ``None`` if the user cancelled.
+        """
+        from PySide6.QtWidgets import QFileDialog
+
+        source_dir = session.config.get("_source_dir", "")
+        output_folder = session.config.get("_output_folder", "processed")
+        output_dir = os.path.join(source_dir, output_folder) if source_dir else ""
+
+        safe_name = self._template_name or self.name or "dawproject"
+        safe_name = "".join(
+            c if c.isalnum() or c in " _-" else "_" for c in safe_name)
+        default_path = os.path.join(output_dir, f"{safe_name}.dawproject") \
+            if output_dir else f"{safe_name}.dawproject"
+
+        path, _ = QFileDialog.getSaveFileName(
+            parent_widget, "Save DAWproject", default_path,
+            "DAWproject (*.dawproject);;All Files (*)",
+        )
+        return path if path else None
+
+    def transfer(
+        self,
+        session: SessionContext,
+        output_path: str,
+        progress_cb=None,
+    ) -> list[DawCommandResult]:
         try:
             from dawproject import (
                 Arrangement, Audio, AutomationTarget, Channel,
@@ -220,21 +251,10 @@ class DawProjectDawProcessor(DawProcessor):
 
         results: list[DawCommandResult] = []
 
-        # ── Determine output path ─────────────────────────────────
-        source_dir = session.config.get("_source_dir", "")
-        output_folder = session.config.get("_output_folder", "processed")
-        if not source_dir:
-            return [DawCommandResult(
-                command=DawCommand("transfer", "", {}),
-                success=False, error="No source directory set")]
-
-        output_dir = os.path.join(source_dir, output_folder)
-        os.makedirs(output_dir, exist_ok=True)
-
-        safe_name = self._template_name or "dawproject"
-        safe_name = "".join(
-            c if c.isalnum() or c in " _-" else "_" for c in safe_name)
-        output_path = os.path.join(output_dir, f"{safe_name}.dawproject")
+        # ── Ensure output directory exists ────────────────────────
+        out_dir = os.path.dirname(output_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
 
         # ── Load template ─────────────────────────────────────────
         Referenceable.reset_id()

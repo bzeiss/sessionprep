@@ -88,17 +88,52 @@ class DawProcessor(ABC):
         """
         ...
 
+    def resolve_output_path(
+        self,
+        session: SessionContext,
+        parent_widget=None,
+    ) -> str | None:
+        """Resolve the output path for a transfer, optionally prompting the user.
+
+        Called by the GUI before starting a transfer worker.
+
+        Return values
+        -------------
+        ``None``
+            User cancelled — the GUI should abort.
+        ``""``
+            No file path needed (e.g. gRPC-based processors like Pro Tools).
+        non-empty str
+            Absolute path to write the output file to.
+
+        The default implementation returns ``""`` (no path, no dialog).
+        File-based processors (e.g. DAWproject) override this to compute a
+        default path and show a save-file dialog.
+        """
+        return ""
+
     @abstractmethod
-    def transfer(self, session: SessionContext) -> list[DawCommandResult]:
+    def transfer(
+        self,
+        session: SessionContext,
+        output_path: str,
+        progress_cb=None,
+    ) -> list[DawCommandResult]:
         """Initial full push of session data to the DAW.
 
-        Internally:
-            1. Builds a list of DawCommand objects from session state
-            2. Executes each via processor-private dispatch
-            3. Appends results to session.daw_command_log
-            4. Snapshots the transferred state for future sync() diffs
+        Parameters
+        ----------
+        session:
+            The current session context.
+        output_path:
+            Explicit destination path for the output file (e.g.
+            ``/path/to/session.dawproject``).  The caller is responsible
+            for choosing this path — supervised callers show a file dialog;
+            unsupervised (batch) callers derive it from track/session data.
+        progress_cb:
+            Optional ``(current, total, message)`` callback.
 
-        Returns the list of results for this batch.
+        Returns the list of DawCommandResult for this batch.
         """
         ...
 

@@ -945,9 +945,11 @@ class SessionPrepWindow(QMainWindow):
 
     def _do_daw_transfer(self):
         """Actually start the transfer (called after successful connectivity check)."""
-        dp_name = self._active_daw_processor.name if self._active_daw_processor else "DAW"
-        self._status_bar.showMessage(f"Transferring to {dp_name}\u2026")
-        self._transfer_progress.start("Preparing\u2026")
+        if not self._active_daw_processor or not self._session:
+            return
+
+        output_folder = self._config.get("app", {}).get("output_folder", "processed")
+
         # Refresh pipeline config from current session widgets so that
         # processor enabled/disabled changes made after analysis take effect.
         self._session.config.update(self._flat_config())
@@ -957,12 +959,23 @@ class SessionPrepWindow(QMainWindow):
             self._session_groups)
         colors = self._config.get("colors", PT_DEFAULT_COLORS)
         self._session.config["gui"]["colors"] = colors
-        # Inject source dir and output folder for file-based processors
+        # Keep source dir / output folder in config for processor.resolve_output_path()
         self._session.config["_source_dir"] = self._source_dir
-        self._session.config["_output_folder"] = self._config.get(
-            "app", {}).get("output_folder", "processed")
+        self._session.config["_output_folder"] = output_folder
+
+        # ── Let the processor decide the output path (shows dialog if needed) ─
+        output_path = self._active_daw_processor.resolve_output_path(
+            self._session, self)
+        if output_path is None:
+            self._update_daw_lifecycle_buttons()
+            return
+
+        dp_name = self._active_daw_processor.name
+        self._status_bar.showMessage(f"Transferring to {dp_name}\u2026")
+        self._transfer_progress.start("Preparing\u2026")
+
         self._daw_transfer_worker = DawTransferWorker(
-            self._active_daw_processor, self._session)
+            self._active_daw_processor, self._session, output_path)
         self._daw_transfer_worker.progress.connect(self._on_transfer_progress)
         self._daw_transfer_worker.progress_value.connect(
             self._on_transfer_progress_value)
