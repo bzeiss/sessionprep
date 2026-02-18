@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest, macos-13]
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-15-intel]
 
     steps:
       - uses: actions/checkout@v4
@@ -45,13 +45,32 @@ jobs:
       - name: Build with Nuitka
         run: uv run python build_nuitka.py all
 
+      - name: Package macOS .app bundles as DMG
+        if: runner.os == 'macOS'
+        run: |
+          brew install create-dmg
+          for app in dist_nuitka/*.app; do
+            [ -d "$app" ] || continue
+            name=$(basename "$app" .app)
+            create-dmg \
+              --volname "$name" \
+              --app-drop-link 600 185 \
+              --sandbox-safe \
+              "dist_nuitka/${name}.dmg" \
+              "$app"
+          done
+
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: sessionprep-nuitka-${{ matrix.os }}
+          name: sessionprep-${{ matrix.os }}
           path: |
-            dist_nuitka/*
+            dist_nuitka/*.dmg
+            dist_nuitka/sessionprep-cli-*
+            dist_nuitka/sessionprep-gui-*
             !dist_nuitka/*.build
             !dist_nuitka/*.dist
             !dist_nuitka/*.onefile-build
+            !dist_nuitka/*.app
+            !dist_nuitka/*/
           if-no-files-found: error

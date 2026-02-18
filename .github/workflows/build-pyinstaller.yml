@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest, macos-13]
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-15-intel]
 
     steps:
       - uses: actions/checkout@v4
@@ -30,12 +30,31 @@ jobs:
         # Using --onefile to produce single binaries where possible (standard distribution format)
         run: uv run python build_pyinstaller.py --onefile all
 
+      - name: Package macOS .app bundles as DMG
+        if: runner.os == 'macOS'
+        run: |
+          brew install create-dmg
+          for app in dist_pyinstaller/*.app; do
+            [ -d "$app" ] || continue
+            name=$(basename "$app" .app)
+            create-dmg \
+              --volname "$name" \
+              --app-drop-link 600 185 \
+              --sandbox-safe \
+              "dist_pyinstaller/${name}.dmg" \
+              "$app"
+          done
+
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: sessionprep-pyinstaller-${{ matrix.os }}
+          name: sessionprep-${{ matrix.os }}
           path: |
-            dist_pyinstaller/*
+            dist_pyinstaller/*.dmg
+            dist_pyinstaller/sessionprep-cli-*
+            dist_pyinstaller/sessionprep-gui-*
             !dist_pyinstaller/*.build
             !dist_pyinstaller/*.spec
+            !dist_pyinstaller/*.app
+            !dist_pyinstaller/*/
           if-no-files-found: error

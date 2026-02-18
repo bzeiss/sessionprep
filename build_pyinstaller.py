@@ -102,7 +102,7 @@ def build(target_key: str, onefile: bool = False):
         cmd.append("--onefile")
     else:
         if onefile and is_macos and windowed:
-            print("Note: macOS GUI always builds as onedir (.app bundle will be zipped)")
+            print("Note: macOS GUI always builds as onedir (.app bundle — DMG created by workflow)")
         cmd.append("--onedir")
 
     cmd.append(entry_point)
@@ -128,16 +128,6 @@ def build(target_key: str, onefile: bool = False):
         print(f"Size: {size_mb:.1f} MB")
     else:
         print(f"\nBuild completed but executable not found at expected path: {exe_path}")
-
-    # On macOS, --windowed always produces a .app bundle — zip it
-    if is_macos and windowed:
-        app_bundle = os.path.join(DIST_DIR, f"{app_name}.app")
-        if os.path.isdir(app_bundle):
-            zip_base = os.path.join(DIST_DIR, f"{app_name}")
-            shutil.make_archive(zip_base, "zip", DIST_DIR, f"{app_name}.app")
-            zip_path = f"{zip_base}.zip"
-            zip_mb = os.path.getsize(zip_path) / (1024 * 1024)
-            print(f"Zipped .app bundle: {zip_path} ({zip_mb:.1f} MB)")
 
     return True
 
