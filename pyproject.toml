@@ -43,6 +43,9 @@ gui = [
     "dawproject @ git+https://github.com/roex-audio/dawproject-py.git@e848bd06b00408018ff97dfb54942f3fa303a6a6",
 ]
 
+[tool.uv.extra-build-dependencies]
+dawproject = ["setuptools>=67"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
