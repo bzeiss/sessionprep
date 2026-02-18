@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QTableWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -291,6 +292,30 @@ class BatchComboBox(QComboBox):
     After handling the batch, the slot should reset the flag::
 
         combo.batch_mode = False
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.batch_mode: bool = False
+
+    def mousePressEvent(self, event):
+        mods = QApplication.keyboardModifiers()
+        self.batch_mode = bool(
+            mods & Qt.AltModifier and mods & Qt.ShiftModifier)
+        super().mousePressEvent(event)
+
+
+class BatchToolButton(QToolButton):
+    """QToolButton that detects Alt+Shift on click for batch-edit mode.
+
+    When the user holds **Alt+Shift** while clicking the button,
+    ``batch_mode`` is set to ``True``.  The connected action-slot can
+    inspect this flag to decide whether to apply the toggle to all
+    selected rows or just the single row.
+
+    After handling the batch, the slot should reset the flag::
+
+        btn.batch_mode = False
     """
 
     def __init__(self, parent=None):

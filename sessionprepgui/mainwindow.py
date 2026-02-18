@@ -78,7 +78,7 @@ from .param_widgets import (
 )
 from .preferences import PreferencesDialog, _argb_to_qcolor
 from .report import render_summary_html, render_track_detail_html
-from .widgets import BatchEditTableWidget, BatchComboBox, ProgressPanel
+from .widgets import BatchEditTableWidget, BatchComboBox, BatchToolButton, ProgressPanel
 from .worker import (
     AnalyzeWorker, BatchReanalyzeWorker, DawCheckWorker, DawFetchWorker,
     DawTransferWorker, PrepareWorker,
@@ -2993,7 +2993,7 @@ class SessionPrepWindow(QMainWindow):
 
         processors = self._session.processors if self._session else []
 
-        btn = QToolButton()
+        btn = BatchToolButton()
         btn.setProperty("track_filename", track.filename)
 
         if processors:
@@ -3072,13 +3072,33 @@ class SessionPrepWindow(QMainWindow):
             return
 
         proc_id = action.data()
-        if checked:
-            track.processor_skip.discard(proc_id)
-        else:
-            track.processor_skip.add(proc_id)
-
         processors = self._session.processors if self._session else []
-        self._update_processing_button_label(btn, track, processors)
+
+        if getattr(btn, 'batch_mode', False):
+            btn.batch_mode = False
+            batch_keys = self._track_table.batch_selected_keys()
+            track_map = {t.filename: t for t in self._session.tracks}
+            for fname in batch_keys:
+                t = track_map.get(fname)
+                if not t or t.status != "OK":
+                    continue
+                if checked:
+                    t.processor_skip.discard(proc_id)
+                else:
+                    t.processor_skip.add(proc_id)
+                row = self._find_table_row(fname)
+                if row >= 0:
+                    b = self._track_table.cellWidget(row, 7)
+                    if b:
+                        self._update_processing_button_label(b, t, processors)
+            self._track_table.restore_selection(batch_keys)
+        else:
+            if checked:
+                track.processor_skip.discard(proc_id)
+            else:
+                track.processor_skip.add(proc_id)
+            self._update_processing_button_label(btn, track, processors)
+
         self._mark_prepare_stale()
 
     def _populate_table(self, session):
