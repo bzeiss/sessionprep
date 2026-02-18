@@ -195,6 +195,41 @@ class AnalyzeWorker(QThread):
             self.error.emit(str(e))
 
 
+class AudioLoadWorker(QThread):
+    """Load audio data from disk for a single track (no analysis).
+
+    Used when a session is loaded from file and ``track.audio_data`` is
+    ``None`` but the source file still exists on disk.  Emits ``finished``
+    with the populated track on success, or ``error`` with a message.
+    """
+
+    finished = Signal(object)   # track with audio_data populated
+    error = Signal(str)
+
+    def __init__(self, track, parent=None):
+        super().__init__(parent)
+        self._track = track
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        try:
+            from sessionpreplib.audio import load_track
+            import soundfile as sf
+            import numpy as np
+            data, sr = sf.read(self._track.filepath, dtype='float64')
+            if self._cancelled:
+                return
+            self._track.audio_data = data
+            self._track.samplerate = sr
+            self._track.total_samples = len(data)
+            self.finished.emit(self._track)
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
 class PrepareWorker(QThread):
     """Runs Pipeline.prepare() off the main thread with progress."""
 

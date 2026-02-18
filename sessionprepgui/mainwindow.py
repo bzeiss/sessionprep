@@ -78,10 +78,11 @@ from .param_widgets import (
 )
 from .preferences import PreferencesDialog, _argb_to_qcolor
 from .report import render_summary_html, render_track_detail_html
+from .session_io import save_session as _save_session_file, load_session as _load_session_file
 from .widgets import BatchEditTableWidget, BatchComboBox, BatchToolButton, ProgressPanel
 from .worker import (
-    AnalyzeWorker, BatchReanalyzeWorker, DawCheckWorker, DawFetchWorker,
-    DawTransferWorker, PrepareWorker,
+    AnalyzeWorker, AudioLoadWorker, BatchReanalyzeWorker, DawCheckWorker,
+    DawFetchWorker, DawTransferWorker, PrepareWorker,
 )
 from .waveform import WaveformWidget, WaveformLoadWorker
 from sessionpreplib.audio import AUDIO_EXTENSIONS
@@ -401,6 +402,7 @@ class SessionPrepWindow(QMainWindow):
         self._batch_worker: BatchReanalyzeWorker | None = None
         self._batch_filenames: set[str] = set()
         self._wf_worker: WaveformLoadWorker | None = None
+        self._audio_load_worker: AudioLoadWorker | None = None
         self._current_track = None
         self._session_groups: list[dict] = []
         self._prev_group_assignments: dict[str, str | None] = {}
@@ -525,6 +527,19 @@ class SessionPrepWindow(QMainWindow):
         open_action.setShortcut("Ctrl+O")
         open_action.triggered.connect(self._on_open_path)
         file_menu.addAction(open_action)
+
+        load_session_action = QAction("&Load Session...", self)
+        load_session_action.setShortcut("Ctrl+Shift+O")
+        load_session_action.triggered.connect(self._on_load_session)
+        file_menu.addAction(load_session_action)
+
+        file_menu.addSeparator()
+
+        self._save_session_action = QAction("&Save Session...", self)
+        self._save_session_action.setShortcut("Ctrl+S")
+        self._save_session_action.setEnabled(False)
+        self._save_session_action.triggered.connect(self._on_save_session)
+        file_menu.addAction(self._save_session_action)
 
         file_menu.addSeparator()
 
@@ -1357,6 +1372,7 @@ class SessionPrepWindow(QMainWindow):
 
         # Waveform toolbar + widget container
         wf_container = QWidget()
+        self._wf_container = wf_container
         wf_layout = QVBoxLayout(wf_container)
         wf_layout.setContentsMargins(0, 0, 0, 0)
         wf_layout.setSpacing(0)
@@ -2320,7 +2336,7 @@ class SessionPrepWindow(QMainWindow):
         self._setup_table.setRowCount(0)
         self._summary_view.clear()
         self._file_report.clear()
-        self._waveform.setVisible(False)
+        self._wf_container.setVisible(False)
         self._play_btn.setEnabled(False)
         self._stop_btn.setEnabled(False)
         self._detail_tabs.setTabEnabled(_TAB_FILE, False)
@@ -2362,6 +2378,167 @@ class SessionPrepWindow(QMainWindow):
 
         # Auto-start analysis
         self._on_analyze()
+
+    @Slot()
+    def _on_save_session(self):
+        """Save the current session state to a .spsession file."""
+        if not self._session or not self._source_dir:
+            return
+        default_path = os.path.join(self._source_dir, "session.spsession")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Session", default_path,
+            "SessionPrep Session (*.spsession);;All Files (*)",
+        )
+        if not path:
+            return
+        try:
+            _save_session_file(path, {
+                "source_dir": self._source_dir,
+                "active_config_preset": self._active_config_preset_name,
+                "session_config": self._session_config,
+                "session_groups": self._session_groups,
+                "daw_state": self._session.daw_state,
+                "tracks": self._session.tracks,
+            })
+            self._status_bar.showMessage(f"Session saved to {path}")
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Save Session Failed",
+                f"Could not save session:\n\n{exc}",
+            )
+
+    @Slot()
+    def _on_load_session(self):
+        """Load a .spsession file and restore the full session state."""
+        start_dir = self._source_dir or self._config.get("app", {}).get(
+            "default_project_dir", "") or ""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Session", start_dir,
+            "SessionPrep Session (*.spsession);;All Files (*)",
+        )
+        if not path:
+            return
+
+        try:
+            data = _load_session_file(path)
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Load Session Failed",
+                f"Could not load session:\n\n{exc}",
+            )
+            return
+
+        source_dir = data["source_dir"]
+        if not os.path.isdir(source_dir):
+            QMessageBox.warning(
+                self, "Load Session",
+                f"The session's audio directory no longer exists:\n\n{source_dir}\n\n"
+                "Please move the files back or open the directory manually.",
+            )
+            return
+
+        # ── Reset UI (same as _on_open_path but without auto-analyze) ────────
+        self._on_stop()
+        self._source_dir = source_dir
+        self._track_table.set_source_dir(source_dir)
+        self._session = None
+        self._summary = None
+        self._current_track = None
+
+        self._phase_tabs.setCurrentIndex(_PHASE_ANALYSIS)
+        self._phase_tabs.setTabEnabled(_PHASE_SETUP, False)
+        self._track_table.setRowCount(0)
+        self._setup_table.setRowCount(0)
+        self._summary_view.clear()
+        self._file_report.clear()
+        self._wf_container.setVisible(False)
+        self._play_btn.setEnabled(False)
+        self._stop_btn.setEnabled(False)
+        self._detail_tabs.setTabEnabled(_TAB_FILE, False)
+        self._detail_tabs.setTabEnabled(_TAB_GROUPS, False)
+        self._detail_tabs.setTabEnabled(_TAB_SESSION, False)
+        self._detail_tabs.setCurrentIndex(_TAB_SUMMARY)
+        self._right_stack.setCurrentIndex(_PAGE_TABS)
+        self._groups_tab_table.setRowCount(0)
+
+        # ── Restore session-level state ───────────────────────────────────────
+        preset_name = data.get("active_config_preset", "Default")
+        self._active_config_preset_name = preset_name
+        self._session_config = data.get("session_config")
+        self._session_groups = data.get("session_groups", [])
+
+        # ── Reconstruct SessionContext from saved tracks ──────────────────────
+        from sessionpreplib.models import SessionContext
+        from sessionpreplib.rendering import build_diagnostic_summary
+
+        tracks = data["tracks"]
+        flat = self._flat_config()
+
+        # Re-instantiate detectors and processors (needed for label filtering)
+        all_detectors = default_detectors()
+        for d in all_detectors:
+            d.configure(flat)
+        all_processors = []
+        for proc in default_processors():
+            proc.configure(flat)
+            if proc.enabled:
+                all_processors.append(proc)
+        all_processors.sort(key=lambda p: p.priority)
+
+        session_config_flat = dict(default_config())
+        session_config_flat.update(flat)
+        session_config_flat["_source_dir"] = source_dir
+
+        session = SessionContext(
+            tracks=tracks,
+            config=session_config_flat,
+            groups={},
+            detectors=all_detectors,
+            processors=all_processors,
+            daw_state=data.get("daw_state", {}),
+            prepare_state="none",
+        )
+
+        self._session = session
+        self._summary = build_diagnostic_summary(session)
+
+        # ── Populate file list in track table ─────────────────────────────────
+        self._track_table.setSortingEnabled(False)
+        self._track_table.setRowCount(len(tracks))
+        for row, track in enumerate(tracks):
+            item = _SortableItem(track.filename, protools_sort_key(track.filename))
+            item.setForeground(FILE_COLOR_OK if track.status == "OK" else FILE_COLOR_ERROR)
+            self._track_table.setItem(row, 0, item)
+            for col in range(1, 8):
+                cell = _SortableItem("", "")
+                cell.setForeground(QColor(COLORS["dim"]))
+                self._track_table.setItem(row, col, cell)
+        self._track_table.setSortingEnabled(True)
+
+        # ── Populate all table widgets and tabs ───────────────────────────────
+        self._populate_groups_tab()
+        self._populate_group_preset_combo()
+        self._populate_table(session)
+        self._render_summary()
+
+        # ── Enable post-analysis UI ───────────────────────────────────────────
+        self._right_stack.setCurrentIndex(_PAGE_TABS)
+        self._detail_tabs.setCurrentIndex(_TAB_SUMMARY)
+        self._detail_tabs.setTabEnabled(_TAB_GROUPS, True)
+        self._detail_tabs.setTabEnabled(_TAB_SESSION, True)
+        self._phase_tabs.setTabEnabled(_PHASE_SETUP, True)
+        self._populate_setup_table()
+        self._analyze_action.setEnabled(True)
+        self._save_session_action.setEnabled(True)
+        self._update_prepare_button()
+        self._auto_fit_track_table()
+
+        ok_count = sum(1 for t in tracks if t.status == "OK")
+        self._status_bar.showMessage(
+            f"Session loaded: {ok_count}/{len(tracks)} tracks OK"
+            " — click Reanalyze to refresh results"
+        )
+        self.setWindowTitle("SessionPrep")
 
     @Slot()
     def _on_analyze(self):
@@ -2568,6 +2745,8 @@ class SessionPrepWindow(QMainWindow):
         if session.prepare_state == "ready":
             session.prepare_state = "stale"
         self._update_prepare_button()
+
+        self._save_session_action.setEnabled(True)
 
         ok_count = sum(1 for t in session.tracks if t.status == "OK")
         self._status_bar.showMessage(
@@ -2813,17 +2992,39 @@ class SessionPrepWindow(QMainWindow):
         if self._current_track is not track:
             return
 
-        # Cancel any in-flight worker
+        # Cancel any in-flight workers
         if self._wf_worker is not None:
             self._wf_worker.cancel()
             self._wf_worker.finished.disconnect()
             self._wf_worker = None
+        if self._audio_load_worker is not None:
+            self._audio_load_worker.cancel()
+            self._audio_load_worker.finished.disconnect()
+            self._audio_load_worker = None
+
+        # If audio_data is absent but the file exists, load it from disk first
+        if (track.audio_data is None or track.audio_data.size == 0) and \
+                track.status == "OK" and os.path.isfile(track.filepath):
+            self._waveform.set_loading(True)
+            if self._detail_tabs.currentIndex() == _TAB_FILE:
+                self._wf_container.setVisible(True)
+            self._play_btn.setEnabled(False)
+            self._update_time_label(0)
+
+            worker = AudioLoadWorker(track, parent=self)
+            self._audio_load_worker = worker
+            worker.finished.connect(
+                lambda t, orig=track: self._on_audio_loaded(t, orig))
+            worker.error.connect(
+                lambda msg: self._on_audio_load_error(msg, track))
+            worker.start()
+            return
 
         has_audio = track.audio_data is not None and track.audio_data.size > 0
         if has_audio:
             self._waveform.set_loading(True)
             if self._detail_tabs.currentIndex() == _TAB_FILE:
-                self._waveform.setVisible(True)
+                self._wf_container.setVisible(True)
             self._play_btn.setEnabled(False)
             self._update_time_label(0)
 
@@ -2843,7 +3044,7 @@ class SessionPrepWindow(QMainWindow):
             self._waveform.set_audio(None, 44100)
             self._update_overlay_menu([])
             if self._detail_tabs.currentIndex() == _TAB_FILE:
-                self._waveform.setVisible(False)
+                self._wf_container.setVisible(False)
             self._play_btn.setEnabled(False)
             self._update_time_label(0)
 
@@ -2872,6 +3073,25 @@ class SessionPrepWindow(QMainWindow):
         self._update_overlay_menu(all_issues)
         self._play_btn.setEnabled(True)
         self._update_time_label(0)
+
+    def _on_audio_loaded(self, track, orig_track):
+        """Audio data loaded from disk; proceed to waveform rendering."""
+        self._audio_load_worker = None
+        # Discard if user switched tracks while we were loading
+        if self._current_track is not orig_track:
+            return
+        # Now kick off the normal waveform worker path
+        self._load_waveform(track)
+
+    def _on_audio_load_error(self, message: str, track):
+        """Audio file could not be read from disk."""
+        self._audio_load_worker = None
+        if self._current_track is not track:
+            return
+        self._waveform.set_audio(None, 44100)
+        self._wf_container.setVisible(False)
+        self._play_btn.setEnabled(False)
+        self._status_bar.showMessage(f"Could not load audio: {message}")
 
     # ── Overlay dropdown ────────────────────────────────────────────────
 

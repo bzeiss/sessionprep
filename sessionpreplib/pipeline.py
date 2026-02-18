@@ -458,6 +458,13 @@ class Pipeline:
                 progress_cb(step, total, f"Preparing {track.filename}")
 
             try:
+                # Load audio from disk on demand (e.g. after session restore)
+                if track.audio_data is None or track.audio_data.size == 0:
+                    loaded = load_track(track.filepath)
+                    track.audio_data = loaded.audio_data
+                    track.samplerate = loaded.samplerate
+                    track.total_samples = loaded.total_samples
+
                 # Deep-copy audio data so the session's copy stays clean
                 audio = track.audio_data.copy()
 
