@@ -579,7 +579,6 @@ dev = [
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "rich" },
-    { name = "setuptools" },
     { name = "zstandard" },
 ]
 
@@ -605,7 +604,6 @@ dev = [
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-cov", specifier = ">=5.0" },
     { name = "rich", specifier = ">=13.0" },
-    { name = "setuptools", specifier = ">=67" },
     { name = "zstandard", specifier = ">=0.25.0" },
 ]
 
