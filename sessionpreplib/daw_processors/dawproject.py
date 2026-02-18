@@ -367,16 +367,14 @@ class DawProjectDawProcessor(DawProcessor):
                 channels=tc.channels,
                 duration=tc.duration_sec,
             )
-            clip = Utility.create_clip(
-                content=audio, time=0.0, duration=tc.duration_sec)
-            clips = Utility.create_clips(clip)
-
-            # Build lane contents for this track
-            lane_contents = [clips]
-
-            # TODO not working
-            # Add expression gain (clip gain) when processor is
-            # enabled but files are not baked into the audio.
+            # When clip gain is needed, Clip.content must be a Lanes
+            # containing both the Audio and the gain Points as siblings:
+            #   <Clip>
+            #     <Lanes>
+            #       <Audio .../>
+            #       <Points unit="linear"><Target expression="gain"/>...</Points>
+            #     </Lanes>
+            #   </Clip>
             if clip_gain_db != 0.0:
                 gain_linear = _db_to_linear(clip_gain_db)
                 gain_points = Points(
@@ -386,7 +384,16 @@ class DawProjectDawProcessor(DawProcessor):
                     unit="linear",
                     time_unit=TimeUnit.SECONDS,
                 )
-                lane_contents.append(gain_points)
+                clip_content = Lanes(lanes=[audio, gain_points])
+            else:
+                clip_content = audio
+
+            clip = Utility.create_clip(
+                content=clip_content, time=0.0, duration=tc.duration_sec)
+            clips = Utility.create_clips(clip)
+
+            # Build lane contents for this track
+            lane_contents = [clips]
 
             # Create a Lanes entry for this track in the arrangement
             track_lane = Lanes(

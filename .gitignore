@@ -36,3 +36,4 @@ sessionpreplib/daw_processors/ptsl/DAWProject-Reference.html
 
 # Temporary build directories
 _dawproject_build/
+_dawproject_build/*

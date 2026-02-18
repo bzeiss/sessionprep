@@ -1065,7 +1065,7 @@ processor dropdown (e.g. "DAWproject – MyTemplate").
 |--------|-----------|
 | `check_connectivity()` | Validates template file exists and is a valid ZIP; returns `(True, "Template OK")` or failure message. |
 | `fetch(session)` | Loads the template's folder track hierarchy into `session.daw_state`. Populates the GUI folder tree for drag-and-drop assignment. |
-| `transfer(session)` | Loads template project, creates new audio tracks with clips in the arrangement, sets fader volumes and group colors, writes the result to `<output_folder>/<template_name>.dawproject`. When bimodal normalization is enabled and files are not processed, expression gain (clip gain) is written as automation points (TODO: not yet working — see XML structure issue with dawproject-py). |
+| `transfer(session)` | Loads template project, creates new audio tracks with clips in the arrangement, sets fader volumes and group colors, writes the result to `<output_folder>/<template_name>.dawproject`. When bimodal normalization is enabled and files are not processed, expression gain (clip gain) is written as automation `Points` nested inside a `Lanes` within the `Clip` (sibling of the `Audio` element). |
 
 **Gain application logic:**
 
@@ -1075,6 +1075,9 @@ processor dropdown (e.g. "DAWproject – MyTemplate").
   silent/skipped, and the processor is not in `track.processor_skip`
 - `clip_gain_db` is set only when the track's actual audio file is the
   original (not a processed/baked file)
+- When `clip_gain_db != 0`, `Clip.content` is set to a `Lanes([Audio, Points])`
+  instead of `Audio` directly, matching the structure Bitwig writes for
+  per-clip gain automation
 
 **Config refresh:** Both `_do_daw_transfer` and `_on_prepare` in the GUI
 refresh `session.config` from the live session config widgets before starting
