@@ -17,6 +17,7 @@ from ..utils import matches_keywords
 class AudioClassifierDetector(TrackDetector):
     id = "audio_classifier"
     name = "Audio Classifier"
+    shorthand = "AC"
     depends_on = ["silence"]
 
     @classmethod

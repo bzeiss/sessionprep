@@ -9,6 +9,7 @@ from ..audio import detect_clipping_ranges, is_silent
 class ClippingDetector(TrackDetector):
     id = "clipping"
     name = "Digital Clipping"
+    shorthand = "CL"
     depends_on = ["silence"]
 
     @classmethod

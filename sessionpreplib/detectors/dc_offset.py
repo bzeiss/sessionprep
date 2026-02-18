@@ -11,6 +11,7 @@ from ..audio import dbfs_offset, linear_to_db, is_silent
 class DCOffsetDetector(TrackDetector):
     id = "dc_offset"
     name = "DC Offset"
+    shorthand = "DC"
     depends_on = ["silence"]
 
     @classmethod

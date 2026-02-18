@@ -24,6 +24,7 @@ class AudioProcessor(ABC):
     """
     id: str = ""
     name: str = ""
+    shorthand: str = ""  # short abbreviation for compact UI labels, e.g. "BN"
     priority: int = PRIORITY_NORMALIZE
 
     @classmethod
@@ -40,16 +41,35 @@ class AudioProcessor(ABC):
                     "and preparation. Disable to skip it entirely."
                 ),
             ),
+            ParamSpec(
+                key=f"{cls.id}_default",
+                type=bool,
+                default=True,
+                label="Selected by default",
+                description=(
+                    "When enabled, this processor is pre-selected for all "
+                    "tracks when a folder is opened. Uncheck to start with "
+                    "it deselected — users can still enable it per-track in "
+                    "the Processing column."
+                ),
+                presentation_only=True,
+            ),
         ]
 
     def configure(self, config: dict[str, Any]) -> None:
         """Read config values. Subclasses should call super().configure(config)."""
         self._enabled: bool = config.get(f"{self.id}_enabled", True)
+        self._default: bool = config.get(f"{self.id}_default", True)
 
     @property
     def enabled(self) -> bool:
         """Whether this processor is active."""
         return self._enabled
+
+    @property
+    def default(self) -> bool:
+        """Whether this processor is pre-selected for tracks by default."""
+        return self._default
 
     @abstractmethod
     def process(self, track: TrackContext) -> ProcessorResult:

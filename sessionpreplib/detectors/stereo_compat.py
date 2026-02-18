@@ -13,6 +13,7 @@ from ..audio import is_silent, windowed_stereo_correlation
 class StereoCompatDetector(TrackDetector):
     id = "stereo_compat"
     name = "Stereo Compatibility"
+    shorthand = "SC"
     depends_on = ["silence"]
 
     @classmethod

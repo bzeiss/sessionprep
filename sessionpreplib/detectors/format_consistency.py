@@ -9,6 +9,7 @@ from ..models import DetectorResult, Severity, SessionContext
 class FormatConsistencyDetector(SessionDetector):
     id = "format_consistency"
     name = "Session Format Consistency"
+    shorthand = "FC"
 
     @classmethod
     def html_help(cls) -> str:

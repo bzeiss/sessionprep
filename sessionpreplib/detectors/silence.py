@@ -8,6 +8,7 @@ from ..audio import get_peak
 class SilenceDetector(TrackDetector):
     id = "silence"
     name = "Silent Files"
+    shorthand = "SI"
     depends_on = []
 
     @classmethod

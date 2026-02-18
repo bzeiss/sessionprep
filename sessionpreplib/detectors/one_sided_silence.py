@@ -11,6 +11,7 @@ from ..audio import dbfs_offset, get_stereo_rms, is_silent, linear_to_db
 class OneSidedSilenceDetector(TrackDetector):
     id = "one_sided_silence"
     name = "One-Sided Silence"
+    shorthand = "OS"
     depends_on = ["silence"]
 
     @classmethod

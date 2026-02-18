@@ -18,6 +18,7 @@ from ..audio import (
 class TailExceedanceDetector(TrackDetector):
     id = "tail_exceedance"
     name = "Tail Regions Exceeded Anchor"
+    shorthand = "TE"
     depends_on = ["silence", "audio_classifier"]
 
     @classmethod

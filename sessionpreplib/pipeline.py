@@ -276,6 +276,15 @@ class Pipeline:
         # Store configured processor instances on the session for render-time access
         session.processors = list(self.audio_processors)
 
+        # Apply default-off: processors with default=False are added to
+        # processor_skip for tracks that don't already have an explicit
+        # override for that processor ID.
+        for proc in self.audio_processors:
+            if not proc.default:
+                for track in session.tracks:
+                    if track.status == "OK" and proc.id not in track.processor_skip:
+                        track.processor_skip.add(proc.id)
+
         return session
 
     def _apply_group_levels(self, session: SessionContext):

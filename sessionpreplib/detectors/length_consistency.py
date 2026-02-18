@@ -10,6 +10,7 @@ from ..audio import format_duration
 class LengthConsistencyDetector(SessionDetector):
     id = "length_consistency"
     name = "File Length Consistency"
+    shorthand = "LC"
 
     @classmethod
     def html_help(cls) -> str:

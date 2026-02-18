@@ -31,6 +31,7 @@ class TrackDetector(ABC):
     """Operates on a single track."""
     id: str = ""
     name: str = ""
+    shorthand: str = ""  # short abbreviation for compact UI labels
     depends_on: list[str] = []
 
     @classmethod
@@ -150,6 +151,7 @@ class SessionDetector(ABC):
     """
     id: str = ""
     name: str = ""
+    shorthand: str = ""  # short abbreviation for compact UI labels
 
     @classmethod
     def config_params(cls) -> list[ParamSpec]:

@@ -540,8 +540,11 @@ class TrackContext:
   `Pipeline.prepare()`), or `None` if not yet prepared.
 - `applied_processors` — list of processor IDs that were applied during the
   last `prepare()` run.
-- `processor_skip` — set of processor IDs to skip for this track (per-track
-  override; empty = use all enabled processors, i.e. "Default").
+- `processor_skip` — set of processor IDs to skip for this track. Populated
+  in two ways: (1) automatically at the end of `plan()` for any processor
+  where `default=False`; (2) manually when the user toggles a processor in the
+  Processing column. "Default" in the UI means the current selection matches
+  each processor's configured `default` value (not necessarily "all active").
 
 ### 4.8 SessionContext
 
@@ -803,21 +806,31 @@ PRIORITY_FINALIZE  = 900
 class AudioProcessor(ABC):
     id: str
     name: str
+    shorthand: str   # compact abbreviation for UI labels, e.g. "BN"
     priority: int
 
-    def config_params(cls) -> list[ParamSpec]: ...   # base: {id}_enabled toggle
+    def config_params(cls) -> list[ParamSpec]: ...   # base: {id}_enabled + {id}_default toggles
     def configure(self, config: dict[str, Any]) -> None: ...
     @property
     def enabled(self) -> bool: ...
+    @property
+    def default(self) -> bool: ...   # whether pre-selected when a folder opens
     @abstractmethod
     def process(self, track: TrackContext) -> ProcessorResult: ...
     @abstractmethod
     def apply(self, track: TrackContext, result: ProcessorResult) -> np.ndarray: ...
 ```
 
-The base `config_params()` returns a single `{id}_enabled` `ParamSpec` (bool,
-default `True`). Subclasses extend via `super().config_params() + [...]`.
-The base `configure()` reads `self._enabled` from the config. The Pipeline
+The base `config_params()` returns two `ParamSpec` entries:
+- `{id}_enabled` (bool, default `True`) — whether the processor is available at
+  all. Disabled processors are excluded from the pipeline entirely.
+- `{id}_default` (bool, default `True`, `presentation_only=True`) — whether the
+  processor is pre-selected for each track when a folder is opened. When `False`,
+  the processor's ID is added to `track.processor_skip` automatically at the end
+  of `plan()`, but users can still enable it per-track in the Processing column.
+
+Subclasses extend via `super().config_params() + [...]`. The base `configure()`
+reads `self._enabled` and `self._default` from the config. The Pipeline
 configures all processors first, then filters to only enabled ones before
 sorting by priority.
 
@@ -830,7 +843,7 @@ sorting by priority.
 
 ### 7.3 BimodalNormalizeProcessor (`bimodal_normalize.py`)
 
-- **ID:** `bimodal_normalize` | **Priority:** `PRIORITY_NORMALIZE` (100)
+- **ID:** `bimodal_normalize` | **Shorthand:** `BN` | **Priority:** `PRIORITY_NORMALIZE` (100)
 - **Reads:** `silence.data["is_silent"]`, `audio_classifier.data["peak_db", "rms_anchor_db", "classification", "is_transient"]`
 - **Config:** `target_rms`, `target_peak`
 - **Logic:**
@@ -840,7 +853,7 @@ sorting by priority.
 
 ### 7.4 MonoDownmixProcessor (`mono_downmix.py`)
 
-- **ID:** `mono_downmix` | **Priority:** `PRIORITY_POST` (200)
+- **ID:** `mono_downmix` | **Shorthand:** `MD` | **Priority:** `PRIORITY_POST` (200)
 - **Status:** Stub — `apply()` returns audio unchanged. A real implementation
   would sum/average channels and return a mono array.
 - **Logic:**
@@ -1095,6 +1108,7 @@ Defined in `sessionpreplib/pipeline.py`. Four implemented phases:
 ```
 analyze()   -> Run all detectors (track-level + session-level)
 plan()      -> Run audio processors + group equalization + fader offsets
+              + populate processor_skip for default=False processors
 prepare()   -> Apply processors per track, write processed files to output dir
 execute()   -> Apply gains, backup originals, write processed files (CLI legacy)
 ```
@@ -1648,12 +1662,14 @@ leaves. `preferences` reads `ParamSpec` metadata from detectors and processors.
     Enabled after analysis completes.
   - **Processing column** (analysis table, column 7) — per-track multiselect
     `QToolButton` with a checkable `QMenu` listing all enabled
-    `AudioProcessor` instances. Label shows "Default" (all processors
-    active, i.e. `processor_skip` is empty), "None" (all skipped), or
-    comma-separated names (partial selection). When no processors are
-    enabled globally, the button is disabled and shows "None". Toggling
-    a processor adds/removes its ID from `track.processor_skip` and marks
-    the Prepare state as stale. Editable only in the analysis phase.
+    `AudioProcessor` instances. Label shows "Default" (current selection
+    matches each processor's configured `default` value), "None" (all
+    skipped), or comma-separated shorthands (e.g. `BN, MD`) for a
+    non-default partial selection. Tooltip always uses full names. When no
+    processors are enabled globally, the button is disabled and shows
+    "None". Toggling a processor adds/removes its ID from
+    `track.processor_skip` and marks the Prepare state as stale. Editable
+    only in the analysis phase.
   - **Use Processed toggle** (setup toolbar) — checkable `QAction` that
     sets `session.config["_use_processed"]`. Label shows "Use Processed:
     On/Off" with "(!) " appended when `prepare_state == "stale"`. Enabled

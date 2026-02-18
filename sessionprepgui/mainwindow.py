@@ -3023,16 +3023,32 @@ class SessionPrepWindow(QMainWindow):
             btn.setText("None")
             btn.setToolTip("No audio processors enabled")
             return
-        active = [p.name for p in processors if p.id not in track.processor_skip]
-        if len(active) == len(processors):
-            btn.setText("Default")
-            btn.setToolTip("Using all enabled processors: " + ", ".join(p.name for p in processors))
+        def _label(p):
+            return p.shorthand if p.shorthand else p.name
+
+        active = [p for p in processors if p.id not in track.processor_skip]
+        active_labels = [_label(p) for p in active]
+        active_names = [p.name for p in active]
+        # "Default" means the current selection matches each processor's
+        # configured default (default=True → active, default=False → skipped).
+        is_default = all(
+            (p.id not in track.processor_skip) == p.default
+            for p in processors
+        )
+        if is_default:
+            default_active_names = [p.name for p in processors if p.default]
+            if default_active_names:
+                btn.setText("Default")
+                btn.setToolTip("Default selection: " + ", ".join(default_active_names))
+            else:
+                btn.setText("Default")
+                btn.setToolTip("Default: all processors deselected")
         elif not active:
             btn.setText("None")
             btn.setToolTip("All processors skipped for this track")
         else:
-            btn.setText(", ".join(active))
-            btn.setToolTip("Active processors: " + ", ".join(active))
+            btn.setText(", ".join(active_labels))
+            btn.setToolTip("Active processors: " + ", ".join(active_names))
 
     @Slot(bool)
     def _on_processing_toggled(self, checked: bool):

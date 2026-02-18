@@ -13,6 +13,7 @@ from ..audio import db_to_linear, dbfs_offset
 class BimodalNormalizeProcessor(AudioProcessor):
     id = "bimodal_normalize"
     name = "Bimodal Normalization"
+    shorthand = "BN"
     priority = PRIORITY_NORMALIZE
 
     @classmethod
