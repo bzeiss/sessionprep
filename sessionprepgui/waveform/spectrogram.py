@@ -9,8 +9,8 @@ import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen
 
-from .theme import COLORS
-from .waveform_compute import (
+from ..theme import COLORS
+from .compute import (
     SPECTROGRAM_COLORMAPS, SpectrogramRecomputeWorker,
     _SPEC_DB_FLOOR, _SPEC_F_MAX, _SPEC_F_MIN, _SPEC_N_FFT,
     _hz_to_mel, _mel_to_hz,

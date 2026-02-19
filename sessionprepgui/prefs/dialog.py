@@ -48,13 +48,13 @@ from .param_widgets import (
     GroupsTableWidget,
     sanitize_output_folder,
 )
-from .settings import (
+from ..settings import (
     _APP_DEFAULTS,
     _PRESENTATION_DEFAULTS,
     _build_default_config_preset,
     build_defaults,
 )
-from .theme import PT_DEFAULT_COLORS
+from ..theme import PT_DEFAULT_COLORS
 
 
 
@@ -737,7 +737,7 @@ class PreferencesDialog(QDialog):
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply != QMessageBox.Yes:
             return
-        from .settings import _DEFAULT_GROUPS
+        from ..settings import _DEFAULT_GROUPS
         self._group_presets_data[current] = copy.deepcopy(_DEFAULT_GROUPS)
         self._load_groups_for_preset(current)
 

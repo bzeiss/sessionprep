@@ -48,28 +48,23 @@ from .settings import (
 )
 from .theme import COLORS, apply_dark_theme
 from .log import dbg
-from .preferences import PreferencesDialog
-from .report import render_track_detail_html
-from .waveform import WaveformWidget
-from .waveform_compute import WaveformLoadWorker
-from .playback import PlaybackController
+from .prefs import PreferencesDialog
+from .detail import render_track_detail_html, PlaybackController, DetailMixin
+from .waveform import WaveformWidget, WaveformLoadWorker
 from .widgets import ProgressPanel
-from .worker import (
+from .analysis import (
+    AnalysisMixin,
     AudioLoadWorker, BatchReanalyzeWorker, DawCheckWorker,
     DawFetchWorker, DawTransferWorker, PrepareWorker,
 )
-
-from .table_widgets import (
+from .tracks import (
+    TrackColumnsMixin, GroupsMixin,
     _HelpBrowser, _DraggableTrackTable, _SortableItem,
     _TAB_SUMMARY, _TAB_FILE, _TAB_GROUPS, _TAB_SESSION,
     _PAGE_PROGRESS, _PAGE_TABS,
     _PHASE_ANALYSIS, _PHASE_SETUP,
 )
-from .analysis_mixin import AnalysisMixin
-from .track_columns_mixin import TrackColumnsMixin
-from .groups_mixin import GroupsMixin
-from .daw_mixin import DawMixin
-from .detail_mixin import DetailMixin
+from .daw import DawMixin
 
 
 class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,

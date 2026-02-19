@@ -10,12 +10,12 @@ from PySide6.QtGui import QAction
 
 from sessionpreplib.audio import get_window_samples
 
-from .helpers import fmt_time
+from ..helpers import fmt_time
 from .report import render_summary_html, render_track_detail_html
-from .table_widgets import _TAB_FILE, _TAB_SUMMARY
-from .theme import COLORS
-from .worker import AudioLoadWorker
-from .waveform_compute import WaveformLoadWorker
+from ..tracks.table_widgets import _TAB_FILE, _TAB_SUMMARY
+from ..theme import COLORS
+from ..analysis.worker import AudioLoadWorker
+from ..waveform.compute import WaveformLoadWorker
 
 
 class DetailMixin:

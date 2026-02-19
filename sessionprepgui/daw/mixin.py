@@ -26,13 +26,13 @@ from PySide6.QtWidgets import (
 
 from sessionpreplib.daw_processors import create_runtime_daw_processors
 
-from .table_widgets import (
+from ..tracks.table_widgets import (
     _FolderDropTree, _SetupDragTable,
     _SETUP_RIGHT_PLACEHOLDER, _SETUP_RIGHT_TREE,
 )
-from .theme import COLORS, PT_DEFAULT_COLORS
-from .widgets import ProgressPanel
-from .worker import DawCheckWorker, DawFetchWorker, DawTransferWorker
+from ..theme import COLORS, PT_DEFAULT_COLORS
+from ..widgets import ProgressPanel
+from ..analysis.worker import DawCheckWorker, DawFetchWorker, DawTransferWorker
 
 
 class DawMixin:

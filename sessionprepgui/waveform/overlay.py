@@ -5,8 +5,8 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 
-from .theme import COLORS
-from .waveform_compute import _hz_to_mel
+from ..theme import COLORS
+from .compute import _hz_to_mel
 
 _SEVERITY_OVERLAY = {
     "problem": QColor(255, 68, 68, 55),

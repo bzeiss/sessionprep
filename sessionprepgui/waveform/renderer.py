@@ -10,7 +10,7 @@ from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import (QColor, QFont, QLinearGradient, QPainter,
                            QPen, QPolygonF)
 
-from .theme import COLORS
+from ..theme import COLORS
 
 _CHANNEL_COLORS = [
     "#44aa44", "#44aaaa", "#aa44aa", "#aaaa44",

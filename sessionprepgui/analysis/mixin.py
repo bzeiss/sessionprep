@@ -27,18 +27,18 @@ from sessionpreplib.detectors import default_detectors
 from sessionpreplib.processors import default_processors
 from sessionpreplib.utils import protools_sort_key
 
-from .helpers import track_analysis_label
-from .param_widgets import build_config_pages, load_config_widgets, read_config_widgets
-from .report import render_track_detail_html
-from .session_io import save_session as _save_session_file, load_session as _load_session_file
-from .settings import build_defaults, resolve_config_preset
-from .table_widgets import (
+from ..helpers import track_analysis_label
+from ..prefs.param_widgets import build_config_pages, load_config_widgets, read_config_widgets
+from ..detail.report import render_track_detail_html
+from ..session.io import save_session as _save_session_file, load_session as _load_session_file
+from ..settings import build_defaults, resolve_config_preset
+from ..tracks.table_widgets import (
     _SortableItem, _make_analysis_cell,
     _TAB_FILE, _TAB_GROUPS, _TAB_SESSION, _TAB_SUMMARY,
     _PAGE_PROGRESS, _PAGE_TABS,
     _PHASE_ANALYSIS, _PHASE_SETUP,
 )
-from .theme import COLORS, FILE_COLOR_OK, FILE_COLOR_ERROR
+from ..theme import COLORS, FILE_COLOR_OK, FILE_COLOR_ERROR
 from .worker import AnalyzeWorker, PrepareWorker
 
 
@@ -485,8 +485,8 @@ class AnalysisMixin:
         self._track_table.removeCellWidget(row, 5)
 
         from PySide6.QtWidgets import QDoubleSpinBox
-        from .widgets import BatchComboBox
-        from .theme import (
+        from ..widgets import BatchComboBox
+        from ..theme import (
             FILE_COLOR_SILENT, FILE_COLOR_TRANSIENT, FILE_COLOR_SUSTAINED,
         )
 
@@ -616,7 +616,7 @@ class AnalysisMixin:
         self._analyze_action.setEnabled(True)
         self._worker = None
 
-        from .helpers import esc
+        from ..helpers import esc
 
         self._right_stack.setCurrentIndex(_PAGE_TABS)
         self._detail_tabs.setCurrentIndex(_TAB_SUMMARY)

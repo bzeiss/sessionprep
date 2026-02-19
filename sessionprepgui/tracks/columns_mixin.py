@@ -18,10 +18,10 @@ from sessionpreplib.detector import TrackDetector
 from sessionpreplib.processors import default_processors
 from sessionpreplib.utils import protools_sort_key
 
-from .helpers import track_analysis_label
-from .report import render_track_detail_html
+from ..helpers import track_analysis_label
+from ..detail.report import render_track_detail_html
 from .table_widgets import _SortableItem, _make_analysis_cell
-from .theme import (
+from ..theme import (
     COLORS,
     FILE_COLOR_OK,
     FILE_COLOR_ERROR,
@@ -29,8 +29,8 @@ from .theme import (
     FILE_COLOR_TRANSIENT,
     FILE_COLOR_SUSTAINED,
 )
-from .widgets import BatchComboBox, BatchToolButton
-from .worker import BatchReanalyzeWorker
+from ..widgets import BatchComboBox, BatchToolButton
+from ..analysis.worker import BatchReanalyzeWorker
 
 
 class TrackColumnsMixin:

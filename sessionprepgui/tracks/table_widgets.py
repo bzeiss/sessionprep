@@ -14,8 +14,8 @@ from PySide6.QtWidgets import (
     QTreeWidget,
 )
 
-from .theme import COLORS
-from .widgets import BatchEditTableWidget
+from ..theme import COLORS
+from ..widgets import BatchEditTableWidget
 
 # ── Constants ────────────────────────────────────────────────────────────────
 

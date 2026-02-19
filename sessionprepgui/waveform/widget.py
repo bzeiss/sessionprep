@@ -8,11 +8,11 @@ from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QToolTip, QWidget
 
-from .theme import COLORS
-from .waveform_compute import WaveformLoadWorker, _mel_to_hz  # noqa: F401 (re-export)
-from .waveform_overlay import draw_issue_overlays, draw_time_scale
-from .waveform_renderer import WaveformRenderCtx, WaveformRenderer
-from .waveform_spectrogram import SpecRenderCtx, SpectrogramRenderer
+from ..theme import COLORS
+from .compute import WaveformLoadWorker, _mel_to_hz  # noqa: F401 (re-export)
+from .overlay import draw_issue_overlays, draw_time_scale
+from .renderer import WaveformRenderCtx, WaveformRenderer
+from .spectrogram import SpecRenderCtx, SpectrogramRenderer
 
 
 class WaveformWidget(QWidget):

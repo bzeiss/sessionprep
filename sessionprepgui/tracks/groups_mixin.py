@@ -24,11 +24,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .preferences import _argb_to_qcolor
-from .settings import build_defaults, save_config
+from ..prefs.dialog import _argb_to_qcolor
+from ..settings import build_defaults, save_config
 from .table_widgets import _SortableItem
-from .theme import COLORS, PT_DEFAULT_COLORS
-from .widgets import BatchComboBox
+from ..theme import COLORS, PT_DEFAULT_COLORS
+from ..widgets import BatchComboBox
 
 
 class GroupsMixin:
