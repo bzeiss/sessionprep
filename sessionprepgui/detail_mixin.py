@@ -15,7 +15,7 @@ from .report import render_summary_html, render_track_detail_html
 from .table_widgets import _TAB_FILE, _TAB_SUMMARY
 from .theme import COLORS
 from .worker import AudioLoadWorker
-from .waveform import WaveformLoadWorker
+from .waveform_compute import WaveformLoadWorker
 
 
 class DetailMixin:
@@ -121,8 +121,8 @@ class DetailMixin:
 
             self._wf_worker = WaveformLoadWorker(
                 track.audio_data, track.samplerate, ws,
-                spec_n_fft=self._waveform._spec_n_fft,
-                spec_window=self._waveform._spec_window,
+                spec_n_fft=self._waveform.spec_n_fft,
+                spec_window=self._waveform.spec_window,
                 parent=self)
             self._wf_worker.finished.connect(
                 lambda result, t=track: self._on_waveform_loaded(result, t))

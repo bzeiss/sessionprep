@@ -50,7 +50,8 @@ from .theme import COLORS, apply_dark_theme
 from .log import dbg
 from .preferences import PreferencesDialog
 from .report import render_track_detail_html
-from .waveform import WaveformWidget, WaveformLoadWorker
+from .waveform import WaveformWidget
+from .waveform_compute import WaveformLoadWorker
 from .playback import PlaybackController
 from .widgets import ProgressPanel
 from .worker import (
