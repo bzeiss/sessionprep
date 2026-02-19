@@ -302,6 +302,9 @@ class BatchComboBox(QComboBox):
         mods = QApplication.keyboardModifiers()
         self.batch_mode = bool(
             mods & Qt.AltModifier and mods & Qt.ShiftModifier)
+        # Also store as Qt dynamic property so it survives sender()
+        # wrapper recreation when slots live on mixin classes.
+        self.setProperty("_batch_mode", self.batch_mode)
         super().mousePressEvent(event)
 
 
@@ -326,4 +329,7 @@ class BatchToolButton(QToolButton):
         mods = QApplication.keyboardModifiers()
         self.batch_mode = bool(
             mods & Qt.AltModifier and mods & Qt.ShiftModifier)
+        # Also store as Qt dynamic property so it survives sender()
+        # wrapper recreation when slots live on mixin classes.
+        self.setProperty("_batch_mode", self.batch_mode)
         super().mousePressEvent(event)
