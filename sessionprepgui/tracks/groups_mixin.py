@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..prefs.dialog import _argb_to_qcolor
+from ..prefs.param_form import _argb_to_qcolor
 from ..settings import build_defaults, save_config
 from .table_widgets import _SortableItem
 from ..theme import COLORS, PT_DEFAULT_COLORS
