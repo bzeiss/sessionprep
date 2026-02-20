@@ -54,6 +54,7 @@ class ParamSpec:
     item_type: type | None = None    # element type for list fields
     nullable: bool = False           # True if None is valid
     presentation_only: bool = False  # True → changing this key never requires re-analysis
+    widget_hint: str | None = None   # rendering hint for the GUI widget factory (never read by the library)
 
 
 def default_config() -> dict[str, Any]:

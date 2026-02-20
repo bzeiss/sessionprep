@@ -456,7 +456,23 @@ class ParamSpec:
     choices: list | None = None      # allowed string values
     item_type: type | None = None    # element type for list fields
     nullable: bool = False           # True if None is valid
+    presentation_only: bool = False  # True → changing this key never requires re-analysis
+    widget_hint: str | None = None   # rendering hint for the GUI widget factory (never read by the library)
 ```
+
+`presentation_only` marks keys whose changes never affect analysis results (e.g.
+`report_as`), allowing the GUI to skip re-analysis on save.
+
+`widget_hint` is an *optional* rendering hint consumed exclusively by
+`sessionprepgui/prefs/param_form.py`'s `_build_widget()`.  The library itself
+never reads it.  Supported values:
+
+| Value | Widget produced |
+|---|---|
+| `"path_picker_folder"` | `PathPicker(mode=FOLDER)` — line edit + Browse dir dialog |
+| `"path_picker_file"` | `PathPicker(mode=OPEN_FILE)` — line edit + Open file dialog |
+| `"path_picker_save"` | `PathPicker(mode=SAVE_FILE)` — line edit + Save file dialog |
+| `None` (default) | Standard widget derived from `type` and `choices` |
 
 Every detector and processor exposes its parameters via a
 `config_params()` classmethod that returns `list[ParamSpec]`.  Shared
@@ -1521,8 +1537,14 @@ group).
 | `report.py` | HTML rendering: `render_summary_html()`, `render_fader_table_html()`, `render_track_detail_html()` |
 | `waveform.py` | `WaveformWidget` — two display modes (waveform + spectrogram), vectorised NumPy peak/RMS downsampling, mel spectrogram (256 mel bins via `scipy.signal.stft`, configurable FFT/window/dB range/colormap), dB and frequency scales, peak/RMS markers, crosshair mouse guide (dBFS in waveform, Hz in spectrogram), mouse-wheel zoom/pan (Ctrl+wheel h-zoom, Ctrl+Shift+wheel v-zoom, Shift+Alt+wheel freq pan, Shift+wheel scroll), keyboard shortcuts (R/T zoom), detector issue overlays with optional frequency bounds, RMS L/R and RMS AVG envelopes, playback cursor, tooltips |
 | `playback.py` | `PlaybackController` — sounddevice OutputStream lifecycle, QTimer cursor updates, signal-based API |
-| `param_widgets.py` | Reusable ParamSpec-driven widget builders (`_build_param_page`, `_read_widget`, `_set_widget_value`, `_build_tooltip`) + `GroupsTableWidget` (drag-reorderable group editor with color/gain-linked/DAW-target columns) |
-| `preferences.py` | `PreferencesDialog` — two-tab layout (Global + Config Presets), config preset CRUD, group preset CRUD, ParamSpec-driven widgets, reset-to-default, HiDPI scaling |
+| `prefs/param_form.py` | **Portable** generic widget factory — `ParamSpec` protocol, `PathPickerMode`, `PathPicker`, `_build_widget`, `_build_param_page`, `_set_widget_value`, `_read_widget`, tooltip/subtext builders, `sanitize_output_folder`.  Zero sessionpreplib dependency; copy to any PySide6 project. |
+| `prefs/preset_panel.py` | **Portable** `NamedPresetPanel` — reusable CRUD widget for named presets with add/duplicate/rename/delete signals. |
+| `prefs/config_pages.py` | SessionPrep-specific builders: `GroupsTableWidget`, `DawProjectTemplatesWidget`, `build_config_pages`, `load_config_widgets`, `read_config_widgets`. |
+| `prefs/page_general.py` | `GeneralPage` — app-level settings (`_APP_PARAMS` list drives `_build_param_page`; `widget_hint="path_picker_folder"` on `default_project_dir` auto-generates a `PathPicker`). |
+| `prefs/page_colors.py` | `ColorsPage` — editable color palette table with `load`/`commit`/`color_provider` interface. |
+| `prefs/page_groups.py` | `GroupsPage` — named group presets using `NamedPresetPanel` + `GroupsTableWidget` with `load`/`commit` interface. |
+| `prefs/dialog.py` | `PreferencesDialog` — thin ~270-line orchestrator wiring all pages, managing config presets via `NamedPresetPanel`, and handling save with validation. |
+| `prefs/param_widgets.py` | Backward-compatible re-export shim — all public names forward to `param_form.py` / `config_pages.py`. |
 | `mainwindow.py` | `SessionPrepWindow` (QMainWindow) — orchestrator, UI layout, slot handlers, toolbar config/group preset combos, session Config tab |
 
 ### 18.3 Dependency Direction
@@ -1628,19 +1650,32 @@ leaves. `preferences` reads `ParamSpec` metadata from detectors and processors.
     for horizontal scroll.
 - **report.py** contains pure HTML-building functions (no widget references),
   making them independently testable.
-- **PreferencesDialog** uses a two-tab layout:
-  - **Global** tab — General (HiDPI scale, project dir, etc.), Colors
-    (palette editor), Groups (group preset CRUD + `GroupsTableWidget`).
-    Each has its own tree + stacked widget.
-  - **Config Presets** tab — toolbar with combo + Add/Duplicate/Rename/Delete
-    buttons. Below it: Analysis, Detectors (with presentation params),
-    Processors, DAW Processors pages. Each has its own tree + stacked widget.
-    Switching presets saves current widget values to the old preset and loads
-    the new one.
-  Widget type, range, step size, and decimal precision are all derived from
-  `ParamSpec` (via `param_widgets.py`). Each parameter gets a visible
-  description subtext, a rich tooltip (with key name, default, range), and a
-  reset-to-default button using Qt's `SP_BrowserReload` icon.
+- **`prefs/` subpackage** implements a layered, portable preferences framework:
+  - **Portable layer** (`param_form.py`, `preset_panel.py`) has zero
+    sessionpreplib dependency and can be copied to any PySide6 project.
+  - **App-specific layer** (`config_pages.py`, `page_*.py`, `dialog.py`)
+    contains SessionPrep-specific builders, page classes, and the
+    orchestrator dialog.
+  - **Widget factory** (`_build_widget`) resolves widgets in priority order:
+    (1) `widget_hint` override → `PathPicker` or future custom widgets,
+    (2) `choices` → `QComboBox`, (3) `type` → spinbox/checkbox/line-edit.
+    Adding a new custom widget type requires only a new branch in
+    `_build_widget` and a `widget_hint=` on the relevant `ParamSpec`.
+  - **`PathPicker`** is a self-contained folder/file picker widget (label +
+    `QLineEdit` + Browse + reset button + optional recursive checkbox).
+    Activated by `widget_hint="path_picker_folder"` / `"path_picker_file"` /
+    `"path_picker_save"`.
+  - **Page interface** — every page class (`GeneralPage`, `ColorsPage`,
+    `GroupsPage`) implements `load(config)`, `commit(config)`, and
+    `validate() → str | None`. All read/write goes through `_set_widget_value`
+    / `_read_widget`, which dispatch uniformly across all widget types
+    including `PathPicker`.
+  - **`PreferencesDialog`** is a ~270-line thin orchestrator. Two-tab layout:
+    - **Global** tab — General, Colors, Groups pages in a tree + stacked widget.
+    - **Config Presets** tab — `NamedPresetPanel` CRUD + Analysis, Detectors,
+      Processors, DAW Processors pages.
+  - Each parameter gets a visible description subtext, a rich tooltip (key
+    name, default, range), and a reset-to-default button (`SP_BrowserReload`).
 - **Toolbar config preset chooser** — the analysis toolbar includes a
   "Config:" combo that shows available config presets. Switching presets
   with an active session warns the user, then resets session config and

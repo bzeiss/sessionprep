@@ -10,8 +10,6 @@ from PySide6.QtWidgets import (
 from sessionpreplib.config import ParamSpec
 
 from .param_form import (
-    PathPicker,
-    PathPickerMode,
     _build_param_page,
     _read_widget,
     _set_widget_value,
@@ -23,6 +21,15 @@ from .param_form import (
 # ---------------------------------------------------------------------------
 
 _APP_PARAMS = [
+    ParamSpec(
+        key="default_project_dir", type=str, default="",
+        label="Default project directory",
+        description=(
+            "When set, the Open Folder dialog starts in this directory. "
+            "Leave empty to use the system default."
+        ),
+        widget_hint="path_picker_folder",
+    ),
     ParamSpec(
         key="scale_factor", type=(int, float), default=1.0,
         min=0.5, max=4.0,
@@ -70,15 +77,6 @@ _APP_PARAMS = [
     ),
 ]
 
-_DIR_SPEC = ParamSpec(
-    key="default_project_dir", type=str, default="",
-    label="Default project directory",
-    description=(
-        "When set, the Open Folder dialog starts in this directory. "
-        "Leave empty to use the system default."
-    ),
-)
-
 
 class GeneralPage(QWidget):
     """App-level preference form.
@@ -92,7 +90,6 @@ class GeneralPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._widgets: list[tuple[str, QWidget]] = []
-        self._dir_picker: PathPicker
         self._init_ui()
 
     # ── Page interface ────────────────────────────────────────────────
@@ -102,13 +99,11 @@ class GeneralPage(QWidget):
         for key, widget in self._widgets:
             if key in values:
                 _set_widget_value(widget, values[key])
-        self._dir_picker.set_value(str(values.get("default_project_dir", "")))
 
     def commit(self, config: dict) -> None:
         app = config.setdefault("app", {})
         for key, widget in self._widgets:
             app[key] = _read_widget(widget)
-        app["default_project_dir"] = self._dir_picker.value()
 
     def validate(self) -> str | None:
         """Return an error message if output_folder is invalid, else None."""
@@ -126,15 +121,7 @@ class GeneralPage(QWidget):
     # ── UI setup ─────────────────────────────────────────────────────
 
     def _init_ui(self) -> None:
-        page, widgets = _build_param_page(_APP_PARAMS, {})
-        self._widgets = widgets
-
-        self._dir_picker = PathPicker(_DIR_SPEC, mode=PathPickerMode.FOLDER)
-
-        # Insert the directory picker at the top, before the param rows
-        outer = page.layout()
-        outer.insertWidget(0, self._dir_picker)
-
+        page, self._widgets = _build_param_page(_APP_PARAMS, {})
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(page)

@@ -43,6 +43,7 @@ class ParamSpec(Protocol):
     min: float | None
     max: float | None
     description: str | None
+    widget_hint: str | None   # rendering hint consumed by _build_widget; never read by the library
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +83,33 @@ def _color_swatch_icon(argb: str, size: int = 16) -> QIcon:
 # ---------------------------------------------------------------------------
 
 def _build_widget(spec: Any, value: Any) -> QWidget:
-    """Create an appropriate input widget for a ParamSpec and set its value."""
+    """Create an appropriate input widget for a ParamSpec and set its value.
+
+    Resolution order
+    ----------------
+    1. ``widget_hint`` — explicit override; beats all type-based logic.
+    2. ``choices``     — QComboBox when an allowed-values list is provided.
+    3. ``type``        — bool → QCheckBox, int → QSpinBox, float → QDoubleSpinBox,
+                         list → QLineEdit (csv), str/fallback → QLineEdit.
+
+    Supported ``widget_hint`` values
+    ---------------------------------
+    ``"path_picker_folder"``  → PathPicker(mode=FOLDER)
+    ``"path_picker_file"``    → PathPicker(mode=OPEN_FILE)
+    ``"path_picker_save"``    → PathPicker(mode=SAVE_FILE)
+    """
+    # ── 1. widget_hint dispatch ───────────────────────────────────────────────
+    # getattr with default keeps third-party ParamSpec implementations working
+    # even when they pre-date this field.
+    hint = getattr(spec, "widget_hint", None)
+    if hint == "path_picker_folder":
+        return PathPicker(spec, mode=PathPickerMode.FOLDER)
+    if hint == "path_picker_file":
+        return PathPicker(spec, mode=PathPickerMode.OPEN_FILE)
+    if hint == "path_picker_save":
+        return PathPicker(spec, mode=PathPickerMode.SAVE_FILE)
+
+    # ── 2. choices → QComboBox ────────────────────────────────────────────────
     if spec.choices is not None:
         w = QComboBox()
         for c in spec.choices:
@@ -415,6 +442,14 @@ def _build_param_page(
     for spec in params:
         val = values.get(spec.key, spec.default)
         w = _build_widget(spec, val)
+
+        # Self-contained widgets (e.g. PathPicker) already render their own
+        # label, subtext, and reset button — add them directly.
+        if isinstance(w, PathPicker):
+            outer.addWidget(w)
+            widgets.append((spec.key, w))
+            continue
+
         tooltip = _build_tooltip(spec)
         w.setToolTip(tooltip)
 
