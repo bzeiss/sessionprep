@@ -399,7 +399,7 @@ DAWs, but done with sample-accurate precision across 100+ files very quickly.
 ## 5. Fader Restoration (Stage D)
 
 The script calculates the inverse fader offsets for the gain applied in Stage C.
-Applying those offsets happens in the DAW (manually or via automation).
+Applying those offsets restores the producer's rough-mix balance exactly.
 
 Example:
   - Input: A quiet synth pad (-24 dB).
@@ -414,10 +414,16 @@ This ensures that when you hit play, the mix balance is 100% identical to
 the producer's rough mix, your files are error-checked, and your starting levels
 are more consistent. Per-insert gain staging is still part of mixing.
 
-> **Planned:** Fader offset application is currently manual or via third-party
-> tools (e.g., SoundFlow). A future version will automate this directly via DAW
-> scripting APIs such as the
-> [Pro Tools Scripting SDK (PTSL)](https://developer.avid.com/).
+**Fader offset application:** The GUI's **DAW Transfer** action applies offsets
+automatically:
+- **Pro Tools** — faders are set via `CId_SetTrackVolume` through the
+  [Pro Tools Scripting SDK (PTSL)](https://developer.avid.com/) (requires
+  bimodal normalization enabled and processed files in use).
+- **DAWproject** — fader volumes are written directly into the generated
+  `.dawproject` file.
+
+The `sessionprep.json` export remains available for custom workflows and
+third-party tools.
 
 ---
 

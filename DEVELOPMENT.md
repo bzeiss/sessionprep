@@ -284,10 +284,10 @@ sudo dnf install gcc patchelf ccache libatomic-static
 |---------|------|--------|
 | `numpy` | Runtime | `sessionpreplib` (DSP, array ops) |
 | `soundfile` | Runtime | `sessionpreplib/audio.py` (WAV I/O, bundles libsndfile) |
-| `scipy` | Runtime | `sessionpreplib/audio.py` (subsonic STFT analysis), `sessionprepgui/waveform.py` (mel spectrogram) |
+| `scipy` | Runtime | `sessionpreplib/audio.py` (subsonic STFT analysis), `sessionprepgui/waveform/compute.py` (mel spectrogram) |
 | `rich` | Runtime | `sessionprep.py` (CLI rendering: tables, panels, progress) |
 | `PySide6` | Optional (gui) | `sessionprepgui` (Qt widgets, main window, waveform) |
-| `sounddevice` | Optional (gui) | `sessionprepgui/playback.py` (audio playback via PortAudio) |
+| `sounddevice` | Optional (gui) | `sessionprepgui/detail/playback.py` (audio playback via PortAudio) |
 | `py-ptsl` | Optional (gui) | `sessionpreplib/daw_processors/protools.py` (Pro Tools Scripting SDK gRPC client) |
 | `dawproject` | Optional (gui) | `sessionpreplib/daw_processors/dawproject.py` (DAWproject file format library) |
 | `pytest` | Dev | Test runner |
@@ -349,13 +349,44 @@ sessionprepgui/                  # GUI package (PySide6)
     settings.py                  # Persistent config (load/save/validate, OS paths)
     theme.py                     # Colors, FILE_COLOR_* constants, dark theme
     helpers.py                   # esc(), track_analysis_label() (severity counts), fmt_time(), severity maps
-    worker.py                    # QThread workers: AnalyzeWorker, BatchReanalyzeWorker, DawCheckWorker, DawFetchWorker, DawTransferWorker
-    report.py                    # HTML report rendering (summary, fader table, track detail)
-    waveform.py                  # WaveformWidget (waveform + spectrogram display, dB/freq scales, markers, overlays, keyboard/mouse nav)
-    playback.py                  # PlaybackController (sounddevice lifecycle + signals)
-    param_widgets.py             # Reusable ParamSpec widget builders + GroupsTableWidget
-    preferences.py               # PreferencesDialog (two-tab layout: Global + Config Presets)
-    mainwindow.py                # SessionPrepWindow (QMainWindow) + main()
+    mainwindow.py                # SessionPrepWindow (QMainWindow) + main() — thin orchestrator composing all mixins
+    analysis/
+        mixin.py                 # AnalysisMixin — open/save session, analyze, prepare, session Config tab
+        worker.py                # QThread workers: AnalyzeWorker, BatchReanalyzeWorker, PrepareWorker,
+                                 #   DawCheckWorker, DawFetchWorker, DawTransferWorker
+    daw/
+        mixin.py                 # DawMixin — DAW processor selection, fetch, transfer, folder tree, assignments
+    detail/
+        mixin.py                 # DetailMixin — file detail view, waveform display, overlays, playback
+        playback.py              # PlaybackController (sounddevice lifecycle + signals)
+        report.py                # HTML rendering: render_summary_html(), render_fader_table_html(),
+                                 #   render_track_detail_html()
+    prefs/
+        __init__.py              # Exports PreferencesDialog, PathPicker, PathPickerMode, build_config_pages
+        param_form.py            # Portable widget factory: ParamSpec protocol, PathPickerMode, PathPicker,
+                                 #   _build_widget, _build_param_page, tooltip builders, sanitize_output_folder
+        preset_panel.py          # Portable NamedPresetPanel — reusable named-preset CRUD widget
+        config_pages.py          # SessionPrep-specific: GroupsTableWidget, DawProjectTemplatesWidget,
+                                 #   build/load/read_config_pages
+        page_general.py          # GeneralPage — app settings (widget_hint drives PathPicker for dir field)
+        page_colors.py           # ColorsPage — editable color palette table
+        page_groups.py           # GroupsPage — named group presets via NamedPresetPanel
+        dialog.py                # PreferencesDialog — thin ~270-line orchestrator
+        param_widgets.py         # Backward-compatible re-export shim → param_form + config_pages
+    session/
+        io.py                    # Session save/load (.spsession JSON) — serialises analysis state
+    tracks/
+        columns_mixin.py         # TrackColumnsMixin — track table column setup and sorting
+        groups_mixin.py          # GroupsMixin — group assignment UI and color rendering
+        table_widgets.py         # Track table widget classes
+    waveform/
+        __init__.py              # Re-exports WaveformWidget, WaveformLoadWorker, SPECTROGRAM_COLORMAPS
+        compute.py               # Colormaps, mel math, spectrogram computation, QThread workers
+        renderer.py              # WaveformRenderer — peaks, waveform drawing, RMS overlay, dB scale, markers
+        spectrogram.py           # SpectrogramRenderer — mel image, frequency scale, freq zoom/pan
+        overlay.py               # Stateless overlay drawing functions (issue overlays, time scale)
+        widget.py                # WaveformWidget — thin orchestrator coordinating WaveformRenderer
+                                 #   and SpectrogramRenderer
 
 sessionprep.py                   # Thin CLI: argparse + Rich rendering + glue
 sessionprep-gui.py               # Thin GUI entry point (delegates to sessionprepgui)
@@ -1533,10 +1564,22 @@ group).
 | `helpers.py` | `esc()`, `track_analysis_label(track, detectors=None)` (filters via `is_relevant()`), `fmt_time()`, severity maps |
 | `widgets.py` | `BatchEditTableWidget`, `BatchComboBox` — reusable batch-edit base classes preserving multi-row selection across cell-widget clicks (zero app imports) |
 | `log.py` | `dbg(msg)` — lightweight debug logging to stderr, gated by `SP_DEBUG` env var. Timestamped output with caller class name. Used by `pipeline.py`, `dawproject.py`, and other modules via conditional import. |
-| `worker.py` | QThread workers: `AnalyzeWorker` (pipeline in background, thread-safe progress, per-track signals), `BatchReanalyzeWorker` (subset re-analysis after batch overrides), `PrepareWorker` (runs `Pipeline.prepare()` in background with progress), `DawCheckWorker` (connectivity check), `DawFetchWorker` (folder fetch), `DawTransferWorker` (transfer with progress + progress_value signals) |
-| `report.py` | HTML rendering: `render_summary_html()`, `render_fader_table_html()`, `render_track_detail_html()` |
-| `waveform.py` | `WaveformWidget` — two display modes (waveform + spectrogram), vectorised NumPy peak/RMS downsampling, mel spectrogram (256 mel bins via `scipy.signal.stft`, configurable FFT/window/dB range/colormap), dB and frequency scales, peak/RMS markers, crosshair mouse guide (dBFS in waveform, Hz in spectrogram), mouse-wheel zoom/pan (Ctrl+wheel h-zoom, Ctrl+Shift+wheel v-zoom, Shift+Alt+wheel freq pan, Shift+wheel scroll), keyboard shortcuts (R/T zoom), detector issue overlays with optional frequency bounds, RMS L/R and RMS AVG envelopes, playback cursor, tooltips |
-| `playback.py` | `PlaybackController` — sounddevice OutputStream lifecycle, QTimer cursor updates, signal-based API |
+| `analysis/mixin.py` | `AnalysisMixin` — open/save/load session, analyze, prepare, session Config tab wiring |
+| `analysis/worker.py` | QThread workers: `AnalyzeWorker` (pipeline in background, thread-safe progress, per-track signals), `BatchReanalyzeWorker` (subset re-analysis after batch overrides), `PrepareWorker` (runs `Pipeline.prepare()` in background with progress), `DawCheckWorker` (connectivity check), `DawFetchWorker` (folder fetch), `DawTransferWorker` (transfer with progress + progress_value signals) |
+| `daw/mixin.py` | `DawMixin` — DAW processor selection, check/fetch/transfer/sync, folder tree, drag-and-drop track assignment |
+| `detail/mixin.py` | `DetailMixin` — file detail view, waveform display, detector overlay panel, playback toolbar wiring |
+| `detail/playback.py` | `PlaybackController` — sounddevice OutputStream lifecycle, QTimer cursor updates, signal-based API |
+| `detail/report.py` | HTML rendering: `render_summary_html()`, `render_fader_table_html()`, `render_track_detail_html()` |
+| `session/io.py` | Session save/load — serialises full analysis state (detector + processor results, user edits) to `.spsession` JSON without re-running analysis. Versioned format with forward-compatible migrations. |
+| `tracks/columns_mixin.py` | `TrackColumnsMixin` — track table column definitions, cell rendering, sorting |
+| `tracks/groups_mixin.py` | `GroupsMixin` — group assignment UI, color rendering in track table |
+| `tracks/table_widgets.py` | Track table widget classes (custom cell widgets, batch-edit base classes) |
+| `waveform/__init__.py` | Re-exports `WaveformWidget`, `WaveformLoadWorker`, `SPECTROGRAM_COLORMAPS` |
+| `waveform/compute.py` | Colormaps (magma/viridis/grayscale LUTs), mel math, spectrogram computation, `WaveformLoadWorker` QThread |
+| `waveform/renderer.py` | `WaveformRenderer` — vectorised NumPy peak/RMS downsampling, waveform drawing, RMS L/R and AVG envelopes, dB scale, peak/RMS markers |
+| `waveform/spectrogram.py` | `SpectrogramRenderer` — mel spectrogram QImage (256 mel bins via `scipy.signal.stft`), frequency scale, freq zoom/pan, background recompute worker |
+| `waveform/overlay.py` | Stateless overlay drawing functions — detector issue overlays (with optional frequency bounds), horizontal time scale |
+| `waveform/widget.py` | `WaveformWidget` — thin orchestrator coordinating `WaveformRenderer` and `SpectrogramRenderer`; paintEvent, mouse/keyboard event handlers, zoom/pan API, public setters |
 | `prefs/param_form.py` | **Portable** generic widget factory — `ParamSpec` protocol, `PathPickerMode`, `PathPicker`, `_build_widget`, `_build_param_page`, `_set_widget_value`, `_read_widget`, tooltip/subtext builders, `sanitize_output_folder`.  Zero sessionpreplib dependency; copy to any PySide6 project. |
 | `prefs/preset_panel.py` | **Portable** `NamedPresetPanel` — reusable CRUD widget for named presets with add/duplicate/rename/delete signals. |
 | `prefs/config_pages.py` | SessionPrep-specific builders: `GroupsTableWidget`, `DawProjectTemplatesWidget`, `build_config_pages`, `load_config_widgets`, `read_config_widgets`. |
@@ -1551,18 +1594,20 @@ group).
 
 ```
 settings (leaf) <--  mainwindow
-theme (leaf)  <--  helpers  <--  report  <--  mainwindow
-widgets (leaf) <---------------------------------+
-                                                 |
-              waveform     <--------------------+
-              playback     <--------------------+
-              worker       <--------------------+
-              preferences  <--------------------+
+theme (leaf)  <--  helpers  <--  detail/report  <--  mainwindow
+widgets (leaf) <--  tracks/  <---------------------------+
+                                                         |
+              waveform/    <----------------------------+
+              detail/      <----------------------------+
+              analysis/    <----------------------------+
+              daw/         <----------------------------+
+              session/     <----------------------------+
+              prefs/       <----------------------------+
 ```
 
 No circular imports. `settings`, `theme`, `helpers`, and `widgets` are pure
-leaves. `preferences` reads `ParamSpec` metadata from detectors and processors.
-`mainwindow` composes all other modules.
+leaves. `prefs/` reads `ParamSpec` metadata from detectors and processors.
+`mainwindow` composes all subpackage mixins.
 
 ### 18.4 Key Design Decisions
 
@@ -1648,7 +1693,7 @@ leaves. `preferences` reads `ParamSpec` metadata from detectors and processors.
     for vertical zoom (amplitude in waveform, frequency range in spectrogram),
     Shift+Alt+wheel for frequency panning (spectrogram only), Shift+wheel
     for horizontal scroll.
-- **report.py** contains pure HTML-building functions (no widget references),
+- **`detail/report.py`** contains pure HTML-building functions (no widget references),
   making them independently testable.
 - **`prefs/` subpackage** implements a layered, portable preferences framework:
   - **Portable layer** (`param_form.py`, `preset_panel.py`) has zero
@@ -1888,10 +1933,10 @@ The CLI is **not** affected by this file — it continues to use its own
 |---------|---------|
 | `numpy` | `sessionpreplib` (core dependency) |
 | `soundfile` | `sessionpreplib/audio.py` (audio I/O) |
-| `scipy` | `sessionpreplib/audio.py` (subsonic STFT), `sessionprepgui/waveform.py` (mel spectrogram) — core dependency |
+| `scipy` | `sessionpreplib/audio.py` (subsonic STFT), `sessionprepgui/waveform/compute.py` (mel spectrogram) — core dependency |
 | `rich` | `sessionprep.py` only — **not** a library dependency |
 | `PySide6` | `sessionprepgui` only — optional GUI dependency |
-| `sounddevice` | `sessionprepgui/playback.py` only — optional GUI dependency |
+| `sounddevice` | `sessionprepgui/detail/playback.py` only — optional GUI dependency |
 
 ### 19.3 Layer Cake
 
