@@ -58,6 +58,9 @@ def run_nuitka(target_key, clean=False):
     if not target["console"]:
         if sys.platform == "win32":
             cmd.append("--windows-disable-console")
+            icon_path = target.get("icon")
+            if icon_path and os.path.isfile(icon_path):
+                cmd.append(f"--windows-icon-from-ico={icon_path}")
         elif sys.platform == "darwin":
             # GUI on macOS: produce a proper .app bundle instead of a bare onefile binary
             cmd.remove("--onefile")
