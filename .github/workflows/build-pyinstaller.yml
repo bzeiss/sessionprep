@@ -47,10 +47,11 @@ jobs:
             "exec(open('sessionpreplib/_version.py').read()); print(__version__)")
           export DIST_DIR=dist_pyinstaller
 
-          nfpm package --config packaging/linux/nfpm.yaml \
-            --packager deb --target dist_pyinstaller/
-          nfpm package --config packaging/linux/nfpm.yaml \
-            --packager rpm --target dist_pyinstaller/
+          TMPCONFIG=$(mktemp --suffix=.yaml)
+          envsubst < packaging/linux/nfpm.yaml > "$TMPCONFIG"
+          nfpm package --config "$TMPCONFIG" --packager deb --target dist_pyinstaller/
+          nfpm package --config "$TMPCONFIG" --packager rpm --target dist_pyinstaller/
+          rm "$TMPCONFIG"
 
           STAGING=$(mktemp -d)
           cp dist_pyinstaller/sessionprep-linux-x64       "$STAGING/sessionprep"
