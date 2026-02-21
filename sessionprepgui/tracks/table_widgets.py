@@ -28,7 +28,8 @@ _PAGE_PROGRESS = 0
 _PAGE_TABS = 1
 
 _PHASE_ANALYSIS = 0
-_PHASE_SETUP = 1
+_PHASE_TOPOLOGY = 1
+_PHASE_SETUP = 2
 
 _SETUP_RIGHT_PLACEHOLDER = 0
 _SETUP_RIGHT_TREE = 1
@@ -138,14 +139,17 @@ class _SetupDragTable(BatchEditTableWidget):
         return [_MIME_TRACKS]
 
     def mimeData(self, items):
-        filenames: set[str] = set()
+        # Use entry_id from UserRole when available (transfer manifest),
+        # fall back to cell text for backward compatibility.
+        entry_ids: set[str] = set()
         for item in items:
             if item.column() == 1 and item.text():  # col 1 = File
-                filenames.add(item.text())
-        if not filenames:
+                eid = item.data(Qt.UserRole)
+                entry_ids.add(eid if eid else item.text())
+        if not entry_ids:
             return super().mimeData(items)
         mime = QMimeData()
-        mime.setData(_MIME_TRACKS, json.dumps(sorted(filenames)).encode())
+        mime.setData(_MIME_TRACKS, json.dumps(sorted(entry_ids)).encode())
         return mime
 
     def supportedDragActions(self):

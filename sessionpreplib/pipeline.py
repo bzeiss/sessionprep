@@ -67,7 +67,8 @@ class Pipeline:
         for p in all_procs:
             p.configure(self.config)
         self.audio_processors: list[AudioProcessor] = sorted(
-            [p for p in all_procs if p.enabled], key=lambda p: p.priority
+            [p for p in all_procs if p.enabled],
+            key=lambda p: (p.phase, p.priority),
         )
 
         # Validate
@@ -391,11 +392,15 @@ class Pipeline:
         output_dir: str,
         progress_cb: Callable[[int, int, str], None] | None = None,
     ) -> SessionContext:
-        """Apply enabled processors and write processed files.
+        """Apply enabled processors, resolve channel topology, and write files.
 
         Removes stale *audio* files from *output_dir* before writing,
         while preserving non-audio artefacts (e.g. ``.dawproject``).
         Respects ``track.processor_skip`` for per-track exclusions.
+
+        After completion, ``session.output_tracks`` contains one
+        ``TrackContext`` per topology output and ``session.transfer_manifest``
+        is populated (preserving user-added duplicates from previous runs).
 
         Parameters
         ----------
@@ -408,18 +413,24 @@ class Pipeline:
         Returns
         -------
         SessionContext
-            The same session with ``processed_filepath`` /
-            ``applied_processors`` updated per track and
-            ``prepare_state`` set to ``"ready"``.
+            The same session with ``output_tracks``, ``transfer_manifest``,
+            and ``prepare_state`` updated.
         """
+        from .topology import (
+            build_default_topology,
+            resolve_entry_audio,
+            build_transfer_manifest,
+        )
+        import soundfile as sf
+
         # Clean stale *audio* files from output dir, preserving non-audio
         # artefacts (e.g. .dawproject files written by DAW transfer).
         from .audio import AUDIO_EXTENSIONS
         if os.path.isdir(output_dir):
-            for entry in os.listdir(output_dir):
-                if not os.path.splitext(entry)[1].lower() in AUDIO_EXTENSIONS:
+            for fname in os.listdir(output_dir):
+                if not os.path.splitext(fname)[1].lower() in AUDIO_EXTENSIONS:
                     continue
-                fp = os.path.join(output_dir, entry)
+                fp = os.path.join(output_dir, fname)
                 try:
                     if os.path.isfile(fp):
                         os.unlink(fp)
@@ -427,35 +438,32 @@ class Pipeline:
                     pass  # locked file — will be overwritten in place
         os.makedirs(output_dir, exist_ok=True)
 
+        # ── Build / resolve topology ──────────────────────────────────────
+        topology = session.topology
+        if topology is None:
+            topology = build_default_topology(session.tracks)
+            session.topology = topology
+
         ok_tracks = [t for t in session.tracks if t.status == "OK"]
-        total = len(ok_tracks)
-        prepare_errors: list[tuple[str, str]] = []  # (filename, error)
+        track_map = {t.filename: t for t in ok_tracks}
 
-        for step, track in enumerate(ok_tracks):
-            # Determine which processors to apply for this track
-            applicable = [
-                p for p in self.audio_processors
-                if p.id not in track.processor_skip
-            ]
+        # ── Phase A: apply processors to source tracks ────────────────────
+        # Produces a dict of processed audio per source filename.
+        processed_audio: dict[str, tuple[np.ndarray, int]] = {}
 
-            # Check each processor has a valid result
-            applicable = [
-                p for p in applicable
-                if p.id in track.processor_results
-                and track.processor_results[p.id].error is None
-            ]
+        # Collect which source filenames the topology actually references
+        needed_sources: set[str] = set()
+        for topo_entry in topology.entries:
+            for src in topo_entry.sources:
+                needed_sources.add(src.input_filename)
 
-            if not applicable:
-                # Nothing to apply — clear any previous processed state
-                track.processed_filepath = None
-                track.applied_processors = []
-                if progress_cb:
-                    progress_cb(step + 1, total,
-                                f"Skipped {track.filename} (no processors)")
-                continue
+        source_list = [t for t in ok_tracks if t.filename in needed_sources]
+        total_sources = len(source_list)
 
+        for src_step, track in enumerate(source_list):
             if progress_cb:
-                progress_cb(step, total, f"Preparing {track.filename}")
+                progress_cb(src_step, total_sources + len(topology.entries),
+                            f"Processing {track.filename}")
 
             try:
                 # Load audio from disk on demand (e.g. after session restore)
@@ -465,44 +473,103 @@ class Pipeline:
                     track.samplerate = loaded.samplerate
                     track.total_samples = loaded.total_samples
 
-                # Deep-copy audio data so the session's copy stays clean
-                audio = track.audio_data.copy()
+                # Determine applicable processors for this track
+                applicable = [
+                    p for p in self.audio_processors
+                    if p.id not in track.processor_skip
+                    and p.id in track.processor_results
+                    and track.processor_results[p.id].error is None
+                ]
 
-                # Chain processors in priority order
-                for proc in applicable:
-                    pr = track.processor_results[proc.id]
-                    # Temporarily swap audio_data for apply()
-                    orig_audio = track.audio_data
-                    track.audio_data = audio
-                    audio = proc.apply(track, pr)
-                    track.audio_data = orig_audio
-
-                # Write processed file
-                dst = os.path.join(output_dir, track.filename)
-                # Temporarily swap for write_track
-                orig_audio = track.audio_data
-                track.audio_data = audio
-                write_track(track, dst)
-                track.audio_data = orig_audio
-
-                track.processed_filepath = dst
-                track.applied_processors = [p.id for p in applicable]
+                if applicable:
+                    audio = track.audio_data.copy()
+                    for proc in applicable:
+                        pr = track.processor_results[proc.id]
+                        orig_audio = track.audio_data
+                        track.audio_data = audio
+                        audio = proc.apply(track, pr)
+                        track.audio_data = orig_audio
+                    processed_audio[track.filename] = (audio, track.samplerate)
+                    track.applied_processors = [p.id for p in applicable]
+                else:
+                    processed_audio[track.filename] = (
+                        track.audio_data.copy(), track.samplerate)
+                    track.applied_processors = []
 
             except Exception as e:
-                track.processed_filepath = None
+                # Fallback: use raw audio so topology can still resolve
+                if track.audio_data is not None:
+                    processed_audio[track.filename] = (
+                        track.audio_data.copy(), track.samplerate)
                 track.applied_processors = []
-                prepare_errors.append((track.filename, str(e)))
                 self._emit("prepare.error", filename=track.filename,
                            error=str(e))
 
+        # ── Phase B: resolve topology + write output files ────────────────
+        output_tracks: list[TrackContext] = []
+        prepare_errors: list[tuple[str, str]] = []
+        total_entries = len(topology.entries)
+
+        for out_step, topo_entry in enumerate(topology.entries):
+            step = total_sources + out_step
             if progress_cb:
-                progress_cb(step + 1, total,
-                            f"Prepared {track.filename}")
+                progress_cb(step, total_sources + total_entries,
+                            f"Writing {topo_entry.output_filename}")
 
-            self._emit("track.prepared", filename=track.filename,
-                       index=step, total=total)
+            try:
+                resolved_audio = resolve_entry_audio(topo_entry, processed_audio)
 
+                # Pick metadata from the first source track
+                src_track = (
+                    track_map.get(topo_entry.sources[0].input_filename)
+                    if topo_entry.sources else None
+                )
+                sr = src_track.samplerate if src_track else 44100
+                subtype = src_track.subtype if src_track else "PCM_24"
+                bitdepth = src_track.bitdepth if src_track else "24-bit"
+
+                dst = os.path.join(output_dir, topo_entry.output_filename)
+                sf.write(dst, resolved_audio, sr, subtype=subtype)
+
+                n_samples = resolved_audio.shape[0]
+                out_tc = TrackContext(
+                    filename=topo_entry.output_filename,
+                    filepath=dst,
+                    audio_data=None,
+                    samplerate=sr,
+                    channels=topo_entry.output_channels,
+                    total_samples=n_samples,
+                    bitdepth=bitdepth,
+                    subtype=subtype,
+                    duration_sec=(n_samples / sr) if sr > 0 else 0.0,
+                    processed_filepath=dst,
+                    applied_processors=(
+                        list(src_track.applied_processors) if src_track else []),
+                    group=src_track.group if src_track else None,
+                    processor_results=(
+                        dict(src_track.processor_results) if src_track else {}),
+                )
+                output_tracks.append(out_tc)
+
+            except Exception as e:
+                prepare_errors.append((topo_entry.output_filename, str(e)))
+                self._emit("prepare.error",
+                           filename=topo_entry.output_filename, error=str(e))
+
+            if progress_cb:
+                progress_cb(step + 1, total_sources + total_entries,
+                            f"Prepared {topo_entry.output_filename}")
+            self._emit("track.prepared",
+                       filename=topo_entry.output_filename,
+                       index=out_step, total=total_entries)
+
+        # ── Finalise ──────────────────────────────────────────────────────
         session.config["_prepare_errors"] = prepare_errors
+        session.output_tracks = output_tracks
+        session.transfer_manifest = build_transfer_manifest(
+            topology, session.tracks,
+            session.transfer_manifest or None,
+        )
         session.prepare_state = "ready"
         return session
 

@@ -23,18 +23,30 @@ from sessionpreplib.models import (
     ProcessorResult,
     Severity,
     TrackContext,
+    TransferEntry,
+)
+from sessionpreplib.topology import (
+    ChannelRoute,
+    TopologyEntry,
+    TopologyMapping,
+    TopologySource,
 )
 
 # ---------------------------------------------------------------------------
 # Version & migration table
 # ---------------------------------------------------------------------------
 
-CURRENT_VERSION: int = 1
+CURRENT_VERSION: int = 2
 
 # Each entry upgrades from key-version to key+1.
-# Example for a future v2:
-#   _MIGRATIONS[1] = lambda d: {**d, "new_field": "default", "version": 2}
-_MIGRATIONS: dict[int, Callable[[dict], dict]] = {}
+_MIGRATIONS: dict[int, Callable[[dict], dict]] = {
+    1: lambda d: {
+        **d,
+        "topology": None,
+        "transfer_manifest": [],
+        "version": 2,
+    },
+}
 
 
 def _migrate(data: dict) -> dict:
@@ -213,6 +225,94 @@ def _deserialize_track(filename: str, source_dir: str, d: dict) -> TrackContext:
 
 
 # ---------------------------------------------------------------------------
+# Topology serialisation helpers
+# ---------------------------------------------------------------------------
+
+def _ser_channel_route(r: ChannelRoute) -> dict:
+    return {
+        "source_channel": r.source_channel,
+        "target_channel": r.target_channel,
+        "gain": r.gain,
+    }
+
+
+def _deser_channel_route(d: dict) -> ChannelRoute:
+    return ChannelRoute(
+        source_channel=d["source_channel"],
+        target_channel=d["target_channel"],
+        gain=d.get("gain", 1.0),
+    )
+
+
+def _ser_topology_source(s: TopologySource) -> dict:
+    return {
+        "input_filename": s.input_filename,
+        "routes": [_ser_channel_route(r) for r in s.routes],
+    }
+
+
+def _deser_topology_source(d: dict) -> TopologySource:
+    return TopologySource(
+        input_filename=d["input_filename"],
+        routes=[_deser_channel_route(r) for r in d.get("routes", [])],
+    )
+
+
+def _ser_topology_entry(e: TopologyEntry) -> dict:
+    return {
+        "output_filename": e.output_filename,
+        "output_channels": e.output_channels,
+        "sources": [_ser_topology_source(s) for s in e.sources],
+    }
+
+
+def _deser_topology_entry(d: dict) -> TopologyEntry:
+    return TopologyEntry(
+        output_filename=d["output_filename"],
+        output_channels=d.get("output_channels", 1),
+        sources=[_deser_topology_source(s) for s in d.get("sources", [])],
+    )
+
+
+def _ser_topology(mapping: TopologyMapping | None) -> dict | None:
+    if mapping is None:
+        return None
+    return {
+        "entries": [_ser_topology_entry(e) for e in mapping.entries],
+    }
+
+
+def _deser_topology(d: dict | None) -> TopologyMapping | None:
+    if d is None:
+        return None
+    return TopologyMapping(
+        entries=[_deser_topology_entry(e) for e in d.get("entries", [])],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Transfer manifest serialisation helpers
+# ---------------------------------------------------------------------------
+
+def _ser_transfer_entry(e: TransferEntry) -> dict:
+    return {
+        "entry_id": e.entry_id,
+        "output_filename": e.output_filename,
+        "daw_track_name": e.daw_track_name,
+        "group": e.group,
+    }
+
+
+def _deser_transfer_entry(d: dict) -> TransferEntry:
+    return TransferEntry(
+        entry_id=d["entry_id"],
+        output_filename=d["output_filename"],
+        daw_track_name=d.get("daw_track_name", d["output_filename"]),
+        group=d.get("group"),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -233,6 +333,11 @@ def save_session(path: str, data: dict) -> None:
             track.filename: _serialize_track(track)
             for track in data.get("tracks", [])
         },
+        "topology": _ser_topology(data.get("topology")),
+        "transfer_manifest": [
+            _ser_transfer_entry(e)
+            for e in data.get("transfer_manifest", [])
+        ],
     }
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2, ensure_ascii=False)
@@ -266,6 +371,12 @@ def load_session(path: str) -> dict:
         for fname, tdata in raw.get("tracks", {}).items()
     ]
 
+    topology = _deser_topology(raw.get("topology"))
+    transfer_manifest = [
+        _deser_transfer_entry(e)
+        for e in raw.get("transfer_manifest", [])
+    ]
+
     return {
         "source_dir": source_dir,
         "active_config_preset": raw.get("active_config_preset", "Default"),
@@ -273,4 +384,6 @@ def load_session(path: str) -> dict:
         "session_groups": raw.get("session_groups", []),
         "daw_state": raw.get("daw_state", {}),
         "tracks": tracks,
+        "topology": topology,
+        "transfer_manifest": transfer_manifest,
     }

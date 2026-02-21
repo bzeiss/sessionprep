@@ -11,7 +11,9 @@ from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
+    QMenu,
     QMessageBox,
     QSizePolicy,
     QSplitter,
@@ -118,6 +120,9 @@ class DawMixin:
         self._setup_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._setup_table.setSelectionMode(QTableWidget.ExtendedSelection)
         self._setup_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._setup_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._setup_table.customContextMenuRequested.connect(
+            self._on_setup_table_context_menu)
         self._setup_table.verticalHeader().setVisible(False)
         self._setup_table.setMinimumWidth(300)
         self._setup_table.setShowGrid(True)
@@ -437,7 +442,7 @@ class DawMixin:
         gcm = self._group_color_map()
         track_map = {}
         if self._session:
-            track_map = {t.filename: t for t in self._session.tracks}
+            track_map = {t.filename: t for t in self._session.output_tracks}
 
         # Icons – small colored squares to distinguish folder types
         def _folder_icon(color_hex: str) -> QIcon:
@@ -596,22 +601,22 @@ class DawMixin:
                 "group that should be mapped to a DAW folder.")
             return
 
-        # Collect assignments: folder_id → [filenames]
+        # Collect assignments: folder_id → [entry_ids]
         batch: dict[str, list[str]] = {}
         no_group = 0
         no_target = 0
         no_folder = 0
         already_assigned = 0
-        for track in self._session.tracks:
-            # Skip already-assigned tracks
-            if track.filename in assignments:
+        for entry in self._session.transfer_manifest:
+            # Skip already-assigned entries
+            if entry.entry_id in assignments:
                 already_assigned += 1
                 continue
-            # Skip tracks without a group or without a DAW target
-            if not track.group:
+            # Skip entries without a group or without a DAW target
+            if not entry.group:
                 no_group += 1
                 continue
-            target_key = group_target.get(track.group)
+            target_key = group_target.get(entry.group)
             if not target_key:
                 no_target += 1
                 continue
@@ -619,7 +624,7 @@ class DawMixin:
             if not folder_id:
                 no_folder += 1
                 continue
-            batch.setdefault(folder_id, []).append(track.filename)
+            batch.setdefault(folder_id, []).append(entry.entry_id)
 
         if not batch:
             reasons: list[str] = []
@@ -654,3 +659,127 @@ class DawMixin:
         self._status_bar.showMessage(
             f"Auto-Assign: assigned {total} track(s) to "
             f"{len(batch)} folder(s).")
+
+    # ── Setup table context menu ─────────────────────────────────────────
+
+    @Slot()
+    def _on_setup_table_context_menu(self, pos):
+        """Show context menu for the Session Setup track table."""
+        if not self._session:
+            return
+        row = self._setup_table.rowAt(pos.y())
+        if row < 0:
+            return
+
+        # Get entry_id from UserRole on column 1
+        fname_item = self._setup_table.item(row, 1)
+        if not fname_item:
+            return
+        entry_id = fname_item.data(Qt.UserRole)
+        if not entry_id:
+            return
+
+        # Find the TransferEntry
+        manifest = self._session.transfer_manifest
+        entry = None
+        entry_idx = None
+        for i, e in enumerate(manifest):
+            if e.entry_id == entry_id:
+                entry = e
+                entry_idx = i
+                break
+        if entry is None:
+            return
+
+        menu = QMenu(self)
+
+        # Duplicate for DAW — creates a new manifest entry referencing
+        # the same output file but with a unique entry_id and editable name
+        dup_act = menu.addAction("Duplicate for DAW")
+        dup_act.triggered.connect(
+            lambda checked, eid=entry_id: self._duplicate_transfer_entry(eid))
+
+        # Rename DAW track name
+        rename_act = menu.addAction("Rename DAW Track…")
+        rename_act.triggered.connect(
+            lambda checked, eid=entry_id: self._rename_transfer_entry(eid))
+
+        # Remove Duplicate — only for user-added entries (entry_id != output_filename)
+        if entry.entry_id != entry.output_filename:
+            menu.addSeparator()
+            remove_act = menu.addAction("Remove Duplicate")
+            remove_act.triggered.connect(
+                lambda checked, eid=entry_id: self._remove_transfer_entry(eid))
+
+        menu.exec(self._setup_table.viewport().mapToGlobal(pos))
+
+    def _duplicate_transfer_entry(self, source_entry_id: str):
+        """Duplicate a transfer entry for multi-track DAW scenarios."""
+        from sessionpreplib.models import TransferEntry
+        import uuid
+
+        manifest = self._session.transfer_manifest
+        source = None
+        source_idx = None
+        for i, e in enumerate(manifest):
+            if e.entry_id == source_entry_id:
+                source = e
+                source_idx = i
+                break
+        if source is None:
+            return
+
+        # Count existing entries with same output_filename for naming
+        count = sum(1 for e in manifest
+                    if e.output_filename == source.output_filename)
+        stem = source.daw_track_name
+        if stem == source.output_filename:
+            import os
+            stem = os.path.splitext(stem)[0]
+
+        new_entry = TransferEntry(
+            entry_id=f"{source.output_filename}:{uuid.uuid4().hex[:8]}",
+            output_filename=source.output_filename,
+            daw_track_name=f"{stem} ({count + 1})",
+            group=source.group,
+        )
+
+        # Insert right after the source entry
+        manifest.insert(source_idx + 1, new_entry)
+        self._populate_setup_table()
+        self._status_bar.showMessage(
+            f"Duplicated '{source.daw_track_name}' → '{new_entry.daw_track_name}'")
+
+    def _rename_transfer_entry(self, entry_id: str):
+        """Rename the DAW track name for a transfer entry."""
+        manifest = self._session.transfer_manifest
+        entry = None
+        for e in manifest:
+            if e.entry_id == entry_id:
+                entry = e
+                break
+        if entry is None:
+            return
+
+        new_name, ok = QInputDialog.getText(
+            self, "Rename DAW Track",
+            "DAW track name:",
+            text=entry.daw_track_name,
+        )
+        if not ok or not new_name.strip():
+            return
+        entry.daw_track_name = new_name.strip()
+        self._populate_setup_table()
+
+    def _remove_transfer_entry(self, entry_id: str):
+        """Remove a user-added duplicate transfer entry."""
+        manifest = self._session.transfer_manifest
+        for i, e in enumerate(manifest):
+            if e.entry_id == entry_id:
+                # Safety: only remove user-added duplicates
+                if e.entry_id != e.output_filename:
+                    del manifest[i]
+                    self._populate_setup_table()
+                    self._status_bar.showMessage(
+                        f"Removed duplicate '{e.daw_track_name}'")
+                break

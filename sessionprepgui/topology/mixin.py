@@ -1,0 +1,692 @@
+"""Topology tab mixin: dual-panel view of input → output track mapping."""
+
+from __future__ import annotations
+
+import os
+from PySide6.QtCore import Qt, Slot, QPoint
+from PySide6.QtGui import QAction, QColor
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QHeaderView,
+    QInputDialog,
+    QLabel,
+    QMenu,
+    QMessageBox,
+    QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
+    QToolBar,
+    QVBoxLayout,
+    QWidget,
+)
+
+from sessionpreplib.topology import (
+    build_default_topology,
+    ChannelRoute,
+    TopologyEntry,
+    TopologySource,
+    extract_channel,
+    passthrough_routes,
+    sum_to_mono,
+)
+from sessionpreplib.utils import protools_sort_key
+
+from ..theme import COLORS, FILE_COLOR_OK
+from ..tracks.table_widgets import _PHASE_TOPOLOGY
+
+
+class TopologyMixin:
+    """Mixin that adds the Channel Topology tab to the main window.
+
+    Expects the host class to provide:
+      - ``self._session`` (SessionContext | None)
+      - ``self._phase_tabs`` (QTabWidget)
+      - ``self._mark_prepare_stale()``
+    """
+
+    # ── Build ─────────────────────────────────────────────────────────
+
+    def _build_topology_page(self) -> QWidget:
+        """Create and return the Channel Topology tab widget."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # Toolbar
+        toolbar = QToolBar()
+        toolbar.setMovable(False)
+        toolbar.setIconSize(toolbar.iconSize())
+
+        self._topo_reset_action = QAction("Reset to Default", self)
+        self._topo_reset_action.setToolTip(
+            "Rebuild the default passthrough topology from input tracks")
+        self._topo_reset_action.triggered.connect(self._on_topo_reset)
+        toolbar.addAction(self._topo_reset_action)
+
+        toolbar.addSeparator()
+
+        self._topo_status_label = QLabel("")
+        self._topo_status_label.setStyleSheet(
+            f"QLabel {{ color: {COLORS['dim']}; padding: 0 8px; }}")
+        toolbar.addWidget(self._topo_status_label)
+
+        layout.addWidget(toolbar)
+
+        # Dual-panel splitter
+        splitter = QSplitter(Qt.Horizontal)
+
+        # Left: input tracks (read-only)
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(4, 4, 4, 4)
+        left_label = QLabel("Input Tracks")
+        left_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        left_label.setStyleSheet(
+            f"QLabel {{ color: {COLORS['text']}; font-weight: bold; }}")
+        left_layout.addWidget(left_label)
+
+        self._topo_input_table = QTableWidget()
+        self._topo_input_table.setColumnCount(4)
+        self._topo_input_table.setHorizontalHeaderLabels(
+            ["File", "Ch", "Group", "Routing"])
+        self._topo_input_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._topo_input_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._topo_input_table.verticalHeader().setVisible(False)
+        self._topo_input_table.setAlternatingRowColors(True)
+        self._topo_input_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._topo_input_table.customContextMenuRequested.connect(
+            self._on_topo_input_context_menu)
+        left_layout.addWidget(self._topo_input_table)
+        splitter.addWidget(left_panel)
+
+        # Right: output tracks (topology entries)
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(4, 4, 4, 4)
+        right_label = QLabel("Output Tracks")
+        right_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        right_label.setStyleSheet(
+            f"QLabel {{ color: {COLORS['text']}; font-weight: bold; }}")
+        right_layout.addWidget(right_label)
+
+        self._topo_output_table = QTableWidget()
+        self._topo_output_table.setColumnCount(4)
+        self._topo_output_table.setHorizontalHeaderLabels(
+            ["File", "Ch", "Group", "Sources"])
+        self._topo_output_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._topo_output_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._topo_output_table.verticalHeader().setVisible(False)
+        self._topo_output_table.setAlternatingRowColors(True)
+        self._topo_output_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._topo_output_table.customContextMenuRequested.connect(
+            self._on_topo_output_context_menu)
+        right_layout.addWidget(self._topo_output_table)
+        splitter.addWidget(right_panel)
+
+        splitter.setSizes([400, 400])
+        layout.addWidget(splitter, 1)
+
+        return page
+
+    # ── Populate ──────────────────────────────────────────────────────
+
+    def _populate_topology_tab(self):
+        """Refresh both panels of the topology tab from the session."""
+        if not self._session:
+            return
+
+        # Auto-build default topology if none exists
+        if self._session.topology is None:
+            ok = [t for t in self._session.tracks if t.status == "OK"]
+            if ok:
+                self._session.topology = build_default_topology(
+                    self._session.tracks)
+
+        topo = self._session.topology
+        ok_tracks = [t for t in self._session.tracks if t.status == "OK"]
+
+        # ── Input panel ───────────────────────────────────────────────
+        self._topo_input_table.setSortingEnabled(False)
+        self._topo_input_table.setRowCount(len(ok_tracks))
+
+        for row, track in enumerate(ok_tracks):
+            # File
+            item = QTableWidgetItem(track.filename)
+            item.setData(Qt.UserRole, protools_sort_key(track.filename))
+            item.setForeground(FILE_COLOR_OK)
+            self._topo_input_table.setItem(row, 0, item)
+
+            # Ch
+            ch_item = QTableWidgetItem(str(track.channels))
+            ch_item.setForeground(QColor(COLORS["dim"]))
+            self._topo_input_table.setItem(row, 1, ch_item)
+
+            # Group
+            grp = track.group or ""
+            grp_item = QTableWidgetItem(grp)
+            grp_item.setForeground(QColor(COLORS["dim"]))
+            self._topo_input_table.setItem(row, 2, grp_item)
+
+            # Routing description
+            routing = self._describe_routing(track.filename, topo)
+            routing_item = QTableWidgetItem(routing)
+            is_excluded = routing == "Excluded"
+            routing_color = COLORS["dim"] if is_excluded else COLORS["clean"]
+            routing_item.setForeground(QColor(routing_color))
+            self._topo_input_table.setItem(row, 3, routing_item)
+
+            # Dim the whole row if excluded
+            if is_excluded:
+                item.setForeground(QColor(COLORS["dim"]))
+
+        self._topo_input_table.setSortingEnabled(True)
+
+        # Auto-fit
+        ih = self._topo_input_table.horizontalHeader()
+        ih.setSectionResizeMode(0, QHeaderView.Stretch)
+        ih.setSectionResizeMode(1, QHeaderView.Fixed)
+        ih.resizeSection(1, 32)
+        ih.setSectionResizeMode(2, QHeaderView.Interactive)
+        ih.resizeSection(2, 90)
+        ih.setSectionResizeMode(3, QHeaderView.Interactive)
+        ih.resizeSection(3, 120)
+
+        # ── Output panel ──────────────────────────────────────────────
+        entries = topo.entries if topo else []
+        self._topo_output_table.setSortingEnabled(False)
+        self._topo_output_table.setRowCount(len(entries))
+
+        # Build a map of input_filename→group for source lookups
+        track_map = self._topo_track_map()
+
+        for row, entry in enumerate(entries):
+            # File
+            item = QTableWidgetItem(entry.output_filename)
+            item.setForeground(FILE_COLOR_OK)
+            self._topo_output_table.setItem(row, 0, item)
+
+            # Ch
+            ch_item = QTableWidgetItem(str(entry.output_channels))
+            ch_item.setForeground(QColor(COLORS["dim"]))
+            self._topo_output_table.setItem(row, 1, ch_item)
+
+            # Group — derive from the first source's group
+            grp = ""
+            for src in entry.sources:
+                t = track_map.get(src.input_filename)
+                if t and t.group:
+                    grp = t.group
+                    break
+            grp_item = QTableWidgetItem(grp)
+            grp_item.setForeground(QColor(COLORS["dim"]))
+            self._topo_output_table.setItem(row, 2, grp_item)
+
+            # Sources summary
+            src_names = [s.input_filename for s in entry.sources]
+            src_text = ", ".join(src_names) if src_names else "\u2014"
+            src_item = QTableWidgetItem(src_text)
+            src_item.setForeground(QColor(COLORS["dim"]))
+            self._topo_output_table.setItem(row, 3, src_item)
+
+        self._topo_output_table.setSortingEnabled(True)
+
+        # Auto-fit
+        oh = self._topo_output_table.horizontalHeader()
+        oh.setSectionResizeMode(0, QHeaderView.Stretch)
+        oh.setSectionResizeMode(1, QHeaderView.Fixed)
+        oh.resizeSection(1, 32)
+        oh.setSectionResizeMode(2, QHeaderView.Interactive)
+        oh.resizeSection(2, 90)
+        oh.setSectionResizeMode(3, QHeaderView.Stretch)
+
+        # Status
+        n_in = len(ok_tracks)
+        n_out = len(entries)
+        self._topo_status_label.setText(
+            f"{n_in} input → {n_out} output tracks")
+
+    # ── Helpers ────────────────────────────────────────────────────────
+
+    def _describe_routing(self, input_filename: str, topo) -> str:
+        """Return a human-readable routing label for an input track."""
+        if not topo:
+            return "Excluded"
+
+        # Collect all entries that reference this input
+        related = []
+        for entry in topo.entries:
+            for src in entry.sources:
+                if src.input_filename == input_filename:
+                    related.append((entry, src))
+
+        if not related:
+            return "Excluded"
+
+        # Single entry, single source — inspect routes
+        if len(related) == 1:
+            entry, src = related[0]
+            routes = src.routes
+            if entry.output_channels == 1 and len(routes) == 1:
+                r = routes[0]
+                if r.source_channel == 0 and r.target_channel == 0 and r.gain == 1.0:
+                    # Could be passthrough-mono or extract
+                    track_map = self._topo_track_map()
+                    t = track_map.get(input_filename)
+                    if t and t.channels == 1:
+                        return "Passthrough"
+                    # Stereo source extracting one channel
+                    ch_name = {0: "Left", 1: "Right"}.get(
+                        r.source_channel, f"Ch {r.source_channel}")
+                    return f"Extract {ch_name}"
+                elif r.target_channel == 0:
+                    ch_name = {0: "Left", 1: "Right"}.get(
+                        r.source_channel, f"Ch {r.source_channel}")
+                    return f"Extract {ch_name}"
+            # Check for sum-to-mono (multiple routes to target 0)
+            if (entry.output_channels == 1
+                    and all(r.target_channel == 0 for r in routes)
+                    and len(routes) > 1):
+                return "Sum to Mono"
+            # Check for passthrough (N:N identity mapping)
+            if (entry.output_channels == len(routes)
+                    and len(entry.sources) == 1
+                    and all(r.source_channel == r.target_channel
+                            and r.gain == 1.0 for r in routes)):
+                return "Passthrough"
+            return "Custom"
+
+        # Two entries from one input — likely Split L/R
+        if len(related) == 2:
+            e0, s0 = related[0]
+            e1, s1 = related[1]
+            if (e0.output_channels == 1 and e1.output_channels == 1
+                    and len(s0.routes) == 1 and len(s1.routes) == 1):
+                chs = sorted([s0.routes[0].source_channel,
+                               s1.routes[0].source_channel])
+                if chs == [0, 1]:
+                    return "Split to L/R Mono"
+
+        # Multi-source entry — this input is merged with another
+        for entry, src in related:
+            if len(entry.sources) > 1:
+                return "Merge to Stereo"
+
+        return "Custom"
+
+    def _topo_track_map(self) -> dict:
+        """Return {filename: TrackContext} for OK input tracks."""
+        if not self._session:
+            return {}
+        return {t.filename: t for t in self._session.tracks if t.status == "OK"}
+
+    def _topo_changed(self):
+        """Refresh UI and mark prepare stale after a topology edit."""
+        self._populate_topology_tab()
+        self._mark_prepare_stale()
+
+    def _topo_output_names(self) -> set[str]:
+        """Return set of current output filenames in the topology."""
+        topo = self._session.topology if self._session else None
+        if not topo:
+            return set()
+        return {e.output_filename for e in topo.entries}
+
+    def _unique_output_name(self, base: str, ext: str) -> str:
+        """Generate a unique output filename by appending _N if needed."""
+        existing = self._topo_output_names()
+        candidate = f"{base}{ext}"
+        if candidate not in existing:
+            return candidate
+        n = 2
+        while f"{base}_{n}{ext}" in existing:
+            n += 1
+        return f"{base}_{n}{ext}"
+
+    # ── Actions ───────────────────────────────────────────────────────
+
+    @Slot()
+    def _on_topo_reset(self):
+        """Reset topology to default passthrough."""
+        if not self._session:
+            return
+        self._session.topology = build_default_topology(self._session.tracks)
+        self._topo_changed()
+
+    # ── Input table context menu ──────────────────────────────────────
+
+    @Slot(QPoint)
+    def _on_topo_input_context_menu(self, pos: QPoint):
+        """Show context menu for the input tracks table."""
+        if not self._session or not self._session.topology:
+            return
+        row = self._topo_input_table.rowAt(pos.y())
+        if row < 0:
+            return
+
+        item = self._topo_input_table.item(row, 0)
+        if not item:
+            return
+        filename = item.text()
+        track_map = self._topo_track_map()
+        track = track_map.get(filename)
+        if not track:
+            return
+
+        topo = self._session.topology
+        routing = self._describe_routing(filename, topo)
+        is_excluded = routing == "Excluded"
+
+        menu = QMenu(self)
+
+        if is_excluded:
+            # Re-include: add default passthrough entry
+            incl_act = menu.addAction("Include in Session")
+            incl_act.triggered.connect(
+                lambda checked, fn=filename: self._topo_include_input(fn))
+        else:
+            # Reset to Passthrough (only if not already passthrough)
+            if routing != "Passthrough":
+                reset_act = menu.addAction("Reset to Passthrough")
+                reset_act.triggered.connect(
+                    lambda checked, fn=filename:
+                        self._topo_reset_to_passthrough(fn))
+
+            # Split stereo to L/R mono (only for stereo+ tracks)
+            if track.channels >= 2:
+                split_action = menu.addAction("Split to L/R Mono")
+                split_action.triggered.connect(
+                    lambda checked, fn=filename:
+                        self._topo_split_stereo(fn))
+
+                # Downmix submenu
+                dm_menu = menu.addMenu("Downmix to Mono")
+                for ch in range(track.channels):
+                    label = {0: "Keep Left", 1: "Keep Right"}.get(
+                        ch, f"Keep Ch {ch}")
+                    act = dm_menu.addAction(label)
+                    act.triggered.connect(
+                        lambda checked, fn=filename, c=ch:
+                            self._topo_extract_channel(fn, c))
+                sum_act = dm_menu.addAction("Sum All Channels")
+                sum_act.triggered.connect(
+                    lambda checked, fn=filename:
+                        self._topo_sum_to_mono(fn))
+
+            # Merge two selected mono tracks to stereo
+            selected_rows = set(
+                idx.row()
+                for idx in self._topo_input_table.selectedIndexes())
+            if len(selected_rows) == 2:
+                rows = sorted(selected_rows)
+                fn_l = self._topo_input_table.item(rows[0], 0)
+                fn_r = self._topo_input_table.item(rows[1], 0)
+                if fn_l and fn_r:
+                    t_l = track_map.get(fn_l.text())
+                    t_r = track_map.get(fn_r.text())
+                    if (t_l and t_r
+                            and t_l.channels == 1 and t_r.channels == 1):
+                        menu.addSeparator()
+                        merge_act = menu.addAction("Merge to Stereo")
+                        merge_act.triggered.connect(
+                            lambda checked, a=fn_l.text(), b=fn_r.text():
+                                self._topo_merge_stereo(a, b))
+
+            # Exclude from session
+            menu.addSeparator()
+            excl_action = menu.addAction("Exclude from Session")
+            excl_action.triggered.connect(
+                lambda checked, fn=filename:
+                    self._topo_exclude_input(fn))
+
+        if menu.actions():
+            menu.exec(self._topo_input_table.viewport().mapToGlobal(pos))
+
+    # ── Output table context menu ─────────────────────────────────────
+
+    @Slot(QPoint)
+    def _on_topo_output_context_menu(self, pos: QPoint):
+        """Show context menu for the output tracks table."""
+        if not self._session or not self._session.topology:
+            return
+        row = self._topo_output_table.rowAt(pos.y())
+        if row < 0:
+            return
+
+        topo = self._session.topology
+        if row >= len(topo.entries):
+            return
+        entry = topo.entries[row]
+
+        menu = QMenu(self)
+
+        rename_act = menu.addAction("Rename Output…")
+        rename_act.triggered.connect(
+            lambda checked, idx=row: self._topo_rename_output(idx))
+
+        menu.addSeparator()
+        remove_act = menu.addAction("Remove Output")
+        remove_act.triggered.connect(
+            lambda checked, idx=row: self._topo_remove_output(idx))
+
+        menu.exec(self._topo_output_table.viewport().mapToGlobal(pos))
+
+    # ── Topology operations ───────────────────────────────────────────
+
+    def _topo_split_stereo(self, input_filename: str):
+        """Replace a stereo passthrough with two mono extract entries."""
+        topo = self._session.topology
+        track_map = self._topo_track_map()
+        track = track_map.get(input_filename)
+        if not track or track.channels < 2:
+            return
+
+        stem, ext = os.path.splitext(input_filename)
+
+        # Remove the existing entry for this input (if any)
+        topo.entries = [
+            e for e in topo.entries
+            if not (len(e.sources) == 1
+                    and e.sources[0].input_filename == input_filename)
+        ]
+
+        # Add L and R mono entries
+        for ch, suffix in enumerate(["_L", "_R"]):
+            if ch >= track.channels:
+                break
+            out_name = self._unique_output_name(f"{stem}{suffix}", ext)
+            topo.entries.append(TopologyEntry(
+                output_filename=out_name,
+                output_channels=1,
+                sources=[TopologySource(
+                    input_filename=input_filename,
+                    routes=extract_channel(ch),
+                )],
+            ))
+
+        self._topo_changed()
+
+    def _topo_extract_channel(self, input_filename: str, channel: int):
+        """Replace entry with a mono extract of a single channel."""
+        topo = self._session.topology
+        track_map = self._topo_track_map()
+        track = track_map.get(input_filename)
+        if not track or channel >= track.channels:
+            return
+
+        stem, ext = os.path.splitext(input_filename)
+        suffix = {0: "_L", 1: "_R"}.get(channel, f"_ch{channel}")
+
+        # Remove existing entry for this input
+        topo.entries = [
+            e for e in topo.entries
+            if not (len(e.sources) == 1
+                    and e.sources[0].input_filename == input_filename)
+        ]
+
+        out_name = self._unique_output_name(f"{stem}{suffix}", ext)
+        topo.entries.append(TopologyEntry(
+            output_filename=out_name,
+            output_channels=1,
+            sources=[TopologySource(
+                input_filename=input_filename,
+                routes=extract_channel(channel),
+            )],
+        ))
+        self._topo_changed()
+
+    def _topo_sum_to_mono(self, input_filename: str):
+        """Replace entry with a mono sum of all channels."""
+        topo = self._session.topology
+        track_map = self._topo_track_map()
+        track = track_map.get(input_filename)
+        if not track:
+            return
+
+        stem, ext = os.path.splitext(input_filename)
+
+        # Remove existing entry for this input
+        topo.entries = [
+            e for e in topo.entries
+            if not (len(e.sources) == 1
+                    and e.sources[0].input_filename == input_filename)
+        ]
+
+        out_name = self._unique_output_name(f"{stem}_mono", ext)
+        topo.entries.append(TopologyEntry(
+            output_filename=out_name,
+            output_channels=1,
+            sources=[TopologySource(
+                input_filename=input_filename,
+                routes=sum_to_mono(track.channels),
+            )],
+        ))
+        self._topo_changed()
+
+    def _topo_merge_stereo(self, left_filename: str, right_filename: str):
+        """Merge two mono inputs into one stereo output."""
+        topo = self._session.topology
+        track_map = self._topo_track_map()
+        t_l = track_map.get(left_filename)
+        t_r = track_map.get(right_filename)
+        if not t_l or not t_r or t_l.channels != 1 or t_r.channels != 1:
+            return
+
+        stem_l, ext = os.path.splitext(left_filename)
+
+        # Remove existing entries for both inputs
+        remove_fns = {left_filename, right_filename}
+        topo.entries = [
+            e for e in topo.entries
+            if not (len(e.sources) == 1
+                    and e.sources[0].input_filename in remove_fns)
+        ]
+
+        out_name = self._unique_output_name(f"{stem_l}_stereo", ext)
+        topo.entries.append(TopologyEntry(
+            output_filename=out_name,
+            output_channels=2,
+            sources=[
+                TopologySource(
+                    input_filename=left_filename,
+                    routes=[ChannelRoute(0, 0)],
+                ),
+                TopologySource(
+                    input_filename=right_filename,
+                    routes=[ChannelRoute(0, 1)],
+                ),
+            ],
+        ))
+        self._topo_changed()
+
+    def _topo_include_input(self, input_filename: str):
+        """Re-include an excluded input track as a passthrough entry."""
+        topo = self._session.topology
+        track_map = self._topo_track_map()
+        track = track_map.get(input_filename)
+        if not track:
+            return
+
+        out_name = self._unique_output_name(
+            *os.path.splitext(input_filename))
+        topo.entries.append(TopologyEntry(
+            output_filename=out_name,
+            output_channels=track.channels,
+            sources=[TopologySource(
+                input_filename=input_filename,
+                routes=passthrough_routes(track.channels),
+            )],
+        ))
+        self._topo_changed()
+
+    def _topo_reset_to_passthrough(self, input_filename: str):
+        """Reset an input track's routing back to default passthrough."""
+        topo = self._session.topology
+        track_map = self._topo_track_map()
+        track = track_map.get(input_filename)
+        if not track:
+            return
+
+        # Remove all existing entries that reference this input
+        topo.entries = [
+            e for e in topo.entries
+            if not any(s.input_filename == input_filename
+                       for s in e.sources)
+        ]
+
+        # Add back as passthrough
+        out_name = self._unique_output_name(
+            *os.path.splitext(input_filename))
+        topo.entries.append(TopologyEntry(
+            output_filename=out_name,
+            output_channels=track.channels,
+            sources=[TopologySource(
+                input_filename=input_filename,
+                routes=passthrough_routes(track.channels),
+            )],
+        ))
+        self._topo_changed()
+
+    def _topo_exclude_input(self, input_filename: str):
+        """Remove all topology entries that reference the given input."""
+        topo = self._session.topology
+        topo.entries = [
+            e for e in topo.entries
+            if not any(s.input_filename == input_filename
+                       for s in e.sources)
+        ]
+        self._topo_changed()
+
+    def _topo_rename_output(self, entry_index: int):
+        """Rename an output file in the topology via input dialog."""
+        topo = self._session.topology
+        if entry_index >= len(topo.entries):
+            return
+        entry = topo.entries[entry_index]
+
+        new_name, ok = QInputDialog.getText(
+            self, "Rename Output",
+            "New output filename:",
+            text=entry.output_filename,
+        )
+        if not ok or not new_name.strip():
+            return
+        new_name = new_name.strip()
+
+        # Check for duplicates
+        existing = self._topo_output_names() - {entry.output_filename}
+        if new_name in existing:
+            QMessageBox.warning(
+                self, "Rename Output",
+                f"An output named '{new_name}' already exists.")
+            return
+
+        entry.output_filename = new_name
+        self._topo_changed()
+
+    def _topo_remove_output(self, entry_index: int):
+        """Remove an output entry from the topology."""
+        topo = self._session.topology
+        if entry_index >= len(topo.entries):
+            return
+        del topo.entries[entry_index]
+        self._topo_changed()

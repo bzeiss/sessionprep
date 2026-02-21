@@ -271,19 +271,22 @@ class DawProjectDawProcessor(DawProcessor):
 
         # Build lookups
         folder_dict_map = {f["id"]: f for f in daw_folders}
-        track_map = {t.filename: t for t in session.tracks}
+        manifest_map = {
+            e.entry_id: e for e in session.transfer_manifest}
+        out_track_map = {
+            t.filename: t for t in session.output_tracks}
 
-        # Build ordered work list
+        # Build ordered work list: [(entry_id, folder_id), ...]
         work: list[tuple[str, str]] = []
         seen: set[str] = set()
         for fid, ordered_names in track_order.items():
-            for fname in ordered_names:
-                if fname in assignments and assignments[fname] == fid:
-                    work.append((fname, fid))
-                    seen.add(fname)
-        for fname, fid in sorted(assignments.items()):
-            if fname not in seen:
-                work.append((fname, fid))
+            for eid in ordered_names:
+                if eid in assignments and assignments[eid] == fid:
+                    work.append((eid, fid))
+                    seen.add(eid)
+        for eid, fid in sorted(assignments.items()):
+            if eid not in seen:
+                work.append((eid, fid))
 
         total = len(work)
         if progress_cb:
@@ -296,65 +299,56 @@ class DawProjectDawProcessor(DawProcessor):
         if project.arrangement.lanes is None:
             project.arrangement.lanes = Lanes(time_unit=TimeUnit.SECONDS)
 
-        use_processed = session.config.get("_use_processed", False)
-
         proc_id = "bimodal_normalize"
         bn_enabled = session.config.get(f"{proc_id}_enabled", True)
 
-        dbg(f"transfer: use_processed={use_processed}, "
-            f"bn_enabled={bn_enabled}")
+        dbg(f"transfer: bn_enabled={bn_enabled}")
 
-        # ── Create tracks and clips ───────────────────────────────
-        for step, (fname, fid) in enumerate(work):
+        # ── Create tracks and clips ─────────────────────────────
+        for step, (eid, fid) in enumerate(work):
             folder_track = folder_track_map.get(fid)
             folder_dict = folder_dict_map.get(fid)
-            tc = track_map.get(fname)
+            entry = manifest_map.get(eid)
+            out_tc = (
+                out_track_map.get(entry.output_filename)
+                if entry else None
+            )
 
-            if not folder_track or not tc:
+            if not folder_track or not entry or not out_tc:
                 results.append(DawCommandResult(
-                    command=DawCommand("add_track", fname,
+                    command=DawCommand("add_track", eid,
                                        {"folder_id": fid}),
                     success=False,
-                    error=f"Folder or track not found: {fid} / {fname}"))
+                    error=f"Folder, manifest entry, or output track not found: "
+                          f"{fid} / {eid}"))
                 continue
 
-            # Resolve audio file path
-            actually_processed = (
-                use_processed and tc.processed_filepath
-                and os.path.isfile(tc.processed_filepath))
-            if actually_processed:
-                audio_path = os.path.abspath(tc.processed_filepath)
-            else:
-                audio_path = os.path.abspath(tc.filepath)
+            # Resolve audio file path (always from output_tracks)
+            audio_path = os.path.abspath(
+                out_tc.processed_filepath or out_tc.filepath)
 
-            # Compute fader volume and clip gain
+            # Compute fader volume (clip gain is baked into processed files)
             fader_db = 0.0
-            clip_gain_db = 0.0
-            pr = tc.processor_results.get(proc_id)
-            skip = proc_id in getattr(tc, "processor_skip", set())
+            pr = out_tc.processor_results.get(proc_id)
+            skip = proc_id in getattr(out_tc, "processor_skip", set())
             dbg(
-                f"  {fname}: bn_enabled={bn_enabled}, "
-                f"actually_processed={actually_processed}, "
+                f"  {eid}: bn_enabled={bn_enabled}, "
                 f"has_pr={pr is not None}, "
                 f"classification={pr.classification if pr else None}, "
                 f"skip={skip}, "
-                f"gain_db={pr.gain_db if pr else None}, "
                 f"fader_offset={pr.data.get('fader_offset') if pr else None}"
             )
             if bn_enabled and pr:
                 if pr.classification not in ("Silent", "Skip") and not skip:
                     fader_db = pr.data.get("fader_offset", 0.0)
-                    if not actually_processed:
-                        clip_gain_db = pr.gain_db
-            dbg(f"  → fader_db={fader_db:.2f}, "
-                f"clip_gain_db={clip_gain_db:.2f}")
+            dbg(f"  → fader_db={fader_db:.2f}")
             volume_linear = _db_to_linear(fader_db)
 
             # Resolve group color → #rrggbb
-            track_color = self._resolve_track_color(tc.group, session)
+            track_color = self._resolve_track_color(entry.group, session)
 
             # Create the track with channel
-            track_name = os.path.splitext(fname)[0]
+            track_name = os.path.splitext(entry.daw_track_name)[0]
             new_track = Utility.create_track(
                 name=track_name,
                 content_types={ContentType.AUDIO},
@@ -383,33 +377,14 @@ class DawProjectDawProcessor(DawProcessor):
                 file=FileReference(
                     path=audio_path.replace("\\", "/"),
                     external=True),
-                sample_rate=tc.samplerate,
-                channels=tc.channels,
-                duration=tc.duration_sec,
+                sample_rate=out_tc.samplerate,
+                channels=out_tc.channels,
+                duration=out_tc.duration_sec,
             )
-            # When clip gain is needed, Clip.content must be a Lanes
-            # containing both the Audio and the gain Points as siblings:
-            #   <Clip>
-            #     <Lanes>
-            #       <Audio .../>
-            #       <Points unit="linear"><Target expression="gain"/>...</Points>
-            #     </Lanes>
-            #   </Clip>
-            if clip_gain_db != 0.0:
-                gain_linear = _db_to_linear(clip_gain_db)
-                gain_points = Points(
-                    target=AutomationTarget(
-                        expression=ExpressionType.GAIN),
-                    points=[RealPoint(time=0.0, value=gain_linear)],
-                    unit="linear",
-                    time_unit=TimeUnit.SECONDS,
-                )
-                clip_content = Lanes(lanes=[audio, gain_points])
-            else:
-                clip_content = audio
+            clip_content = audio
 
             clip = Utility.create_clip(
-                content=clip_content, time=0.0, duration=tc.duration_sec)
+                content=clip_content, time=0.0, duration=out_tc.duration_sec)
             clips = Utility.create_clips(clip)
 
             # Build lane contents for this track
@@ -424,11 +399,9 @@ class DawProjectDawProcessor(DawProcessor):
             project.arrangement.lanes.lanes.append(track_lane)
 
             results.append(DawCommandResult(
-                command=DawCommand("add_track", fname,
+                command=DawCommand("add_track", eid,
                                    {"folder": folder_dict.get("name", ""),
-                                    "fader_db": fader_db,
-                                    "clip_gain_db": clip_gain_db}),
-
+                                    "fader_db": fader_db}),
                 success=True))
 
             if progress_cb:

@@ -62,13 +62,14 @@ from .tracks import (
     _HelpBrowser, _DraggableTrackTable, _SortableItem,
     _TAB_SUMMARY, _TAB_FILE, _TAB_GROUPS, _TAB_SESSION,
     _PAGE_PROGRESS, _PAGE_TABS,
-    _PHASE_ANALYSIS, _PHASE_SETUP,
+    _PHASE_ANALYSIS, _PHASE_TOPOLOGY, _PHASE_SETUP,
 )
 from .daw import DawMixin
+from .topology import TopologyMixin
 
 
 class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
-                        GroupsMixin, DawMixin, DetailMixin):
+                        GroupsMixin, DawMixin, TopologyMixin, DetailMixin):
     def __init__(self):
         t_init = time.perf_counter()
         super().__init__()
@@ -203,7 +204,12 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         analysis_layout.addWidget(self._main_splitter, 1)
         self._phase_tabs.addTab(analysis_page, "Analysis && Preparation")
 
-        # Tab 1 — Session Setup (placeholder)
+        # Tab 1 — Channel Topology
+        self._phase_tabs.addTab(
+            self._build_topology_page(), "Channel Topology")
+        self._phase_tabs.setTabEnabled(_PHASE_TOPOLOGY, False)
+
+        # Tab 2 — Session Setup
         self._phase_tabs.addTab(self._build_setup_page(), "Session Setup")
         self._phase_tabs.setTabEnabled(_PHASE_SETUP, False)
         self._phase_tabs.currentChanged.connect(self._on_phase_tab_changed)

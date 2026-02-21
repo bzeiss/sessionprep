@@ -36,7 +36,7 @@ from ..tracks.table_widgets import (
     _SortableItem, _make_analysis_cell,
     _TAB_FILE, _TAB_GROUPS, _TAB_SESSION, _TAB_SUMMARY,
     _PAGE_PROGRESS, _PAGE_TABS,
-    _PHASE_ANALYSIS, _PHASE_SETUP,
+    _PHASE_ANALYSIS, _PHASE_TOPOLOGY, _PHASE_SETUP,
 )
 from ..theme import COLORS, FILE_COLOR_OK, FILE_COLOR_ERROR
 from .worker import AnalyzeWorker, PrepareWorker
@@ -187,6 +187,7 @@ class AnalysisMixin:
 
         # Reset UI
         self._phase_tabs.setCurrentIndex(_PHASE_ANALYSIS)
+        self._phase_tabs.setTabEnabled(_PHASE_TOPOLOGY, False)
         self._phase_tabs.setTabEnabled(_PHASE_SETUP, False)
         self._track_table.setRowCount(0)
         self._setup_table.setRowCount(0)
@@ -255,6 +256,8 @@ class AnalysisMixin:
                 "session_groups": self._session_groups,
                 "daw_state": self._session.daw_state,
                 "tracks": self._session.tracks,
+                "topology": self._session.topology,
+                "transfer_manifest": self._session.transfer_manifest,
             })
             self._status_bar.showMessage(f"Session saved to {path}")
         except Exception as exc:
@@ -302,6 +305,7 @@ class AnalysisMixin:
         self._current_track = None
 
         self._phase_tabs.setCurrentIndex(_PHASE_ANALYSIS)
+        self._phase_tabs.setTabEnabled(_PHASE_TOPOLOGY, False)
         self._phase_tabs.setTabEnabled(_PHASE_SETUP, False)
         self._track_table.setRowCount(0)
         self._setup_table.setRowCount(0)
@@ -353,6 +357,8 @@ class AnalysisMixin:
             processors=all_processors,
             daw_state=data.get("daw_state", {}),
             prepare_state="none",
+            topology=data.get("topology"),
+            transfer_manifest=data.get("transfer_manifest", []),
         )
 
         self._session = session
@@ -382,17 +388,24 @@ class AnalysisMixin:
         self._detail_tabs.setCurrentIndex(_TAB_SUMMARY)
         self._detail_tabs.setTabEnabled(_TAB_GROUPS, True)
         self._detail_tabs.setTabEnabled(_TAB_SESSION, True)
-        self._phase_tabs.setTabEnabled(_PHASE_SETUP, True)
-        self._populate_setup_table()
+        self._phase_tabs.setTabEnabled(_PHASE_TOPOLOGY, True)
+        self._populate_topology_tab()
+        has_manifest = bool(session.transfer_manifest)
+        self._phase_tabs.setTabEnabled(_PHASE_SETUP, has_manifest)
+        if has_manifest:
+            self._populate_setup_table()
         self._analyze_action.setEnabled(True)
         self._save_session_action.setEnabled(True)
         self._update_prepare_button()
         self._auto_fit_track_table()
 
         ok_count = sum(1 for t in tracks if t.status == "OK")
+        prepare_hint = ""
+        if not has_manifest:
+            prepare_hint = " — run Prepare to enable Session Setup"
         self._status_bar.showMessage(
             f"Session loaded: {ok_count}/{len(tracks)} tracks OK"
-            " — click Reanalyze to refresh results"
+            f"{prepare_hint}"
         )
         self.setWindowTitle("SessionPrep")
 
@@ -595,9 +608,18 @@ class AnalysisMixin:
         self._detail_tabs.setTabEnabled(_TAB_GROUPS, True)
         self._detail_tabs.setTabEnabled(_TAB_SESSION, True)
 
-        # Enable Session Setup phase now that analysis is available
-        self._phase_tabs.setTabEnabled(_PHASE_SETUP, True)
-        self._populate_setup_table()
+        # Enable Channel Topology tab after analysis
+        self._phase_tabs.setTabEnabled(_PHASE_TOPOLOGY, True)
+        self._populate_topology_tab()
+
+        # Enable Session Setup phase only if transfer_manifest is populated
+        # (i.e. Prepare has been run at least once). Otherwise, user must
+        # run Prepare first to populate output_tracks + transfer_manifest.
+        has_manifest = bool(
+            self._session and self._session.transfer_manifest)
+        self._phase_tabs.setTabEnabled(_PHASE_SETUP, has_manifest)
+        if has_manifest:
+            self._populate_setup_table()
 
         # Enable Prepare button; mark stale if previously prepared
         if session.prepare_state == "ready":
@@ -678,6 +700,11 @@ class AnalysisMixin:
         self._prepare_worker = None
         self._update_prepare_button()
         self._update_use_processed_action()
+
+        # Enable Session Setup now that transfer_manifest is populated
+        if self._session and self._session.transfer_manifest:
+            self._phase_tabs.setTabEnabled(_PHASE_SETUP, True)
+
         prepared = sum(
             1 for t in self._session.tracks
             if t.processed_filepath is not None
