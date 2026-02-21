@@ -24,24 +24,7 @@ jobs:
           python-version-file: "pyproject.toml"
 
       - name: Install Dependencies
-        shell: bash
-        run: |
-          # Install base + dev + cli deps (skip gui extra to avoid dawproject build failure)
-          uv sync --extra cli
-          # Workaround: dawproject-py declares non-existent build-backend (setuptools.backends._legacy).
-          # Clone, patch to setuptools.build_meta, and install into the venv.
-          git clone --depth 1 https://github.com/roex-audio/dawproject-py.git "$RUNNER_TEMP/dawproject-py"
-          cd "$RUNNER_TEMP/dawproject-py"
-          git checkout e848bd06b00408018ff97dfb54942f3fa303a6a6
-          python -c "
-          import pathlib
-          p = pathlib.Path('pyproject.toml')
-          p.write_text(p.read_text().replace('setuptools.backends._legacy:_Backend', 'setuptools.build_meta'))
-          "
-          cd "$GITHUB_WORKSPACE"
-          uv pip install --no-deps "$RUNNER_TEMP/dawproject-py"
-          # Install remaining GUI dependencies
-          uv pip install "PySide6>=6.10.2" "sounddevice>=0.5.5" "py-ptsl>=600.2.0"
+        run: uv sync --extra cli --extra gui
 
       - name: Build with PyInstaller
         # Using --onefile to produce single binaries where possible (standard distribution format)

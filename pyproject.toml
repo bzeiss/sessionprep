@@ -40,7 +40,7 @@ gui = [
     "PySide6>=6.10.2",
     "sounddevice>=0.5.5",
     "py-ptsl>=600.2.0",
-    "dawproject @ git+https://github.com/roex-audio/dawproject-py.git@e848bd06b00408018ff97dfb54942f3fa303a6a6",
+    "dawproject @ git+https://github.com/roex-audio/dawproject-py.git@70e65aeb7b260cfec3871ca89ca8d80022c44496",
 ]
 
 [dependency-groups]
