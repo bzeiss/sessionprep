@@ -47,6 +47,16 @@ jobs:
         # Using --onefile to produce single binaries where possible (standard distribution format)
         run: uv run python build_pyinstaller.py --onefile all
 
+      - name: Build InnoSetup Installer
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          VER=$(python -c "exec(open('sessionpreplib/_version.py').read()); print(__version__)")
+          "C:/Program Files (x86)/Inno Setup 6/ISCC.exe" \
+            /DAPP_VERSION="$VER" \
+            /DDIST_DIR=dist_pyinstaller \
+            packaging/windows/sessionprep.iss
+
       - name: Package macOS .app bundles as DMG
         if: runner.os == 'macOS'
         run: |
@@ -70,6 +80,7 @@ jobs:
             dist_pyinstaller/*.dmg
             dist_pyinstaller/sessionprep-cli-*
             dist_pyinstaller/sessionprep-gui-*
+            dist_pyinstaller/SessionPrep-*-setup.exe
             !dist_pyinstaller/*.build
             !dist_pyinstaller/*.spec
             !dist_pyinstaller/*.app

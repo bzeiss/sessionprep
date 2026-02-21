@@ -62,6 +62,16 @@ jobs:
       - name: Build with Nuitka
         run: uv run python build_nuitka.py all
 
+      - name: Build InnoSetup Installer
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          VER=$(python -c "exec(open('sessionpreplib/_version.py').read()); print(__version__)")
+          "C:/Program Files (x86)/Inno Setup 6/ISCC.exe" \
+            /DAPP_VERSION="$VER" \
+            /DDIST_DIR=dist_nuitka \
+            packaging/windows/sessionprep.iss
+
       - name: Package macOS .app bundles as DMG
         if: runner.os == 'macOS'
         run: |
@@ -85,6 +95,7 @@ jobs:
             dist_nuitka/*.dmg
             dist_nuitka/sessionprep-cli-*
             dist_nuitka/sessionprep-gui-*
+            dist_nuitka/SessionPrep-*-setup.exe
             !dist_nuitka/*.build
             !dist_nuitka/*.dist
             !dist_nuitka/*.onefile-build
