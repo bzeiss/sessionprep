@@ -7,8 +7,7 @@ It performs the mechanical, non-creative labor of checking files for problems an
 normalizing levels, so you can focus on mixing.
 
 This is a **preflight heuristic** and a **starting-point generator**, not a fully
-automatic mix prep tool. Manual clip gain riding is still expected for
-section-to-section dynamics.
+automatic mix prep tool. 
 
 <table>
   <tr>
