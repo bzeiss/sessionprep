@@ -51,9 +51,6 @@ def run_nuitka(target_key, clean=False):
     ]
     
     # Platform specific flags
-    if sys.platform == "win32":
-        cmd.append("--mingw64")  # Use MinGW64+ccache; faster than MSVC+clcache
-
     if not target["console"]:
         if sys.platform == "win32":
             cmd.append("--windows-disable-console")
