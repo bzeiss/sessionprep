@@ -276,6 +276,15 @@ class Pipeline:
         # Store configured processor instances on the session for render-time access
         session.processors = list(self.audio_processors)
 
+        # Apply default-off: processors with default=False are added to
+        # processor_skip for tracks that don't already have an explicit
+        # override for that processor ID.
+        for proc in self.audio_processors:
+            if not proc.default:
+                for track in session.tracks:
+                    if track.status == "OK" and proc.id not in track.processor_skip:
+                        track.processor_skip.add(proc.id)
+
         return session
 
     def _apply_group_levels(self, session: SessionContext):
@@ -384,15 +393,15 @@ class Pipeline:
     ) -> SessionContext:
         """Apply enabled processors and write processed files.
 
-        Wipes *output_dir* before writing so stale files are never left
-        behind.  Respects ``track.processor_skip`` for per-track
-        exclusions.
+        Removes stale *audio* files from *output_dir* before writing,
+        while preserving non-audio artefacts (e.g. ``.dawproject``).
+        Respects ``track.processor_skip`` for per-track exclusions.
 
         Parameters
         ----------
         session : SessionContext
         output_dir : str
-            Target directory (wiped and recreated).
+            Target directory (stale audio files removed, then created).
         progress_cb : callable(current, total, message) or None
             Optional progress reporter.
 
@@ -403,9 +412,13 @@ class Pipeline:
             ``applied_processors`` updated per track and
             ``prepare_state`` set to ``"ready"``.
         """
-        # Clean output dir (best-effort: skip locked files on Windows)
+        # Clean stale *audio* files from output dir, preserving non-audio
+        # artefacts (e.g. .dawproject files written by DAW transfer).
+        from .audio import AUDIO_EXTENSIONS
         if os.path.isdir(output_dir):
             for entry in os.listdir(output_dir):
+                if not os.path.splitext(entry)[1].lower() in AUDIO_EXTENSIONS:
+                    continue
                 fp = os.path.join(output_dir, entry)
                 try:
                     if os.path.isfile(fp):
@@ -445,6 +458,13 @@ class Pipeline:
                 progress_cb(step, total, f"Preparing {track.filename}")
 
             try:
+                # Load audio from disk on demand (e.g. after session restore)
+                if track.audio_data is None or track.audio_data.size == 0:
+                    loaded = load_track(track.filepath)
+                    track.audio_data = loaded.audio_data
+                    track.samplerate = loaded.samplerate
+                    track.total_samples = loaded.total_samples
+
                 # Deep-copy audio data so the session's copy stays clean
                 audio = track.audio_data.copy()
 

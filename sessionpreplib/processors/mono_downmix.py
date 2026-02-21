@@ -19,6 +19,7 @@ class MonoDownmixProcessor(AudioProcessor):
 
     id = "mono_downmix"
     name = "Mono Downmix"
+    shorthand = "MD"
     priority = PRIORITY_POST  # runs after normalization
 
     @classmethod

@@ -46,11 +46,11 @@ def _resolve_icon() -> str | None:
     res_dir = os.path.join(BASE_DIR, "sessionprepgui", "res")
     system = platform.system()
     if system == "Windows":
-        candidates = ["icon.ico", "icon.png"]
+        candidates = ["sessionprep.ico", "sessionprep.png"]
     elif system == "Darwin":
-        candidates = ["icon.icns", "icon.png"]
+        candidates = ["sessionprep.icns", "sessionprep.png"]
     else:
-        candidates = ["icon.png"]
+        candidates = ["sessionprep.png"]
     for name in candidates:
         path = os.path.join(res_dir, name)
         if os.path.isfile(path):

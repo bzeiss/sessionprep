@@ -11,6 +11,7 @@ from ..audio import get_stereo_channels_subsampled, is_silent
 class DualMonoDetector(TrackDetector):
     id = "dual_mono"
     name = "Dual-Mono (Identical L/R)"
+    shorthand = "DM"
     depends_on = ["silence"]
 
     @classmethod

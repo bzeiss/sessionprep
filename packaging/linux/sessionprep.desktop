@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=SessionPrep
+Comment=Batch audio analyzer and normalizer for mix session preparation
+Exec=/usr/local/bin/sessionprep-gui
+Icon=sessionprep
+Terminal=false
+Categories=Audio;AudioVideo;

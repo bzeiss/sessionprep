@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from .theme import COLORS, FILE_COLOR_TRANSIENT, FILE_COLOR_SUSTAINED
-from .helpers import esc
+from ..theme import COLORS, FILE_COLOR_TRANSIENT, FILE_COLOR_SUSTAINED
+from ..helpers import esc
 from sessionpreplib.chunks import read_chunks, STANDARD_CHUNKS, detect_origin
 
 

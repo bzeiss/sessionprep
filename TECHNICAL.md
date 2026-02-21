@@ -111,9 +111,9 @@ The Script's Solution:
 
   In execute mode, it sets a consistent starting level into the first insert
   (Physics) and calculates the inverse fader offsets to preserve the original
-  balance (Art). It also exports
-  a machine-readable `sessionprep.json` intended for a follow-up automation tool
-  (e.g., SoundFlow) to set faders in the DAW automatically.
+  balance (Art).  The GUI's DAW Transfer action then applies fader offsets automatically
+  (Pro Tools via PTSL; DAWproject via file generation). A machine-readable
+  `sessionprep.json` is also exported for custom workflows.
 
 ---
 
@@ -215,8 +215,9 @@ The signal path is not a single volume knob. It is a chain:
 [FADER]        <--- STEP 3: RESTORATION (THE REPORT)
       |             We counteract the gain change using the Fader.
       |             This restores the Producer's intended balance.
-      |             The exported sessionprep.json is designed for automation
-      |             tools (e.g., SoundFlow) to apply these fader offsets.
+      |             The GUI's DAW Transfer applies these fader offsets
+      |             automatically (Pro Tools via PTSL, DAWproject via file
+      |             generation). sessionprep.json remains for custom workflows.
       |
 [MIX BUS]
 ```
@@ -400,8 +401,8 @@ that typical ISP overshoots are not a practical problem in the session context.
 The default mode is analysis-first: it prints a session overview so you can fix
 format issues, clipping, DC offset, correlation concerns, and other problems
 before creating a DAW session. Execute mode (`-x`) is optional: it writes processed
-tracks and exports `sessionprep.json`, intended for a follow-up automation tool
-(e.g., SoundFlow) to apply fader offsets in Pro Tools.
+tracks and exports `sessionprep.json`. In the GUI, fader offsets are applied
+automatically via DAW Transfer (Pro Tools via PTSL, DAWproject via file generation).
 
 ### Heuristic limitation
 

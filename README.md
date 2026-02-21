@@ -97,7 +97,7 @@ sessionprep /path/to/tracks          # analyze (safe, read-only)
 sessionprep /path/to/tracks -x       # analyze + process (writes to processed/)
 ```
 
-**4. Import** processed tracks into your DAW, apply fader offsets from `sessionprep.txt`.
+**4. Import** processed tracks into your DAW. Use **DAW Transfer** in the GUI to apply fader offsets automatically (Pro Tools via PTSL, DAWproject via file generation).
 
 ---
 
@@ -151,7 +151,7 @@ SessionPrep operates in three stages:
 |-------|------|-------------|------|
 | **1** | Analysis & Preparation | Format checks, clipping, DC offset, stereo compatibility, silence, subsonic, peak/RMS measurement, classification, tail exceedance | Always |
 | **2** | Processing | Bimodal normalization (clip gain adjustment) | GUI Prepare / CLI execute (`-x`) |
-| **3** | DAW Integration | Transfer tracks into DAW session, apply fader offsets to restore rough mix balance | GUI Transfer |
+| **3** | DAW Integration | Transfer tracks into DAW session; fader offsets applied automatically (Pro Tools via PTSL, DAWproject via file generation) to restore rough mix balance | GUI Transfer |
 
 
 ### Diagnostic categories

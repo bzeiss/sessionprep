@@ -51,15 +51,21 @@ def run_nuitka(target_key, clean=False):
     ]
     
     # Platform specific flags
-    # if sys.platform == "linux":
-    #    # Let Nuitka decide for Python 3.13
-    #    pass 
-    
     if not target["console"]:
         if sys.platform == "win32":
             cmd.append("--windows-disable-console")
+            icon_path = target.get("icon")
+            if icon_path and os.path.isfile(icon_path):
+                cmd.append(f"--windows-icon-from-ico={icon_path}")
         elif sys.platform == "darwin":
-            cmd.append("--macos-disable-console")
+            # GUI on macOS: produce a proper .app bundle instead of a bare onefile binary
+            cmd.remove("--onefile")
+            cmd.append("--macos-create-app-bundle")
+            icon_path = target.get("icon")
+            if icon_path and os.path.isfile(icon_path):
+                cmd.append(f"--macos-app-icon={icon_path}")
+        else:
+            pass  # Linux GUI: keep --onefile
     # Plugins
     for plugin in target.get("nuitka_plugins", []):
         cmd.append(f"--enable-plugin={plugin}")
@@ -97,8 +103,15 @@ def run_nuitka(target_key, clean=False):
             print(f"        Renaming {bin_path} -> {output_exe}")
             os.rename(bin_path, output_exe)
     
-    print(f"[SUCCESS] Built {output_exe}")
-    print(f"          Size: {os.path.getsize(output_exe) / (1024*1024):.2f} MB")
+    # On macOS GUI, output is a .app bundle (directory), not a single file
+    app_bundle = os.path.join(dist_dir, f"{os.path.splitext(target['name'])[0]}.app")
+    if sys.platform == "darwin" and not target["console"] and os.path.isdir(app_bundle):
+        print(f"[SUCCESS] Built {app_bundle}")
+    elif os.path.isfile(output_exe):
+        print(f"[SUCCESS] Built {output_exe}")
+        print(f"          Size: {os.path.getsize(output_exe) / (1024*1024):.2f} MB")
+    else:
+        print(f"[SUCCESS] Build completed")
 
 def main():
     parser = argparse.ArgumentParser(description="Build SessionPrep with Nuitka")

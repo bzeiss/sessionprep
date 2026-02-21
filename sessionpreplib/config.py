@@ -54,6 +54,7 @@ class ParamSpec:
     item_type: type | None = None    # element type for list fields
     nullable: bool = False           # True if None is valid
     presentation_only: bool = False  # True → changing this key never requires re-analysis
+    widget_hint: str | None = None   # rendering hint for the GUI widget factory (never read by the library)
 
 
 def default_config() -> dict[str, Any]:
@@ -444,6 +445,11 @@ def build_structured_defaults() -> dict[str, Any]:
         params = dp.config_params()
         if params:
             structured["daw_processors"][dp.id] = {p.key: p.default for p in params}
+        # DAWProject: include templates list default
+        if dp.id == "dawproject":
+            structured["daw_processors"].setdefault(dp.id, {})
+            structured["daw_processors"][dp.id].setdefault(
+                "dawproject_templates", [])
 
     return structured
 

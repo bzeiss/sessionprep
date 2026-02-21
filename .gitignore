@@ -32,3 +32,8 @@ nuitka-crash-report.xml
 sessionpreplib/daw_processors/ptsl/index.md
 sessionpreplib/daw_processors/ptsl/PTSL_2025.10.md
 sessionpreplib/daw_processors/ptsl/PTSL_2025.10.proto
+sessionpreplib/daw_processors/ptsl/DAWProject-Reference.html
+
+# Temporary build directories
+_dawproject_build/
+_dawproject_build/*

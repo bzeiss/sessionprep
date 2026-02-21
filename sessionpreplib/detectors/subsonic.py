@@ -11,6 +11,7 @@ from ..audio import is_silent, subsonic_stft_analysis
 class SubsonicDetector(TrackDetector):
     id = "subsonic"
     name = "Subsonic Content"
+    shorthand = "SB"
     depends_on = ["silence"]
 
     @classmethod
