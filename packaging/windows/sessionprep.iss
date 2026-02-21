@@ -46,6 +46,9 @@ Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
 
+; Tell InnoSetup to broadcast WM_SETTINGCHANGE so Explorer picks up PATH changes
+ChangesEnvironment=yes
+
 ; lowest = per-user by default; the dialog lets the user switch to all-users (admin).
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
@@ -173,7 +176,6 @@ begin
     SetPath(Dir)
   else
     SetPath(OldPath + ';' + Dir);
-  RefreshEnvironment;
 end;
 
 { Remove Dir from PATH, handling all trailing-backslash variants. }
@@ -195,7 +197,6 @@ begin
   if P <> OldPath then
   begin
     SetPath(P);
-    RefreshEnvironment;
   end;
 end;
 
