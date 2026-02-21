@@ -18,7 +18,7 @@
 #define AppPublisher "SessionPrep"
 #define AppExe       "sessionprep-gui-win-x64.exe"
 #define AppCli       "sessionprep-cli-win-x64.exe"
-#define AppIconSrc   "..\..\sessionprepgui\res\icon.ico"
+#define AppIconSrc   "..\..\sessionprepgui\res\sessionprep.ico"
 
 ; ---------------------------------------------------------------------------
 ; Setup
@@ -38,7 +38,7 @@ OutputDir=..\..\{#DIST_DIR}
 OutputBaseFilename={#AppName}-{#APP_VERSION}-setup
 
 SetupIconFile={#AppIconSrc}
-UninstallDisplayIcon={app}\icon.ico
+UninstallDisplayIcon={app}\sessionprep.ico
 
 Compression=lzma
 SolidCompression=yes
@@ -87,7 +87,7 @@ Source: "..\..\{#DIST_DIR}\{#AppCli}"; \
 ; Icon (used by the uninstaller entry and shortcuts)
 Source: "{#AppIconSrc}"; \
   DestDir: "{app}"; \
-  DestName: "icon.ico"; \
+  DestName: "sessionprep.ico"; \
   Flags: ignoreversion
 
 ; ---------------------------------------------------------------------------
@@ -97,7 +97,7 @@ Source: "{#AppIconSrc}"; \
 [Icons]
 Name: "{group}\{#AppName}"; \
   Filename: "{app}\{#AppExe}"; \
-  IconFilename: "{app}\icon.ico"; \
+  IconFilename: "{app}\sessionprep.ico"; \
   Tasks: startmenu
 
 ; ---------------------------------------------------------------------------

@@ -908,8 +908,8 @@ def _app_icon() -> QIcon:
     """Load the application icon from the res/ directory."""
     res_dir = os.path.join(os.path.dirname(__file__), "res")
     icon = QIcon()
-    svg = os.path.join(res_dir, "icon.svg")
-    png = os.path.join(res_dir, "icon.png")
+    svg = os.path.join(res_dir, "sessionprep.svg")
+    png = os.path.join(res_dir, "sessionprep.png")
     if os.path.isfile(svg):
         icon = QIcon(svg)
     if os.path.isfile(png):
