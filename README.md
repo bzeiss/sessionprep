@@ -1,6 +1,6 @@
 # SessionPrep
 
-Batch audio analyzer and normalizer for mix session preparation.
+Batch audio analyzer and bimodal normalizer for mix session preparation.
 
 SessionPrep audits and prepares raw audio tracks for mix sessions.
 It performs the mechanical, non-creative labor of checking files for problems and
