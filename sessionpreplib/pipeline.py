@@ -423,19 +423,26 @@ class Pipeline:
         )
         import soundfile as sf
 
-        # Clean stale *audio* files from output dir, preserving non-audio
-        # artefacts (e.g. .dawproject files written by DAW transfer).
+        # Clean stale *audio* files from output dir (recursive), preserving
+        # non-audio artefacts (e.g. .dawproject files written by DAW transfer).
         from .audio import AUDIO_EXTENSIONS
         if os.path.isdir(output_dir):
-            for fname in os.listdir(output_dir):
-                if not os.path.splitext(fname)[1].lower() in AUDIO_EXTENSIONS:
-                    continue
-                fp = os.path.join(output_dir, fname)
-                try:
-                    if os.path.isfile(fp):
+            for dirpath, _dirnames, filenames in os.walk(
+                    output_dir, topdown=False):
+                for fname in filenames:
+                    if os.path.splitext(fname)[1].lower() not in AUDIO_EXTENSIONS:
+                        continue
+                    fp = os.path.join(dirpath, fname)
+                    try:
                         os.unlink(fp)
-                except OSError:
-                    pass  # locked file — will be overwritten in place
+                    except OSError:
+                        pass  # locked file — will be overwritten in place
+                # Prune empty subdirectories
+                if dirpath != output_dir:
+                    try:
+                        os.rmdir(dirpath)
+                    except OSError:
+                        pass
         os.makedirs(output_dir, exist_ok=True)
 
         # ── Build / resolve topology ──────────────────────────────────────
@@ -529,6 +536,7 @@ class Pipeline:
                 bitdepth = src_track.bitdepth if src_track else "24-bit"
 
                 dst = os.path.join(output_dir, topo_entry.output_filename)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
                 sf.write(dst, resolved_audio, sr, subtype=subtype)
 
                 n_samples = resolved_audio.shape[0]
@@ -658,7 +666,9 @@ def _load_one_track(
         event_bus.emit("track.load", filename=filename,
                        index=idx, total=total)
     try:
-        return load_track(filepath)
+        tc = load_track(filepath)
+        tc.filename = filename  # preserve relative path from discover_audio_files
+        return tc
     except Exception as e:
         return TrackContext(
             filename=filename,
@@ -678,16 +688,18 @@ def load_session(
     source_dir: str,
     config: dict[str, Any],
     event_bus: EventBus | None = None,
+    recursive: bool = False,
 ) -> SessionContext:
     """
-    Load all WAV files from source_dir into a SessionContext.
+    Load all audio files from source_dir into a SessionContext.
     Files are loaded in parallel using a thread pool.
     Handles group assignment.
+
+    When *recursive* is True, subdirectories are scanned and filenames
+    become relative paths (e.g. ``"drums/01_Kick.wav"``).
     """
-    files = sorted(
-        [f for f in os.listdir(source_dir) if f.lower().endswith(AUDIO_EXTENSIONS)],
-        key=protools_sort_key,
-    )
+    from .audio import discover_audio_files
+    files = discover_audio_files(source_dir, recursive=recursive)
 
     total = len(files)
     workers = min(os.cpu_count() or 4, 8, total) if total else 1

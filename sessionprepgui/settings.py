@@ -57,8 +57,8 @@ _PRESENTATION_DEFAULTS: dict[str, Any] = {
 _APP_DEFAULTS: dict[str, Any] = {
     "scale_factor": 1.0,
     "report_verbosity": "normal",
-    "phase1_output_folder": "sp_01_topology",
-    "phase2_output_folder": "sp_02_processed",
+    "phase1_output_folder": "sp_01_tracklayout",
+    "phase2_output_folder": "sp_02_prepared",
     "spectrogram_colormap": "magma",
     "default_project_dir": "",
     "invert_scroll": "default",

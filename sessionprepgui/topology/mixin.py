@@ -6,6 +6,7 @@ import os
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
@@ -67,6 +68,14 @@ class TopologyMixin:
         topo_open_action.setToolTip("Open a directory containing audio files")
         topo_open_action.triggered.connect(self._on_open_path)
         toolbar.addAction(topo_open_action)
+
+        self._recursive_cb = QCheckBox("Scan subfolders")
+        self._recursive_cb.setToolTip(
+            "When checked, Open Folder will recursively discover "
+            "audio files in all subdirectories")
+        self._recursive_cb.setChecked(self._recursive_scan)
+        self._recursive_cb.toggled.connect(self._on_recursive_toggled)
+        toolbar.addWidget(self._recursive_cb)
 
         toolbar.addSeparator()
 
@@ -208,6 +217,15 @@ class TopologyMixin:
 
         return page
 
+    # ── Recursive scan toggle ────────────────────────────────────────
+
+    @Slot(bool)
+    def _on_recursive_toggled(self, checked: bool):
+        self._recursive_scan = checked
+        self._config.setdefault("app", {})["recursive_scan"] = checked
+        from ..settings import save_config
+        save_config(self._config)
+
     # ── Populate ──────────────────────────────────────────────────────
 
     def _populate_topology_tab(self):
@@ -290,7 +308,7 @@ class TopologyMixin:
 
     @Slot()
     def _on_topo_apply(self):
-        """Write channel-rerouted files to sp_01_topology/ folder."""
+        """Write channel-rerouted files to the track layout output folder."""
         if not self._session or not self._source_dir:
             return
         if self._topo_apply_worker is not None:
@@ -299,7 +317,7 @@ class TopologyMixin:
         from ..analysis.worker import TopologyApplyWorker
 
         output_folder = self._config.get("app", {}).get(
-            "phase1_output_folder", "sp_01_topology")
+            "phase1_output_folder", "sp_01_tracklayout")
         output_dir = os.path.join(self._source_dir, output_folder)
 
         self._topo_apply_action.setEnabled(False)
@@ -350,7 +368,7 @@ class TopologyMixin:
             self._status_bar.showMessage(msg)
 
         output_folder = self._config.get("app", {}).get(
-            "phase1_output_folder", "sp_01_topology")
+            "phase1_output_folder", "sp_01_tracklayout")
         self._topology_dir = os.path.join(self._source_dir, output_folder)
 
         self._phase_tabs.setTabEnabled(_PHASE_ANALYSIS, True)

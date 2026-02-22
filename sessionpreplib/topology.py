@@ -194,7 +194,7 @@ def build_transfer_manifest(
         grp = None
         if entry.sources:
             grp = group_map.get(entry.sources[0].input_filename)
-        stem = os.path.splitext(entry.output_filename)[0]
+        stem = os.path.splitext(os.path.basename(entry.output_filename))[0]
         result.append(TransferEntry(
             entry_id=entry.output_filename,
             output_filename=entry.output_filename,

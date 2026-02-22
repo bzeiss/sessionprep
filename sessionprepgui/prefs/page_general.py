@@ -50,17 +50,17 @@ _APP_PARAMS = [
         ),
     ),
     ParamSpec(
-        key="phase1_output_folder", type=str, default="sp_01_topology",
-        label="Phase 1: channel rerouting folder name",
+        key="phase1_output_folder", type=str, default="sp_01_tracklayout",
+        label="Phase 1: track layout folder name",
         description=(
             "Name of the subfolder (relative to the project directory) "
-            "where channel-rerouted audio files are written after "
+            "where track-layout audio files are written after "
             "applying the channel topology. "
             "Must be a simple folder name without path separators."
         ),
     ),
     ParamSpec(
-        key="phase2_output_folder", type=str, default="sp_02_processed",
+        key="phase2_output_folder", type=str, default="sp_02_prepared",
         label="Phase 2: prepared folder name",
         description=(
             "Name of the subfolder (relative to the project directory) "
@@ -122,7 +122,7 @@ class GeneralPage(QWidget):
             if key in ("phase1_output_folder", "phase2_output_folder"):
                 raw = _read_widget(widget)
                 if sanitize_output_folder(str(raw)) is None:
-                    label = ("Phase 1 channel rerouting" if "phase1" in key
+                    label = ("Phase 1 track layout" if "phase1" in key
                              else "Phase 2 prepared")
                     return (
                         f"The {label} folder name is invalid.\n\n"

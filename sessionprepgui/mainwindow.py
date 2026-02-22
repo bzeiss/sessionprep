@@ -89,7 +89,7 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         self._session = None
         self._summary = None
         self._source_dir = None
-        self._topology_dir = None  # path to sp_01_topology/ after Phase 1 Apply
+        self._topology_dir = None  # path to sp_01_tracklayout/ after Phase 1 Apply
         self._topo_source_tracks = []  # original source tracks for Phase 1 input table
         self._topo_topology = None  # Phase 1 topology (separate from session.topology)
         self._worker = None
@@ -101,6 +101,7 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         self._session_groups: list[dict] = []
         self._prev_group_assignments: dict[str, str | None] = {}
         self._active_session_preset: str = "Default"
+        self._recursive_scan: bool = False
         self._session_config: dict[str, Any] | None = None
         self._session_widgets: dict[str, list[tuple[str, QWidget]]] = {}
 
@@ -120,6 +121,8 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         dbg(f"load_config: {(time.perf_counter() - t0) * 1000:.1f} ms")
         self._active_config_preset_name: str = self._config.get(
             "app", {}).get("active_config_preset", "Default")
+        self._recursive_scan = self._config.get(
+            "app", {}).get("recursive_scan", False)
 
         # Instantiate and configure DAW processors
         t0 = time.perf_counter()

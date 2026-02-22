@@ -36,7 +36,7 @@ from sessionpreplib.topology import (
 # Version & migration table
 # ---------------------------------------------------------------------------
 
-CURRENT_VERSION: int = 3
+CURRENT_VERSION: int = 4
 
 # Each entry upgrades from key-version to key+1.
 _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
@@ -50,6 +50,11 @@ _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
         **d,
         "topology_applied": False,
         "version": 3,
+    },
+    3: lambda d: {
+        **d,
+        "recursive_scan": False,
+        "version": 4,
     },
 }
 
@@ -350,6 +355,7 @@ def save_session(path: str, data: dict) -> None:
             for e in data.get("base_transfer_manifest", [])
         ],
         "use_processed": data.get("use_processed", False),
+        "recursive_scan": data.get("recursive_scan", False),
     }
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2, ensure_ascii=False)
@@ -405,4 +411,5 @@ def load_session(path: str) -> dict:
             for e in raw.get("base_transfer_manifest", [])
         ],
         "use_processed": raw.get("use_processed", False),
+        "recursive_scan": raw.get("recursive_scan", False),
     }

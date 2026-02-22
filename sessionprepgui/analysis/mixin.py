@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from sessionpreplib.audio import AUDIO_EXTENSIONS, discover_track
+from sessionpreplib.audio import AUDIO_EXTENSIONS, discover_audio_files, discover_track
 from sessionpreplib.config import default_config, flatten_structured_config
 from sessionpreplib.detectors import default_detectors
 from sessionpreplib.models import SessionContext, TrackContext
@@ -221,11 +221,14 @@ class AnalysisMixin:
         self._folder_tree.clear()
         self._setup_right_stack.setCurrentIndex(0)  # placeholder page
 
-        wav_files = sorted(
-            (f for f in os.listdir(path)
-             if f.lower().endswith(AUDIO_EXTENSIONS)),
-            key=protools_sort_key,
-        )
+        app_cfg = self._config.get("app", {})
+        skip_folders = {
+            app_cfg.get("phase1_output_folder", "sp_01_tracklayout"),
+            app_cfg.get("phase2_output_folder", "sp_02_prepared"),
+        }
+        wav_files = discover_audio_files(
+            path, recursive=self._recursive_scan,
+            skip_folders=skip_folders)
 
         if not wav_files:
             self._status_bar.showMessage(f"No audio files found in {path}")
@@ -234,9 +237,10 @@ class AnalysisMixin:
 
         # Lightweight file discovery — metadata only, no audio data loaded
         tracks = []
-        for fname in wav_files:
+        for rel in wav_files:
             try:
-                tc = discover_track(os.path.join(path, fname))
+                tc = discover_track(os.path.join(path, rel))
+                tc.filename = rel  # use relative path as canonical key
                 tracks.append(tc)
             except Exception:
                 pass  # skip unreadable files
@@ -292,6 +296,7 @@ class AnalysisMixin:
                 "prepare_state": self._session.prepare_state,
                 "base_transfer_manifest": self._session.base_transfer_manifest,
                 "use_processed": self._use_processed_cb.isChecked(),
+                "recursive_scan": self._recursive_scan,
             })
             self._status_bar.showMessage(f"Session saved to {path}")
         except Exception as exc:
@@ -337,14 +342,23 @@ class AnalysisMixin:
         self._track_table.set_source_dir(source_dir)
 
         # Re-discover original source tracks for Phase 1 topology input table
+        was_recursive = data.get("recursive_scan", False)
+        self._recursive_scan = was_recursive
+        self._recursive_cb.setChecked(was_recursive)
+        app_cfg = self._config.get("app", {})
+        skip_folders = {
+            app_cfg.get("phase1_output_folder", "sp_01_tracklayout"),
+            app_cfg.get("phase2_output_folder", "sp_02_prepared"),
+        }
         source_tracks = []
-        for fname in sorted(
-            (f for f in os.listdir(source_dir)
-             if f.lower().endswith(AUDIO_EXTENSIONS)),
-            key=protools_sort_key,
+        for rel in discover_audio_files(
+            source_dir, recursive=was_recursive,
+            skip_folders=skip_folders,
         ):
             try:
-                source_tracks.append(discover_track(os.path.join(source_dir, fname)))
+                tc = discover_track(os.path.join(source_dir, rel))
+                tc.filename = rel
+                source_tracks.append(tc)
             except Exception:
                 pass
         self._topo_source_tracks = source_tracks
@@ -383,11 +397,11 @@ class AnalysisMixin:
 
         tracks = data["tracks"]
 
-        # Phase 2 tracks live in sp_01_topology/, not source_dir.
+        # Phase 2 tracks live in sp_01_tracklayout/, not source_dir.
         # _deserialize_track resolves against source_dir — correct that here.
         if data.get("topology_applied", False):
             topo_folder = self._config.get("app", {}).get(
-                "phase1_output_folder", "sp_01_topology")
+                "phase1_output_folder", "sp_01_tracklayout")
             topo_dir = os.path.join(source_dir, topo_folder)
             for track in tracks:
                 track.filepath = os.path.join(topo_dir, track.filename)
@@ -451,7 +465,7 @@ class AnalysisMixin:
         # ── Restore topology_dir if topology was applied ─────────────────────
         if data.get("topology_applied", False):
             output_folder = self._config.get("app", {}).get(
-                "phase1_output_folder", "sp_01_topology")
+                "phase1_output_folder", "sp_01_tracklayout")
             topo_dir = os.path.join(source_dir, output_folder)
             if os.path.isdir(topo_dir):
                 self._topology_dir = topo_dir
@@ -463,7 +477,7 @@ class AnalysisMixin:
         if self._topology_dir and self._topo_topology:
             import soundfile as sf
             prep_folder = self._config.get("app", {}).get(
-                "phase2_output_folder", "sp_02_processed")
+                "phase2_output_folder", "sp_02_prepared")
             prep_dir = os.path.join(source_dir, prep_folder)
             # Build group lookup from transfer manifest so output_tracks
             # carry the group for folder-tree coloring and DAW transfer.
@@ -547,7 +561,7 @@ class AnalysisMixin:
         if not self._source_dir:
             return
 
-        # Phase 2 analysis reads from sp_01_topology/ if available
+        # Phase 2 analysis reads from sp_01_tracklayout/ if available
         analyze_dir = self._topology_dir or self._source_dir
 
         # Snapshot existing group assignments and user overrides so we can
@@ -589,7 +603,8 @@ class AnalysisMixin:
 
         self._progress_bar.setRange(0, 0)  # indeterminate until first value
 
-        self._worker = AnalyzeWorker(analyze_dir, config)
+        self._worker = AnalyzeWorker(analyze_dir, config,
+                                     recursive=self._recursive_scan)
         self._worker.progress.connect(self._on_worker_progress)
         self._worker.progress_value.connect(self._on_worker_progress_value)
         self._worker.track_analyzed.connect(self._on_track_analyzed)
@@ -765,7 +780,7 @@ class AnalysisMixin:
             self._refresh_group_combos()
 
         # Rebuild track table rows from the new session — required because
-        # analysis may have run on sp_01_topology/ whose filenames differ
+        # analysis may have run on sp_01_tracklayout/ whose filenames differ
         # from the rows created during _on_open_path.
         tracks = session.tracks
         self._track_table.setSortingEnabled(False)
@@ -843,7 +858,7 @@ class AnalysisMixin:
             return  # already running
 
         output_folder = self._config.get("app", {}).get(
-            "phase2_output_folder", "sp_02_processed")
+            "phase2_output_folder", "sp_02_prepared")
         output_dir = os.path.join(self._source_dir, output_folder)
 
         # Refresh pipeline config from current session widgets so that

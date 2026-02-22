@@ -107,6 +107,47 @@ def load_track(filepath: str) -> TrackContext:
     )
 
 
+def discover_audio_files(
+    root_dir: str,
+    recursive: bool = False,
+    skip_folders: set[str] | None = None,
+) -> list[str]:
+    """Return a sorted list of audio file paths relative to *root_dir*.
+
+    When *recursive* is ``False``, returns bare filenames (flat listing).
+    When ``True``, walks subdirectories (symlinks are **not** followed)
+    and returns forward-slash–separated relative paths such as
+    ``"drums/01_Kick.wav"``.
+
+    Directories whose name appears in *skip_folders* are pruned from the
+    walk (e.g. ``{"sp_01_tracklayout", "sp_02_prepared"}``).
+    """
+    from .utils import protools_sort_key
+
+    skip = skip_folders or set()
+    result: list[str] = []
+
+    if not recursive:
+        for fname in os.listdir(root_dir):
+            if fname.lower().endswith(AUDIO_EXTENSIONS):
+                result.append(fname)
+    else:
+        for dirpath, dirnames, filenames in os.walk(root_dir, followlinks=False):
+            # Prune skipped directories in-place so os.walk won't descend
+            dirnames[:] = [
+                d for d in dirnames if d not in skip
+            ]
+            for fname in filenames:
+                if fname.lower().endswith(AUDIO_EXTENSIONS):
+                    rel = os.path.relpath(
+                        os.path.join(dirpath, fname), root_dir)
+                    # Normalise to forward slashes for cross-platform keys
+                    result.append(rel.replace("\\", "/"))
+
+    result.sort(key=protools_sort_key)
+    return result
+
+
 def write_track(track: TrackContext, output_path: str) -> None:
     """Write track audio_data to WAV, preserving original subtype."""
     sf.write(output_path, track.audio_data, track.samplerate, subtype=track.subtype)

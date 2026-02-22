@@ -91,17 +91,19 @@ class AnalyzeWorker(QThread):
     finished = Signal(object, object)     # (session, diagnostic_summary)
     error = Signal(str)
 
-    def __init__(self, source_dir: str, config: dict):
+    def __init__(self, source_dir: str, config: dict, recursive: bool = False):
         super().__init__()
         self.source_dir = source_dir
         self.config = config
+        self.recursive = recursive
 
     def run(self):
         try:
             event_bus = EventBus()
 
             self.progress.emit("Loading session\u2026")
-            session = load_session(self.source_dir, self.config, event_bus=event_bus)
+            session = load_session(self.source_dir, self.config, event_bus=event_bus,
+                                  recursive=self.recursive)
 
             if not session.tracks:
                 self.error.emit("No audio files found in directory.")
@@ -472,17 +474,24 @@ class TopologyApplyWorker(QThread):
 
             output_dir = self._output_dir
 
-            # Clean stale audio files from output dir
+            # Clean stale audio files from output dir (recursive)
             if os.path.isdir(output_dir):
-                for fname in os.listdir(output_dir):
-                    if os.path.splitext(fname)[1].lower() not in AUDIO_EXTENSIONS:
-                        continue
-                    fp = os.path.join(output_dir, fname)
-                    try:
-                        if os.path.isfile(fp):
+                for dirpath, _dirnames, filenames in os.walk(
+                        output_dir, topdown=False):
+                    for fname in filenames:
+                        if os.path.splitext(fname)[1].lower() not in AUDIO_EXTENSIONS:
+                            continue
+                        fp = os.path.join(dirpath, fname)
+                        try:
                             os.unlink(fp)
-                    except OSError:
-                        pass
+                        except OSError:
+                            pass
+                    # Prune empty subdirectories
+                    if dirpath != output_dir:
+                        try:
+                            os.rmdir(dirpath)
+                        except OSError:
+                            pass
             os.makedirs(output_dir, exist_ok=True)
 
             # Collect source filenames referenced by topology
@@ -563,6 +572,7 @@ class TopologyApplyWorker(QThread):
                             _, sr = source_audio[first_src]
 
                     dst = os.path.join(output_dir, entry.output_filename)
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
                     sf.write(dst, resolved, sr, subtype=subtype)
 
                     n_samples = resolved.shape[0]
