@@ -41,13 +41,20 @@ class PlaybackController(QObject):
         return self._play_start_sample
 
     def play(self, audio_data, samplerate: int, start_sample: int = 0,
-             mono: bool = False):
+             mode: str = "as_is", channel: int | None = None):
         """Start playback from the given sample position.
 
         Parameters
         ----------
-        mono : bool
-            When True and audio is stereo, fold down to mono via (L+R)/2.
+        mode : str
+            ``"as_is"`` — play all channels unchanged.
+            ``"mono"`` — fold all channels to mono (sum / N).
+            ``"channel_as_is"`` — solo *channel* in its original speaker
+            position (other channels silenced).
+            ``"channel_mono"`` — extract *channel* as a 1-channel stream
+            routed equally to all speakers.
+        channel : int or None
+            Channel index for ``channel_as_is`` / ``channel_mono`` modes.
         """
         self.stop()
 
@@ -59,9 +66,19 @@ class PlaybackController(QObject):
         if audio.ndim == 1:
             audio = audio.reshape(-1, 1)
 
-        # Mono folddown: (L+R)/2 → single channel output
-        if mono and audio.shape[1] == 2:
-            audio = (audio[:, 0:1] + audio[:, 1:2]) / 2.0
+        n_ch = audio.shape[1]
+
+        if mode == "mono":
+            # Fold all channels to mono: sum / N
+            audio = np.mean(audio, axis=1, keepdims=True)
+        elif mode == "channel_as_is" and channel is not None and channel < n_ch:
+            # Solo channel in its original speaker position
+            out = np.zeros_like(audio)
+            out[:, channel] = audio[:, channel]
+            audio = out
+        elif mode == "channel_mono" and channel is not None and channel < n_ch:
+            # Extract single channel as mono (1-ch output)
+            audio = audio[:, channel:channel + 1].copy()
 
         if start_sample >= audio.shape[0]:
             start_sample = 0

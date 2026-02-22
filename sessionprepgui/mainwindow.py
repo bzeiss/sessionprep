@@ -10,7 +10,7 @@ from typing import Any
 
 from PySide6.QtCore import Qt, Slot, QSize
 from PySide6.QtGui import (
-    QAction, QActionGroup, QFont, QColor, QIcon, QKeySequence, QShortcut,
+    QAction, QFont, QColor, QIcon, QKeySequence, QShortcut,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -19,18 +19,14 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QMainWindow,
-    QMenu,
     QMessageBox,
     QProgressBar,
-    QPushButton,
     QSizePolicy,
     QSplitter,
     QStackedWidget,
-    QStyle,
     QTableWidget,
     QTabWidget,
     QToolBar,
-    QToolButton,
     QVBoxLayout,
     QStatusBar,
     QWidget,
@@ -50,7 +46,7 @@ from .theme import COLORS, apply_dark_theme
 from .log import dbg
 from .prefs import PreferencesDialog
 from .detail import render_track_detail_html, PlaybackController, DetailMixin
-from .waveform import WaveformWidget, WaveformLoadWorker
+from .waveform import WaveformWidget, WaveformPanel, WaveformLoadWorker
 from .widgets import ProgressPanel
 from .analysis import (
     AnalysisMixin,
@@ -396,40 +392,6 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         self._track_table.currentCellChanged.connect(self._on_current_cell_changed)
         layout.addWidget(self._track_table)
 
-        # Playback controls
-        controls = QHBoxLayout()
-        controls.setContentsMargins(4, 4, 4, 4)
-        controls.setSpacing(4)
-
-        self._play_btn = QPushButton("\u25B6 Play")
-        self._play_btn.setEnabled(False)
-        self._play_btn.clicked.connect(self._on_play)
-        controls.addWidget(self._play_btn)
-
-        self._stop_btn = QPushButton("\u25A0 Stop")
-        self._stop_btn.setEnabled(False)
-        self._stop_btn.clicked.connect(self._on_stop)
-        controls.addWidget(self._stop_btn)
-
-        self._mono_btn = QPushButton("M")
-        self._mono_btn.setCheckable(True)
-        self._mono_btn.setToolTip("Play as mono (L+R)/2")
-        self._mono_btn.setFixedWidth(36)
-        self._mono_btn.setStyleSheet(
-            "QPushButton { font-weight: bold; }"
-            "QPushButton:checked { background-color: #cc8800; color: #000; }"
-        )
-        controls.addWidget(self._mono_btn)
-
-        self._time_label = QLabel("00:00 / 00:00")
-        self._time_label.setStyleSheet(
-            "color: #888888; font-family: Consolas, monospace;"
-            " font-size: 9pt; padding: 0 8px;"
-        )
-        controls.addWidget(self._time_label)
-        controls.addStretch()
-        layout.addLayout(controls)
-
         return panel
 
     def _build_right_panel(self) -> QWidget:
@@ -477,240 +439,40 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         self._file_report = self._make_report_browser()
         self._file_splitter.addWidget(self._file_report)
 
-        self._waveform = WaveformWidget()
-        self._waveform.position_clicked.connect(self._on_waveform_seek)
-        self._waveform.set_invert_scroll(
+        # Waveform panel (toolbar + waveform + transport)
+        self._wf_panel = WaveformPanel(analysis_mode=True)
+        self._wf_panel.play_clicked.connect(self._on_play)
+        self._wf_panel.stop_clicked.connect(self._on_stop)
+        self._wf_panel.position_clicked.connect(self._on_waveform_seek)
+        self._wf_panel.waveform.set_invert_scroll(
             self._config.get("app", {}).get("invert_scroll", "default"))
 
+        # Backward-compat aliases for DetailMixin / other mixins
+        self._waveform = self._wf_panel.waveform
+        self._wf_container = self._wf_panel
+        self._overlay_btn = self._wf_panel.overlay_btn
+        self._overlay_menu = self._wf_panel.overlay_menu
+        self._markers_toggle = self._wf_panel.markers_toggle
+        self._rms_lr_toggle = self._wf_panel.rms_lr_toggle
+        self._rms_avg_toggle = self._wf_panel.rms_avg_toggle
+        self._wf_settings_btn = self._wf_panel.wf_settings_btn
+        self._spec_settings_btn = self._wf_panel.spec_settings_btn
+        self._wf_action = self._wf_panel.wf_action
+        self._spec_action = self._wf_panel.spec_action
+        self._display_mode_btn = self._wf_panel.display_mode_btn
+        self._cmap_group = self._wf_panel.cmap_group
+        self._play_btn = self._wf_panel.play_btn
+        self._stop_btn = self._wf_panel.stop_btn
+        self._time_label = self._wf_panel.time_label
 
-        # Waveform toolbar + widget container
-        wf_container = QWidget()
-        self._wf_container = wf_container
-        wf_layout = QVBoxLayout(wf_container)
-        wf_layout.setContentsMargins(0, 0, 0, 0)
-        wf_layout.setSpacing(0)
+        # Connect spectrogram action groups to DetailMixin slots
+        self._wf_panel.fft_group.triggered.connect(self._on_spec_fft_changed)
+        self._wf_panel.win_group.triggered.connect(self._on_spec_window_changed)
+        self._wf_panel.cmap_group.triggered.connect(self._on_spec_cmap_changed)
+        self._wf_panel.floor_group.triggered.connect(self._on_spec_floor_changed)
+        self._wf_panel.ceil_group.triggered.connect(self._on_spec_ceil_changed)
 
-        wf_toolbar = QHBoxLayout()
-        wf_toolbar.setContentsMargins(4, 2, 4, 2)
-
-        toggle_style = (
-            "QToolButton:checked { background-color: #2a6db5; color: #ffffff; }")
-
-        dropdown_style = (
-            "QToolButton { padding-right: 30px; }"
-            "QToolButton::menu-indicator { subcontrol-position: right center;"
-            " subcontrol-origin: padding; right: 5px; }")
-
-        # Display mode dropdown (leftmost)
-        self._display_mode_btn = QToolButton()
-        self._display_mode_btn.setText("Waveform")
-        self._display_mode_btn.setToolTip("Switch between Waveform and Spectrogram display")
-        self._display_mode_btn.setPopupMode(QToolButton.InstantPopup)
-        self._display_mode_btn.setAutoRaise(True)
-        self._display_mode_btn.setStyleSheet(dropdown_style)
-        display_menu = QMenu(self._display_mode_btn)
-        self._wf_action = display_menu.addAction("Waveform")
-        self._spec_action = display_menu.addAction("Spectrogram")
-        self._wf_action.setCheckable(True)
-        self._wf_action.setChecked(True)
-        self._spec_action.setCheckable(True)
-        display_group = QActionGroup(self)
-        display_group.addAction(self._wf_action)
-        display_group.addAction(self._spec_action)
-        display_group.triggered.connect(self._on_display_mode_changed)
-        self._display_mode_btn.setMenu(display_menu)
-        wf_toolbar.addWidget(self._display_mode_btn)
-
-        wf_toolbar.addSpacing(8)
-
-        # Spectrogram settings dropdown (visible only in spectrogram mode)
-        self._spec_settings_btn = QToolButton()
-        self._spec_settings_btn.setText("Display")
-        self._spec_settings_btn.setToolTip("Configure spectrogram display parameters")
-        self._spec_settings_btn.setPopupMode(QToolButton.InstantPopup)
-        self._spec_settings_btn.setAutoRaise(True)
-        self._spec_settings_btn.setStyleSheet(dropdown_style)
-        spec_menu = QMenu(self._spec_settings_btn)
-
-        # -- FFT Size submenu --
-        fft_menu = spec_menu.addMenu("FFT Size")
-        self._fft_group = QActionGroup(self)
-        for sz in (512, 1024, 2048, 4096, 8192):
-            act = fft_menu.addAction(str(sz))
-            act.setCheckable(True)
-            act.setData(sz)
-            if sz == 2048:
-                act.setChecked(True)
-            self._fft_group.addAction(act)
-        self._fft_group.triggered.connect(self._on_spec_fft_changed)
-
-        # -- Window submenu --
-        win_menu = spec_menu.addMenu("Window")
-        self._win_group = QActionGroup(self)
-        _WINDOW_MAP = [("Hann", "hann"), ("Hamming", "hamming"),
-                       ("Blackman-Harris", "blackmanharris")]
-        for label, key in _WINDOW_MAP:
-            act = win_menu.addAction(label)
-            act.setCheckable(True)
-            act.setData(key)
-            if key == "hann":
-                act.setChecked(True)
-            self._win_group.addAction(act)
-        self._win_group.triggered.connect(self._on_spec_window_changed)
-
-        # -- Color Theme submenu --
-        cmap_menu = spec_menu.addMenu("Color Theme")
-        self._cmap_group = QActionGroup(self)
-        for name in ("Magma", "Viridis", "Grayscale"):
-            act = cmap_menu.addAction(name)
-            act.setCheckable(True)
-            act.setData(name.lower())
-            if name == "Magma":
-                act.setChecked(True)
-            self._cmap_group.addAction(act)
-        self._cmap_group.triggered.connect(self._on_spec_cmap_changed)
-
-        # -- dB Floor submenu --
-        floor_menu = spec_menu.addMenu("dB Floor")
-        self._floor_group = QActionGroup(self)
-        for val in (-120, -100, -80, -60, -50, -40, -30, -20):
-            act = floor_menu.addAction(f"{val} dB")
-            act.setCheckable(True)
-            act.setData(val)
-            if val == -80:
-                act.setChecked(True)
-            self._floor_group.addAction(act)
-        self._floor_group.triggered.connect(self._on_spec_floor_changed)
-
-        # -- dB Ceiling submenu --
-        ceil_menu = spec_menu.addMenu("dB Ceiling")
-        self._ceil_group = QActionGroup(self)
-        for val in (-30, -20, -10, -5, 0):
-            act = ceil_menu.addAction(f"{val} dB")
-            act.setCheckable(True)
-            act.setData(val)
-            if val == 0:
-                act.setChecked(True)
-            self._ceil_group.addAction(act)
-        self._ceil_group.triggered.connect(self._on_spec_ceil_changed)
-
-        self._spec_settings_btn.setMenu(spec_menu)
-        self._spec_settings_btn.setVisible(False)
-        wf_toolbar.addWidget(self._spec_settings_btn)
-
-        # Waveform settings dropdown (visible only in waveform mode)
-        self._wf_settings_btn = QToolButton()
-        self._wf_settings_btn.setText("Display")
-        self._wf_settings_btn.setToolTip("Configure waveform display parameters")
-        self._wf_settings_btn.setPopupMode(QToolButton.InstantPopup)
-        self._wf_settings_btn.setAutoRaise(True)
-        self._wf_settings_btn.setStyleSheet(dropdown_style)
-        wf_menu = QMenu(self._wf_settings_btn)
-
-        # -- Anti-Aliased Lines toggle --
-        self._wf_aa_action = wf_menu.addAction("Anti-Aliased Lines")
-        self._wf_aa_action.setCheckable(True)
-        self._wf_aa_action.setChecked(False)
-        self._wf_aa_action.toggled.connect(self._on_wf_aa_changed)
-
-        # -- Line Thickness submenu --
-        thick_menu = wf_menu.addMenu("Line Thickness")
-        self._wf_thick_group = QActionGroup(self)
-        for label, val in [("Thin (1px)", 1), ("Normal (2px)", 2)]:
-            act = thick_menu.addAction(label)
-            act.setCheckable(True)
-            act.setData(val)
-            if val == 1:
-                act.setChecked(True)
-            self._wf_thick_group.addAction(act)
-        self._wf_thick_group.triggered.connect(self._on_wf_line_width_changed)
-
-        self._wf_settings_btn.setMenu(wf_menu)
-        wf_toolbar.addWidget(self._wf_settings_btn)
-
-        wf_toolbar.addSpacing(8)
-
-        # Overlay dropdown (populated per-track)
-        self._overlay_btn = QToolButton()
-        self._overlay_btn.setText("Detector Overlays")
-        self._overlay_btn.setToolTip("Select detector overlays to display on the waveform")
-        self._overlay_btn.setPopupMode(QToolButton.InstantPopup)
-        self._overlay_btn.setAutoRaise(True)
-        self._overlay_btn.setStyleSheet(dropdown_style)
-        self._overlay_menu = QMenu(self._overlay_btn)
-        self._overlay_btn.setMenu(self._overlay_menu)
-        wf_toolbar.addWidget(self._overlay_btn)
-
-        wf_toolbar.addSpacing(8)
-
-        # Markers toggle
-        self._markers_toggle = QToolButton()
-        self._markers_toggle.setText("Peak / RMS Max")
-        self._markers_toggle.setToolTip("Toggle peak and maximum RMS markers on the waveform")
-        self._markers_toggle.setCheckable(True)
-        self._markers_toggle.setChecked(False)
-        self._markers_toggle.setAutoRaise(True)
-        self._markers_toggle.setStyleSheet(toggle_style)
-        self._markers_toggle.toggled.connect(self._waveform.toggle_markers)
-        wf_toolbar.addWidget(self._markers_toggle)
-
-        wf_toolbar.addSpacing(8)
-
-        # RMS L/R toggle
-        self._rms_lr_toggle = QToolButton()
-        self._rms_lr_toggle.setText("RMS L/R")
-        self._rms_lr_toggle.setToolTip("Toggle per-channel RMS envelope overlay")
-        self._rms_lr_toggle.setCheckable(True)
-        self._rms_lr_toggle.setAutoRaise(True)
-        self._rms_lr_toggle.setStyleSheet(toggle_style)
-        self._rms_lr_toggle.toggled.connect(self._waveform.toggle_rms_lr)
-        wf_toolbar.addWidget(self._rms_lr_toggle)
-
-        wf_toolbar.addSpacing(4)
-
-        # RMS AVG toggle
-        self._rms_avg_toggle = QToolButton()
-        self._rms_avg_toggle.setText("RMS AVG")
-        self._rms_avg_toggle.setToolTip("Toggle combined (average) RMS envelope overlay")
-        self._rms_avg_toggle.setCheckable(True)
-        self._rms_avg_toggle.setAutoRaise(True)
-        self._rms_avg_toggle.setStyleSheet(toggle_style)
-        self._rms_avg_toggle.toggled.connect(self._waveform.toggle_rms_avg)
-        wf_toolbar.addWidget(self._rms_avg_toggle)
-
-        wf_toolbar.addStretch()  # push buttons to the right
-
-        style = self.style()
-
-        def _tb(text: str, tooltip: str, icon=None):
-            btn = QToolButton()
-            if icon is not None:
-                btn.setIcon(style.standardIcon(icon))
-            else:
-                btn.setText(text)
-            btn.setToolTip(tooltip)
-            btn.setAutoRaise(True)
-            wf_toolbar.addWidget(btn)
-            return btn
-
-        _tb("Fit", "Zoom to fit entire file", QStyle.SP_BrowserReload
-             ).clicked.connect(self._waveform.zoom_fit)
-        _tb("+", "Zoom in at cursor").clicked.connect(self._waveform.zoom_in)
-        _tb("\u2212", "Zoom out at cursor").clicked.connect(self._waveform.zoom_out)
-        _tb("", "Scale up (vertical)", QStyle.SP_ArrowUp
-             ).clicked.connect(self._waveform.scale_up)
-        _tb("", "Scale down (vertical)", QStyle.SP_ArrowDown
-             ).clicked.connect(self._waveform.scale_down)
-
-        toolbar_widget = QWidget()
-        toolbar_widget.setLayout(wf_toolbar)
-        toolbar_widget.setFixedHeight(28)
-        toolbar_widget.setStyleSheet(
-            "background-color: #2d2d2d; border-bottom: 1px solid #555;")
-        wf_layout.addWidget(toolbar_widget)
-        wf_layout.addWidget(self._waveform, 1)
-
-        self._file_splitter.addWidget(wf_container)
+        self._file_splitter.addWidget(self._wf_panel)
 
         self._file_splitter.setStretchFactor(0, 3)
         self._file_splitter.setStretchFactor(1, 1)

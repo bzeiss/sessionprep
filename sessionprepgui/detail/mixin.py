@@ -158,6 +158,7 @@ class DetailMixin:
             all_issues.extend(getattr(det_result, "issues", []))
         self._waveform.set_issues(all_issues)
         self._update_overlay_menu(all_issues)
+        self._wf_panel.update_play_mode_channels(len(result["channels"]))
         self._play_btn.setEnabled(True)
         self._update_time_label(0)
 
@@ -246,30 +247,6 @@ class DetailMixin:
         self._overlay_btn.setText(f"Detector Overlays ({n})" if n else "Detector Overlays")
 
     @Slot(QAction)
-    def _on_display_mode_changed(self, action):
-        """Switch waveform widget display mode and toggle toolbar controls."""
-        is_waveform = action == self._wf_action
-        mode = "waveform" if is_waveform else "spectrogram"
-        self._display_mode_btn.setText(action.text())
-        self._waveform.set_display_mode(mode)
-
-        # Hide waveform-only toolbar controls in spectrogram mode
-        self._wf_settings_btn.setVisible(is_waveform)
-        self._markers_toggle.setVisible(is_waveform)
-        self._rms_lr_toggle.setVisible(is_waveform)
-        self._rms_avg_toggle.setVisible(is_waveform)
-        # Show spectrogram-only controls
-        self._spec_settings_btn.setVisible(not is_waveform)
-
-    @Slot(bool)
-    def _on_wf_aa_changed(self, checked: bool):
-        self._waveform.set_wf_antialias(checked)
-
-    @Slot(QAction)
-    def _on_wf_line_width_changed(self, action):
-        self._waveform.set_wf_line_width(int(action.data()))
-
-    @Slot(QAction)
     def _on_spec_fft_changed(self, action):
         self._waveform.set_spec_fft(int(action.data()))
 
@@ -305,8 +282,9 @@ class DetailMixin:
             return
         self._on_stop()
         start = self._waveform._cursor_sample
+        mode, channel = self._wf_panel.play_mode
         self._playback.play(track.audio_data, track.samplerate, start,
-                            mono=self._mono_btn.isChecked())
+                            mode=mode, channel=channel)
         if self._playback.is_playing:
             self._play_btn.setEnabled(False)
             self._stop_btn.setEnabled(True)
