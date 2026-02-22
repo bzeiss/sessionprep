@@ -80,6 +80,20 @@ class PlaybackController(QObject):
             # Extract single channel as mono (1-ch output)
             audio = audio[:, channel:channel + 1].copy()
 
+        # Downmix to stereo if the device can't handle the channel count
+        if audio.shape[1] > 2:
+            n = audio.shape[1]
+            left = np.zeros(audio.shape[0], dtype=audio.dtype)
+            right = np.zeros(audio.shape[0], dtype=audio.dtype)
+            for ch in range(n):
+                if ch % 2 == 0:
+                    left += audio[:, ch]
+                else:
+                    right += audio[:, ch]
+            left /= max(1, (n + 1) // 2)
+            right /= max(1, n // 2)
+            audio = np.column_stack([left, right])
+
         if start_sample >= audio.shape[0]:
             start_sample = 0
 
