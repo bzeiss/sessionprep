@@ -277,7 +277,7 @@ class TopologyMixin:
         # Put Phase 1 topology on session for the worker to read
         self._session.topology = self._topo_topology
         self._topo_apply_worker = TopologyApplyWorker(
-            self._session, output_dir)
+            self._session, output_dir, source_dir=self._source_dir)
         self._topo_apply_worker.progress.connect(self._on_topo_apply_progress)
         self._topo_apply_worker.progress_value.connect(
             self._on_topo_apply_progress_value)

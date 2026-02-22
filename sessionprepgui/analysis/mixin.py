@@ -514,6 +514,7 @@ class AnalysisMixin:
         self._analyze_action.setEnabled(False)
         self._current_track = None
         self._detail_tabs.setTabEnabled(_TAB_FILE, False)
+        self._track_table.setVisible(False)
 
         # Initialise session config from global preset (first analysis)
         # or keep existing session config (re-analysis with user edits)
@@ -680,6 +681,7 @@ class AnalysisMixin:
         self._session = session
         self._summary = summary
         self._analyze_action.setEnabled(True)
+        self._track_table.setVisible(True)
         self._worker = None
 
         if not self._session_groups:
@@ -749,6 +751,7 @@ class AnalysisMixin:
     @Slot(str)
     def _on_analyze_error(self, message: str):
         self._analyze_action.setEnabled(True)
+        self._track_table.setVisible(True)
         self._worker = None
 
         from ..helpers import esc

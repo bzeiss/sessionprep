@@ -449,10 +449,11 @@ class TopologyApplyWorker(QThread):
     finished = Signal()
     error = Signal(str)
 
-    def __init__(self, session, output_dir: str):
+    def __init__(self, session, output_dir: str, source_dir: str | None = None):
         super().__init__()
         self._session = session
         self._output_dir = output_dir
+        self._source_dir = source_dir
 
     def run(self):
         try:
@@ -496,19 +497,34 @@ class TopologyApplyWorker(QThread):
             total = len(needed_sources) + len(topology.entries)
 
             # Phase A: Load source audio
+            # After a previous Apply+Analyze cycle, session.tracks may
+            # only contain *output* filenames.  Sources that were merged
+            # (e.g. 12_ElecGtr2.wav into 11_ElecGtr1.wav) won't be in
+            # track_map.  Fall back to loading directly from source_dir.
             source_audio: dict[str, tuple] = {}
             for step, filename in enumerate(sorted(needed_sources)):
                 self.progress.emit(f"Loading {filename}")
                 self.progress_value.emit(step, total)
                 track = track_map.get(filename)
-                if not track:
+                if track and track.audio_data is not None and track.audio_data.size > 0:
+                    source_audio[filename] = (track.audio_data, track.samplerate)
                     continue
-                if track.audio_data is None or track.audio_data.size == 0:
-                    loaded = load_track(track.filepath)
+                # Determine best path to load from
+                src_path = None
+                if self._source_dir:
+                    candidate = os.path.join(self._source_dir, filename)
+                    if os.path.isfile(candidate):
+                        src_path = candidate
+                if src_path is None and track:
+                    src_path = track.filepath
+                if src_path is None:
+                    continue
+                loaded = load_track(src_path)
+                if track:
                     track.audio_data = loaded.audio_data
                     track.samplerate = loaded.samplerate
                     track.total_samples = loaded.total_samples
-                source_audio[filename] = (track.audio_data, track.samplerate)
+                source_audio[filename] = (loaded.audio_data, loaded.samplerate)
 
             # Phase B: Resolve topology + write output files
             output_tracks = []
@@ -520,12 +536,31 @@ class TopologyApplyWorker(QThread):
                 self.progress_value.emit(step, total)
 
                 try:
+                    # Check all sources are available before resolving
+                    missing = [
+                        s.input_filename for s in entry.sources
+                        if s.input_filename not in source_audio
+                    ]
+                    if missing:
+                        errors.append((
+                            entry.output_filename,
+                            f"missing source(s): {', '.join(missing)}"))
+                        continue
                     resolved = resolve_entry_audio(entry, source_audio)
-                    src_track = track_map.get(
-                        entry.sources[0].input_filename) if entry.sources else None
-                    sr = src_track.samplerate if src_track else 44100
-                    subtype = src_track.subtype if src_track else "PCM_24"
-                    bitdepth = src_track.bitdepth if src_track else "24-bit"
+                    # Get format info from first source (track_map or source_audio)
+                    src_track = None
+                    sr = 44100
+                    subtype = "PCM_24"
+                    bitdepth = "24-bit"
+                    if entry.sources:
+                        first_src = entry.sources[0].input_filename
+                        src_track = track_map.get(first_src)
+                        if src_track:
+                            sr = src_track.samplerate
+                            subtype = src_track.subtype
+                            bitdepth = src_track.bitdepth
+                        elif first_src in source_audio:
+                            _, sr = source_audio[first_src]
 
                     dst = os.path.join(output_dir, entry.output_filename)
                     sf.write(dst, resolved, sr, subtype=subtype)
