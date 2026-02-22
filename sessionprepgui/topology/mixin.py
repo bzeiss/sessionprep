@@ -163,11 +163,11 @@ class TopologyMixin:
 
         h_splitter.setSizes([400, 400])
 
-        # Cross-table exclusive selection
-        self._topo_input_table.currentCellChanged.connect(
-            self._on_topo_input_selected)
-        self._topo_output_table.currentCellChanged.connect(
-            self._on_topo_output_selected)
+        # Cross-table exclusive selection (multi-select aware)
+        self._topo_input_table.selectionModel().selectionChanged.connect(
+            lambda sel, desel: self._on_topo_selection_changed("input"))
+        self._topo_output_table.selectionModel().selectionChanged.connect(
+            lambda sel, desel: self._on_topo_selection_changed("output"))
 
         # Waveform preview panel (no analysis overlays)
         self._topo_wf_panel = WaveformPanel(analysis_mode=False)
@@ -192,8 +192,12 @@ class TopologyMixin:
         self._topo_audio_worker = None
         self._topo_wf_worker = None
         self._topo_resolve_worker = None
+        self._topo_multi_worker = None
         self._topo_selected_side: str | None = None
-        self._topo_cached_audio: tuple[str, object, int] | None = None
+        # (cache_key, display_audio, playback_audio, samplerate)
+        self._topo_cached_audio: tuple[str, object, object, int] | None = None
+        self._topo_cached_labels: list[str] | None = None
+        self._topo_pending_labels: list[str] | None = None
 
         return page
 
@@ -380,9 +384,14 @@ class TopologyMixin:
 
         # Auto-refresh waveform preview if an output track was selected
         if self._topo_selected_side == "output":
-            row = self._topo_output_table.currentRow()
-            if 0 <= row < self._topo_output_table.rowCount():
-                self._topo_load_output_waveform(row)
+            rows = sorted(set(
+                idx.row() for idx in
+                self._topo_output_table.selectedIndexes()))
+            if rows:
+                if len(rows) == 1:
+                    self._topo_load_output_waveform(rows[0])
+                else:
+                    self._topo_load_multi_output(rows)
             else:
                 # Selected row no longer exists — clear waveform
                 self._topo_cancel_workers()
@@ -837,40 +846,46 @@ class TopologyMixin:
                         if e.output_filename != output_filename]
         self._topo_changed()
 
-    # ── Cross-table exclusive selection ────────────────────────────────
+    # ── Cross-table exclusive selection (multi-select aware) ─────────
 
-    @Slot(int, int, int, int)
-    def _on_topo_input_selected(self, row, col, prev_row, prev_col):
-        if row < 0:
+    def _on_topo_selection_changed(self, side: str):
+        """Handle selection change in input or output table."""
+        if side == "input":
+            table = self._topo_input_table
+            other = self._topo_output_table
+        else:
+            table = self._topo_output_table
+            other = self._topo_input_table
+
+        rows = sorted(set(idx.row() for idx in table.selectedIndexes()))
+        if not rows:
             return
-        # Clear output selection when user clicks input
-        if self._topo_selected_side != "input":
-            self._topo_output_table.blockSignals(True)
-            self._topo_output_table.clearSelection()
-            self._topo_output_table.setCurrentCell(-1, -1)
-            self._topo_output_table.blockSignals(False)
-        self._topo_selected_side = "input"
-        self._topo_load_input_waveform(row)
 
-    @Slot(int, int, int, int)
-    def _on_topo_output_selected(self, row, col, prev_row, prev_col):
-        if row < 0:
-            return
-        # Clear input selection when user clicks output
-        if self._topo_selected_side != "output":
-            self._topo_input_table.blockSignals(True)
-            self._topo_input_table.clearSelection()
-            self._topo_input_table.setCurrentCell(-1, -1)
-            self._topo_input_table.blockSignals(False)
-        self._topo_selected_side = "output"
-        self._topo_load_output_waveform(row)
+        # Clear other table's selection
+        if self._topo_selected_side != side:
+            other.blockSignals(True)
+            other.clearSelection()
+            other.setCurrentCell(-1, -1)
+            other.blockSignals(False)
+        self._topo_selected_side = side
 
-    # ── Waveform loading (input tracks) ────────────────────────────────
+        if len(rows) == 1:
+            if side == "input":
+                self._topo_load_input_waveform(rows[0])
+            else:
+                self._topo_load_output_waveform(rows[0])
+        else:
+            if side == "input":
+                self._topo_load_multi_input(rows)
+            else:
+                self._topo_load_multi_output(rows)
+
+    # ── Waveform loading helpers ───────────────────────────────────────
 
     def _topo_cancel_workers(self):
         """Cancel all in-flight topology waveform workers."""
         for attr in ("_topo_audio_worker", "_topo_wf_worker",
-                     "_topo_resolve_worker"):
+                     "_topo_resolve_worker", "_topo_multi_worker"):
             w = getattr(self, attr, None)
             if w is not None:
                 w.cancel()
@@ -879,6 +894,8 @@ class TopologyMixin:
                 except RuntimeError:
                     pass
                 setattr(self, attr, None)
+
+    # ── Single-track input loading ─────────────────────────────────────
 
     def _topo_load_input_waveform(self, row: int):
         """Load waveform for the input track at *row*."""
@@ -897,7 +914,7 @@ class TopologyMixin:
         # Check cache
         cached = self._topo_cached_audio
         if cached and cached[0] == track.filepath:
-            self._topo_show_waveform(cached[1], cached[2])
+            self._topo_show_waveform(cached[1], cached[3])
             return
 
         # Need to load from disk
@@ -917,13 +934,95 @@ class TopologyMixin:
         self._topo_audio_worker = None
         if track.audio_data is None:
             return
-        self._topo_cached_audio = (filepath, track.audio_data, track.samplerate)
+        self._topo_cached_audio = (
+            filepath, track.audio_data, track.audio_data, track.samplerate)
         self._topo_show_waveform(track.audio_data, track.samplerate)
 
     def _on_topo_audio_error(self, message: str):
         self._topo_audio_worker = None
         self._topo_wf_panel.waveform.set_loading(False)
         self._status_bar.showMessage(f"Audio load error: {message}")
+
+    # ── Multi-track loading ──────────────────────────────────────────────
+
+    def _topo_load_multi_input(self, rows: list[int]):
+        """Load and stack waveforms for multiple input tracks."""
+        self._topo_cancel_workers()
+        self._on_topo_stop()
+
+        track_map = self._topo_track_map()
+        items = []
+        for row in rows:
+            item = self._topo_input_table.item(row, 0)
+            if not item:
+                continue
+            filename = item.text()
+            track = track_map.get(filename)
+            if track:
+                stem = os.path.splitext(filename)[0]
+                items.append((track.filepath, stem, track.channels))
+        if not items:
+            return
+
+        self._topo_wf_panel.setVisible(True)
+        self._topo_wf_panel.waveform.set_loading(True)
+        self._topo_wf_panel.play_btn.setEnabled(False)
+
+        from ..analysis.worker import TopoMultiAudioWorker
+        worker = TopoMultiAudioWorker(
+            items, "input", self._source_dir or "", parent=self)
+        self._topo_multi_worker = worker
+        worker.finished.connect(self._on_topo_multi_done)
+        worker.error.connect(self._on_topo_multi_error)
+        worker.start()
+
+    def _topo_load_multi_output(self, rows: list[int]):
+        """Load and stack waveforms for multiple output entries."""
+        self._topo_cancel_workers()
+        self._on_topo_stop()
+
+        topo = self._session.topology if self._session else None
+        if not topo or not self._source_dir:
+            return
+
+        items = []
+        for row in rows:
+            item = self._topo_output_table.item(row, 0)
+            if not item:
+                continue
+            filename = item.text()
+            entry = next((e for e in topo.entries
+                          if e.output_filename == filename), None)
+            if entry:
+                stem = os.path.splitext(filename)[0]
+                items.append((entry, stem))
+        if not items:
+            return
+
+        self._topo_wf_panel.setVisible(True)
+        self._topo_wf_panel.waveform.set_loading(True)
+        self._topo_wf_panel.play_btn.setEnabled(False)
+
+        from ..analysis.worker import TopoMultiAudioWorker
+        worker = TopoMultiAudioWorker(
+            items, "output", self._source_dir, parent=self)
+        self._topo_multi_worker = worker
+        worker.finished.connect(self._on_topo_multi_done)
+        worker.error.connect(self._on_topo_multi_error)
+        worker.start()
+
+    def _on_topo_multi_done(self, display_audio, playback_audio,
+                            samplerate: int, labels: list[str]):
+        self._topo_multi_worker = None
+        self._topo_cached_audio = (
+            "__multi__", display_audio, playback_audio, samplerate)
+        self._topo_cached_labels = labels
+        self._topo_show_waveform(display_audio, samplerate, labels=labels)
+
+    def _on_topo_multi_error(self, message: str):
+        self._topo_multi_worker = None
+        self._topo_wf_panel.waveform.set_loading(False)
+        self._status_bar.showMessage(f"Multi-track load error: {message}")
 
     # ── Waveform loading (output tracks — virtual preview) ─────────────
 
@@ -964,7 +1063,8 @@ class TopologyMixin:
     def _on_topo_resolve_done(self, audio_data, samplerate: int):
         self._topo_resolve_worker = None
         # Cache under a synthetic key so we don't confuse with input files
-        self._topo_cached_audio = ("__output__", audio_data, samplerate)
+        self._topo_cached_audio = (
+            "__output__", audio_data, audio_data, samplerate)
         self._topo_show_waveform(audio_data, samplerate)
 
     def _on_topo_resolve_error(self, message: str):
@@ -974,12 +1074,14 @@ class TopologyMixin:
 
     # ── Common waveform display ────────────────────────────────────────
 
-    def _topo_show_waveform(self, audio_data, samplerate: int):
+    def _topo_show_waveform(self, audio_data, samplerate: int,
+                            labels: list[str] | None = None):
         """Run WaveformLoadWorker (lightweight, no RMS) and display result."""
         from ..waveform.compute import WaveformLoadWorker
 
         self._topo_wf_panel.setVisible(True)
         self._topo_wf_panel.waveform.set_loading(True)
+        self._topo_pending_labels = labels
 
         worker = WaveformLoadWorker(
             audio_data, samplerate, 0,
@@ -994,7 +1096,8 @@ class TopologyMixin:
         self._topo_wf_worker = None
         self._topo_wf_panel.waveform.set_precomputed(result)
         n_ch = len(result["channels"])
-        self._topo_wf_panel.update_play_mode_channels(n_ch)
+        labels = getattr(self, '_topo_pending_labels', None)
+        self._topo_wf_panel.update_play_mode_channels(n_ch, labels=labels)
         self._topo_wf_panel.play_btn.setEnabled(True)
         self._topo_update_time_label(0)
 
@@ -1005,11 +1108,11 @@ class TopologyMixin:
         cached = self._topo_cached_audio
         if not cached:
             return
-        _, audio_data, samplerate = cached
+        _, _display, playback_audio, samplerate = cached
         self._on_topo_stop()
         start = self._topo_wf_panel.waveform._cursor_sample
         mode, channel = self._topo_wf_panel.play_mode
-        self._playback.play(audio_data, samplerate, start,
+        self._playback.play(playback_audio, samplerate, start,
                             mode=mode, channel=channel)
         if self._playback.is_playing:
             self._topo_wf_panel.play_btn.setEnabled(False)
@@ -1037,8 +1140,8 @@ class TopologyMixin:
         cached = self._topo_cached_audio
         if not cached:
             return
-        _, audio_data, sr = cached
-        total = audio_data.shape[0] if audio_data is not None else 0
+        _, display_audio, _playback, sr = cached
+        total = display_audio.shape[0] if display_audio is not None else 0
         from sessionpreplib.audio import format_duration
         cur_str = format_duration(current_sample, sr)
         tot_str = format_duration(total, sr)

@@ -373,8 +373,18 @@ class WaveformPanel(QWidget):
             return f"Ch {ch} ({labels[ch]})"
         return f"Ch {ch}"
 
-    def update_play_mode_channels(self, n_channels: int):
-        """Rebuild per-channel entries in the play-mode combo."""
+    def update_play_mode_channels(self, n_channels: int,
+                                   labels: list[str] | None = None):
+        """Rebuild per-channel entries in the play-mode combo.
+
+        Parameters
+        ----------
+        n_channels : int
+            Total number of display channels.
+        labels : list[str] or None
+            Custom per-channel labels (e.g. for multi-track stacked display).
+            If *None*, uses standard Microsoft WAV channel labels.
+        """
         # Remember current selection
         current = self.play_mode
 
@@ -392,7 +402,10 @@ class WaveformPanel(QWidget):
             model.item(sep_idx).setEnabled(False)
 
             for ch in range(n_channels):
-                name = self._channel_name(n_channels, ch)
+                if labels and ch < len(labels):
+                    name = f"Ch {ch} ({labels[ch]})"
+                else:
+                    name = self._channel_name(n_channels, ch)
                 self._play_mode_combo.addItem(
                     f"{name} / As-is", ("channel_as_is", ch))
                 self._play_mode_combo.addItem(

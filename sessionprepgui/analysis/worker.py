@@ -275,6 +275,128 @@ class TopoAudioResolveWorker(QThread):
             self.error.emit(str(exc))
 
 
+class TopoMultiAudioWorker(QThread):
+    """Load multiple tracks and produce stacked display + downmixed playback.
+
+    Emits ``finished(display_audio, playback_audio, samplerate, labels)``
+    where *display_audio* has all tracks' channels concatenated and
+    *playback_audio* is summed by channel position.
+    """
+
+    finished = Signal(object, object, int, list)  # display, playback, sr, labels
+    error = Signal(str)
+
+    def __init__(self, items: list, side: str, source_dir: str, parent=None):
+        """
+        Parameters
+        ----------
+        items : list
+            For ``side="input"``: list of ``(filepath, display_name, n_channels)``.
+            For ``side="output"``: list of ``(TopologyEntry, display_name)``.
+        side : str
+            ``"input"`` or ``"output"``.
+        source_dir : str
+            Root directory for source audio files.
+        """
+        super().__init__(parent)
+        self._items = items
+        self._side = side
+        self._source_dir = source_dir
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        try:
+            import os
+            import numpy as np
+            import soundfile as sf
+
+            track_arrays = []   # list of 2-D arrays (samples, ch)
+            track_names = []    # display names for labels
+            track_ch_counts = []
+            sr = 44100
+
+            if self._side == "input":
+                for filepath, name, _n_ch in self._items:
+                    if self._cancelled:
+                        return
+                    data, file_sr = sf.read(filepath, dtype='float64')
+                    sr = file_sr
+                    if data.ndim == 1:
+                        data = data.reshape(-1, 1)
+                    track_arrays.append(data)
+                    track_names.append(name)
+                    track_ch_counts.append(data.shape[1])
+            else:  # output
+                from sessionpreplib.topology import resolve_entry_audio
+                for entry, name in self._items:
+                    if self._cancelled:
+                        return
+                    # Load source audio for this entry
+                    track_audio: dict[str, tuple] = {}
+                    for src in entry.sources:
+                        if self._cancelled:
+                            return
+                        path = os.path.join(self._source_dir, src.input_filename)
+                        data, file_sr = sf.read(path, dtype='float64')
+                        track_audio[src.input_filename] = (data, file_sr)
+                        sr = file_sr
+                    resolved = resolve_entry_audio(entry, track_audio)
+                    if resolved.ndim == 1:
+                        resolved = resolved.reshape(-1, 1)
+                    track_arrays.append(resolved)
+                    track_names.append(name)
+                    track_ch_counts.append(resolved.shape[1])
+
+            if self._cancelled or not track_arrays:
+                return
+
+            # --- Build display audio (all channels concatenated) ---
+            max_samples = max(a.shape[0] for a in track_arrays)
+            padded = []
+            for a in track_arrays:
+                if a.shape[0] < max_samples:
+                    pad = np.zeros((max_samples - a.shape[0], a.shape[1]),
+                                   dtype=np.float64)
+                    a = np.vstack([a, pad])
+                padded.append(a)
+            display_audio = np.hstack(padded)  # (max_samples, total_ch)
+
+            # --- Build playback audio (summed by channel position) ---
+            max_ch = max(track_ch_counts)
+            n_tracks = len(track_arrays)
+            playback = np.zeros((max_samples, max_ch), dtype=np.float64)
+            for a in padded:
+                playback[:, :a.shape[1]] += a
+            playback /= n_tracks
+
+            # Squeeze mono
+            if playback.shape[1] == 1:
+                playback = playback[:, 0]
+            if display_audio.shape[1] == 1:
+                display_audio = display_audio[:, 0]
+
+            # --- Channel labels ---
+            from sessionprepgui.waveform.panel import WaveformPanel
+            labels = []
+            ch_idx = 0
+            for i, name in enumerate(track_names):
+                n_ch = track_ch_counts[i]
+                for c in range(n_ch):
+                    ch_labels = WaveformPanel._CHANNEL_LABELS.get(n_ch)
+                    if ch_labels and c < len(ch_labels):
+                        labels.append(f"{name} {ch_labels[c]}")
+                    else:
+                        labels.append(f"{name} Ch{c}")
+                    ch_idx += 1
+
+            self.finished.emit(display_audio, playback, sr, labels)
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
 class PrepareWorker(QThread):
     """Runs Pipeline.prepare() off the main thread with progress."""
 
