@@ -31,7 +31,7 @@ from . import operations as ops
 
 
 class TopologyMixin:
-    """Mixin that adds the Channel Topology tab to the main window.
+    """Mixin that adds the Track Layout tab to the main window.
 
     Expects the host class to provide:
       - ``self._session`` (SessionContext | None)
@@ -48,7 +48,7 @@ class TopologyMixin:
     # ── Build ─────────────────────────────────────────────────────────
 
     def _build_topology_page(self) -> QWidget:
-        """Create and return the Channel Topology tab widget."""
+        """Create and return the Track Layout tab widget."""
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -58,7 +58,7 @@ class TopologyMixin:
         toolbar.setMovable(False)
         toolbar.setIconSize(toolbar.iconSize())
 
-        topo_open_action = QAction("Open", self)
+        topo_open_action = QAction("Open Folder", self)
         topo_open_action.setToolTip("Open a directory containing audio files")
         topo_open_action.triggered.connect(self._on_open_path)
         toolbar.addAction(topo_open_action)

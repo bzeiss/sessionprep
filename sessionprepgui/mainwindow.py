@@ -187,10 +187,10 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         self._phase_tabs.setObjectName("phaseTabs")
         self._phase_tabs.setDocumentMode(True)
 
-        # Tab 0 — Phase 1: Channel Topology (landing page)
+        # Tab 0 — Phase 1: Track Layout (landing page)
         self._phase_tabs.addTab(
             self._build_topology_page(),
-            "Phase 1: Channel Topology")
+            "Phase 1: Track Layout")
 
         # Tab 1 — Phase 2: Analysis & Preparation
         analysis_page = QWidget()
@@ -228,7 +228,7 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
     def _init_menus(self):
         file_menu = self.menuBar().addMenu("&File")
 
-        open_action = QAction("&Open...", self)
+        open_action = QAction("Open &Folder...", self)
         open_action.setShortcut("Ctrl+O")
         open_action.triggered.connect(self._on_open_path)
         file_menu.addAction(open_action)
@@ -272,7 +272,7 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         self._analysis_toolbar.setMovable(False)
         self._analysis_toolbar.setFloatable(False)
 
-        self._open_action = QAction("Open", self)
+        self._open_action = QAction("Open Folder", self)
         self._open_action.triggered.connect(self._on_open_path)
         self._analysis_toolbar.addAction(self._open_action)
 

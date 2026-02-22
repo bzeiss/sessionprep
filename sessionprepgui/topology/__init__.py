@@ -1,4 +1,4 @@
-"""Channel Topology tab subpackage."""
+"""Track Layout tab subpackage."""
 
 from .mixin import TopologyMixin
 
