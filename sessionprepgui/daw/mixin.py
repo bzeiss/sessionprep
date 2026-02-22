@@ -136,6 +136,7 @@ class DawMixin:
         self._setup_table.itemChanged.connect(
             self._on_setup_table_item_changed)
         self._setup_table_populating = False
+        self._setup_table.verticalHeader().setDefaultSectionSize(24)
         self._setup_table.verticalHeader().setVisible(False)
         self._setup_table.setMinimumWidth(300)
         self._setup_table.setShowGrid(True)
@@ -188,8 +189,6 @@ class DawMixin:
         self._folder_tree.setAlternatingRowColors(True)
         # Match visual size to the setup table; semi-transparent selection
         self._folder_tree.setStyleSheet(
-            "QTreeWidget { font-size: 10pt; }"
-            "QTreeWidget::item { min-height: 22px; }"
             "QTreeWidget::item:selected {"
             "  background-color: rgba(42, 109, 181, 128);"
             "}"

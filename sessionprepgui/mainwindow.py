@@ -369,6 +369,7 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         self._track_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._track_table.setSelectionMode(QTableWidget.ExtendedSelection)
         self._track_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._track_table.verticalHeader().setDefaultSectionSize(24)
         self._track_table.verticalHeader().setVisible(False)
         self._track_table.setMinimumWidth(300)
         self._track_table.setShowGrid(True)
