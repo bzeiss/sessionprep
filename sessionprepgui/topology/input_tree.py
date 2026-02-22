@@ -236,6 +236,7 @@ class InputTree(QTreeWidget):
                 payload.append({
                     "input_filename": filename,
                     "source_channel": ch,
+                    "drag_type": "channel",
                 })
             elif data[0] == "file":
                 _, filename = data
@@ -247,6 +248,7 @@ class InputTree(QTreeWidget):
                         payload.append({
                             "input_filename": cd[1],
                             "source_channel": cd[2],
+                            "drag_type": "file",
                         })
         if not payload:
             return None

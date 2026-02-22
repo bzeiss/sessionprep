@@ -49,6 +49,8 @@ from .operations import (
     wire_file,
 )
 
+from sessionpreplib.topology import ChannelRoute, TopologySource
+
 if TYPE_CHECKING:
     from sessionpreplib.models import TrackContext
     from sessionpreplib.topology import TopologyMapping
@@ -244,6 +246,15 @@ class OutputTree(QTreeWidget):
         for entry in topology.entries:
             file_item = self._build_file_item(entry)
             self.addTopLevelItem(file_item)
+
+        # Add a few invisible spacer rows so the user can always scroll
+        # past the last real item and has empty space to drop onto.
+        for _ in range(6):
+            spacer = QTreeWidgetItem()
+            spacer.setFlags(Qt.NoItemFlags)
+            spacer.setText(COL_NAME, "")
+            spacer.setData(COL_NAME, Qt.UserRole, ("spacer",))
+            self.addTopLevelItem(spacer)
 
         self.expandAll()
         self._restore_state(state)
@@ -615,6 +626,9 @@ class OutputTree(QTreeWidget):
         mime = event.mimeData()
         if mime.hasFormat(MIME_REORDER) or mime.hasFormat(MIME_CHANNEL):
             item = self.itemAt(event.position().toPoint())
+            # Treat spacer items as empty area
+            if item and item.data(COL_NAME, Qt.UserRole) == ("spacer",):
+                item = None
             if item:
                 data = item.data(COL_NAME, Qt.UserRole)
                 if data and data[0] in ("file", "channel"):
@@ -634,8 +648,13 @@ class OutputTree(QTreeWidget):
                             self.viewport().update()
                     event.acceptProposedAction()
                     return
-            self._clear_drop_target()
-            event.ignore()
+            # Empty area: accept external channel drops (create new output)
+            if mime.hasFormat(MIME_CHANNEL):
+                self._clear_drop_target()
+                event.acceptProposedAction()
+            else:
+                self._clear_drop_target()
+                event.ignore()
         else:
             self._clear_drop_target()
             super().dragMoveEvent(event)
@@ -752,8 +771,13 @@ class OutputTree(QTreeWidget):
             return
 
         target_item = self.itemAt(event.position().toPoint())
+        # Treat spacer items as empty area
+        if target_item and target_item.data(COL_NAME, Qt.UserRole) == ("spacer",):
+            target_item = None
         if not target_item:
-            event.ignore()
+            # Drop on empty area → create a new output track
+            event.acceptProposedAction()
+            self._drop_on_empty(payload)
             return
 
         target_data = target_item.data(COL_NAME, Qt.UserRole)
@@ -835,6 +859,84 @@ class OutputTree(QTreeWidget):
                             input_filename, source_ch)
             else:
                 return
+
+        self.topology_modified.emit()
+
+    def _drop_on_empty(self, payload: list[dict]):
+        """Create new output track(s) from channels dropped on empty area.
+
+        When the payload looks like one or more whole-file drags (all
+        channels of each file in order), create one passthrough output per
+        file.  Otherwise create a single new output and ask for a name.
+        """
+        if not self._topo or not payload:
+            return
+
+        # Check if all items were dragged as whole files (file-level selection)
+        all_file_drags = all(
+            item.get("drag_type") == "file" for item in payload
+        )
+
+        if all_file_drags:
+            # Group channels by input filename, preserving order
+            from collections import OrderedDict
+            groups: OrderedDict[str, list[int]] = OrderedDict()
+            for item in payload:
+                fn = item["input_filename"]
+                groups.setdefault(fn, []).append(item["source_channel"])
+            # Passthrough: one output per source file
+            for input_fn, chs in groups.items():
+                stem, _, ext = input_fn.rpartition(".")
+                if not stem:
+                    stem, ext = ext, "wav"
+                else:
+                    ext = f".{ext}"
+                out_name = unique_output_name(self._topo, stem, ext)
+                n_ch = len(chs)
+                new_output_file(self._topo, out_name, n_ch)
+                entry = next(e for e in self._topo.entries
+                             if e.output_filename == out_name)
+                entry.sources.append(TopologySource(
+                    input_filename=input_fn,
+                    routes=[ChannelRoute(ch, ch) for ch in chs],
+                ))
+        else:
+            # Mixed channel selection — single new output, ask for name
+            channels = [
+                (item["input_filename"], item["source_channel"])
+                for item in payload
+            ]
+            first_name = channels[0][0]
+            name, ok = QInputDialog.getText(
+                self, "New Output Track",
+                "Name for the new output track (with extension):",
+                text=first_name)
+            if not ok or not name.strip():
+                return
+            name = name.strip()
+            stem, _, ext = name.rpartition(".")
+            if not stem:
+                stem, ext = ext, "wav"
+            else:
+                ext = f".{ext}"
+            out_name = unique_output_name(self._topo, stem, ext)
+            new_output_file(self._topo, out_name, len(channels))
+            entry = next(e for e in self._topo.entries
+                         if e.output_filename == out_name)
+            for target_ch, (input_fn, source_ch) in enumerate(channels):
+                existing = None
+                for src in entry.sources:
+                    if src.input_filename == input_fn:
+                        existing = src
+                        break
+                if existing:
+                    existing.routes.append(
+                        ChannelRoute(source_ch, target_ch))
+                else:
+                    entry.sources.append(TopologySource(
+                        input_filename=input_fn,
+                        routes=[ChannelRoute(source_ch, target_ch)],
+                    ))
 
         self.topology_modified.emit()
 
