@@ -329,7 +329,13 @@ class TrackColumnsMixin:
     # ── Classification override helpers ───────────────────────────────────
 
     def _style_classification_combo(self, combo: QComboBox, cls_text: str):
-        """Apply classification-specific color to a combo box."""
+        """Apply classification-specific color to a combo box.
+
+        On initial creation this works fine via setStyleSheet, but dynamic
+        updates on a combo already embedded via setCellWidget don't repaint
+        on Windows/Fusion.  Callers that need a visual update after the
+        initial creation should use _replace_classification_combo instead.
+        """
         if cls_text == "Transient":
             color = FILE_COLOR_TRANSIENT.name()
         elif cls_text == "Sustained":
@@ -337,6 +343,20 @@ class TrackColumnsMixin:
         else:
             color = FILE_COLOR_SILENT.name()
         combo.setStyleSheet(f"QComboBox {{ color: {color}; font-weight: bold; }}")
+
+    def _replace_classification_combo(self, row: int, cls_text: str, fname: str):
+        """Recreate the classification combo at *row* with the correct color."""
+        combo = BatchComboBox()
+        combo.addItems(["Transient", "Sustained", "Skip"])
+        combo.blockSignals(True)
+        combo.setCurrentText(cls_text)
+        combo.blockSignals(False)
+        combo.setProperty("track_filename", fname)
+        self._style_classification_combo(combo, cls_text)
+        combo.textActivated.connect(
+            lambda text, c=combo: self._on_classification_changed(text, c))
+        self._track_table.setCellWidget(row, 3, combo)
+        return combo
 
     def _on_classification_changed(self, text: str, combo=None):
         """Handle user changing the classification dropdown."""
@@ -367,7 +387,9 @@ class TrackColumnsMixin:
             track.classification_override = text
             # Single-track sync path
             self._recalculate_processor(track)
-            self._style_classification_combo(combo, text)
+            row = self._find_table_row(fname)
+            if row >= 0:
+                self._replace_classification_combo(row, text, fname)
             self._update_track_row(fname)
             self._refresh_file_tab(track)
         self._mark_prepare_stale()
@@ -766,7 +788,9 @@ class TrackColumnsMixin:
         pr = next(iter(track.processor_results.values()), None)
         new_gain = pr.gain_db if pr else 0.0
         base_cls = None
-        if pr:
+        if track.classification_override:
+            base_cls = track.classification_override
+        elif pr:
             cls_text = pr.classification or "Unknown"
             if "Transient" in cls_text:
                 base_cls = "Transient"
@@ -788,12 +812,7 @@ class TrackColumnsMixin:
             gain_sort._sort_key = new_gain
 
         if base_cls is not None:
-            cls_combo = self._track_table.cellWidget(row, 3)
-            if isinstance(cls_combo, QComboBox):
-                cls_combo.blockSignals(True)
-                cls_combo.setCurrentText(base_cls)
-                cls_combo.blockSignals(False)
-                self._style_classification_combo(cls_combo, base_cls)
+            self._replace_classification_combo(row, base_cls, track.filename)
             sort_item = self._track_table.item(row, 3)
             if sort_item:
                 sort_item.setText(base_cls)
