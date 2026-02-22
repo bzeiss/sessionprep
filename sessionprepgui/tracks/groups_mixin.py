@@ -585,6 +585,11 @@ class GroupsMixin:
         self._config.setdefault("app", {})["active_config_preset"] = name
         save_config(self._config)
 
+        # Refresh DAW processors from the new preset (e.g. new mix templates)
+        self._configure_daw_processors()
+        self._populate_daw_combo()
+        self._update_daw_lifecycle_buttons()
+
         if self._session is not None:
             self._session_config = None  # re-init from new preset
             self._on_analyze()

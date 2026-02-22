@@ -488,6 +488,7 @@ def build_config_pages(
     register_page: Callable[[QTreeWidgetItem, QWidget], None],
     *,
     on_processor_enabled: Callable | None = None,
+    on_daw_config_changed: Callable | None = None,
 ) -> DawProjectTemplatesWidget | None:
     """Build the common config tree pages (Analysis, Detectors, Processors, DAW Processors).
 
@@ -564,10 +565,18 @@ def build_config_pages(
         child = QTreeWidgetItem(daw_parent, [dp.name])
         pg, wdg = _build_param_page(params, dp_sections.get(dp.id, {}))
         widgets_dict[f"daw_processors.{dp.id}"] = wdg
+        if on_daw_config_changed is not None:
+            enabled_key = f"{dp.id}_enabled"
+            for key, widget in wdg:
+                if key == enabled_key and isinstance(widget, QCheckBox):
+                    widget.toggled.connect(on_daw_config_changed)
+                    break
         if dp.id == "dawproject":
             tpl_widget = DawProjectTemplatesWidget()
             tpl_widget.set_templates(dp_sections.get(dp.id, {}).get("dawproject_templates", []))
             dawproject_tpl_widget = tpl_widget
+            if on_daw_config_changed is not None:
+                tpl_widget.templates_changed.connect(on_daw_config_changed)
             pg.layout().insertWidget(pg.layout().count() - 1, tpl_widget)
         register_page(child, pg)
 

@@ -117,6 +117,7 @@ class AnalysisMixin:
             self._session_widgets,
             _register_page,
             on_processor_enabled=self._on_processor_enabled_changed,
+            on_daw_config_changed=self._on_daw_config_changed,
         )
 
     def _on_session_tree_selection(self, current, _previous):
@@ -161,11 +162,20 @@ class AnalysisMixin:
                 "daw_processors", {}),
         )
 
+    def _on_daw_config_changed(self, *_args):
+        """Refresh Phase 3 DAW combo when session DAW config changes."""
+        if getattr(self, "_loading_session_widgets", False):
+            return
+        self._configure_daw_processors()
+        self._populate_daw_combo()
+        self._update_daw_lifecycle_buttons()
+
     def _on_session_config_reset(self):
         """Reset session config to the global config preset defaults."""
         preset = self._active_preset()
         self._session_config = copy.deepcopy(preset)
         self._load_session_widgets(self._session_config)
+        self._on_daw_config_changed()
         self._status_bar.showMessage("Session config reset to preset defaults.")
 
     # ── Slots: file / analysis ────────────────────────────────────────────
