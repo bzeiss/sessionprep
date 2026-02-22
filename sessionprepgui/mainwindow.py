@@ -93,6 +93,7 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         self._session = None
         self._summary = None
         self._source_dir = None
+        self._topology_dir = None  # path to sp_01_topology/ after Phase 1 Apply
         self._worker = None
         self._batch_worker: BatchReanalyzeWorker | None = None
         self._batch_filenames: set[str] = set()
@@ -188,7 +189,12 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         self._phase_tabs.setObjectName("phaseTabs")
         self._phase_tabs.setDocumentMode(True)
 
-        # Tab 0 — Analysis
+        # Tab 0 — Phase 1: Channel Topology (landing page)
+        self._phase_tabs.addTab(
+            self._build_topology_page(),
+            "Phase 1: Channel Topology")
+
+        # Tab 1 — Phase 2: Analysis & Preparation
         analysis_page = QWidget()
         analysis_layout = QVBoxLayout(analysis_page)
         analysis_layout.setContentsMargins(0, 0, 0, 0)
@@ -202,15 +208,13 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         self._main_splitter.setStretchFactor(1, 2)
         self._main_splitter.setSizes([620, 480])
         analysis_layout.addWidget(self._main_splitter, 1)
-        self._phase_tabs.addTab(analysis_page, "Analysis && Preparation")
-
-        # Tab 1 — Channel Topology
         self._phase_tabs.addTab(
-            self._build_topology_page(), "Channel Topology")
-        self._phase_tabs.setTabEnabled(_PHASE_TOPOLOGY, False)
+            analysis_page, "Phase 2: Analysis && Preparation")
+        self._phase_tabs.setTabEnabled(_PHASE_ANALYSIS, False)
 
-        # Tab 2 — Session Setup
-        self._phase_tabs.addTab(self._build_setup_page(), "Session Setup")
+        # Tab 2 — Phase 3: DAW Transfer
+        self._phase_tabs.addTab(
+            self._build_setup_page(), "Phase 3: DAW Transfer")
         self._phase_tabs.setTabEnabled(_PHASE_SETUP, False)
         self._phase_tabs.currentChanged.connect(self._on_phase_tab_changed)
 

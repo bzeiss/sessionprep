@@ -270,6 +270,127 @@ class PrepareWorker(QThread):
             self.error.emit(str(e))
 
 
+class TopologyApplyWorker(QThread):
+    """Resolve channel topology and write rerouted files to output dir.
+
+    This worker loads source audio on demand, applies the channel routing
+    defined in the session topology, and writes the resulting files.
+    No audio processors are applied — that is Phase 2's job.
+    """
+
+    progress = Signal(str)
+    progress_value = Signal(int, int)
+    finished = Signal()
+    error = Signal(str)
+
+    def __init__(self, session, output_dir: str):
+        super().__init__()
+        self._session = session
+        self._output_dir = output_dir
+
+    def run(self):
+        try:
+            import os
+            import numpy as np
+            import soundfile as sf
+            from sessionpreplib.audio import load_track, AUDIO_EXTENSIONS
+            from sessionpreplib.topology import resolve_entry_audio
+            from sessionpreplib.models import TrackContext
+
+            session = self._session
+            topology = session.topology
+            if topology is None:
+                self.error.emit("No topology defined.")
+                return
+
+            output_dir = self._output_dir
+
+            # Clean stale audio files from output dir
+            if os.path.isdir(output_dir):
+                for fname in os.listdir(output_dir):
+                    if os.path.splitext(fname)[1].lower() not in AUDIO_EXTENSIONS:
+                        continue
+                    fp = os.path.join(output_dir, fname)
+                    try:
+                        if os.path.isfile(fp):
+                            os.unlink(fp)
+                    except OSError:
+                        pass
+            os.makedirs(output_dir, exist_ok=True)
+
+            # Collect source filenames referenced by topology
+            ok_tracks = [t for t in session.tracks if t.status == "OK"]
+            track_map = {t.filename: t for t in ok_tracks}
+
+            needed_sources: set[str] = set()
+            for entry in topology.entries:
+                for src in entry.sources:
+                    needed_sources.add(src.input_filename)
+
+            total = len(needed_sources) + len(topology.entries)
+
+            # Phase A: Load source audio
+            source_audio: dict[str, tuple] = {}
+            for step, filename in enumerate(sorted(needed_sources)):
+                self.progress.emit(f"Loading {filename}")
+                self.progress_value.emit(step, total)
+                track = track_map.get(filename)
+                if not track:
+                    continue
+                if track.audio_data is None or track.audio_data.size == 0:
+                    loaded = load_track(track.filepath)
+                    track.audio_data = loaded.audio_data
+                    track.samplerate = loaded.samplerate
+                    track.total_samples = loaded.total_samples
+                source_audio[filename] = (track.audio_data, track.samplerate)
+
+            # Phase B: Resolve topology + write output files
+            output_tracks = []
+            errors = []
+            base_step = len(needed_sources)
+            for idx, entry in enumerate(topology.entries):
+                step = base_step + idx
+                self.progress.emit(f"Writing {entry.output_filename}")
+                self.progress_value.emit(step, total)
+
+                try:
+                    resolved = resolve_entry_audio(entry, source_audio)
+                    src_track = track_map.get(
+                        entry.sources[0].input_filename) if entry.sources else None
+                    sr = src_track.samplerate if src_track else 44100
+                    subtype = src_track.subtype if src_track else "PCM_24"
+                    bitdepth = src_track.bitdepth if src_track else "24-bit"
+
+                    dst = os.path.join(output_dir, entry.output_filename)
+                    sf.write(dst, resolved, sr, subtype=subtype)
+
+                    n_samples = resolved.shape[0]
+                    out_tc = TrackContext(
+                        filename=entry.output_filename,
+                        filepath=dst,
+                        audio_data=None,
+                        samplerate=sr,
+                        channels=entry.output_channels,
+                        total_samples=n_samples,
+                        bitdepth=bitdepth,
+                        subtype=subtype,
+                        duration_sec=(n_samples / sr) if sr > 0 else 0.0,
+                        group=src_track.group if src_track else None,
+                    )
+                    output_tracks.append(out_tc)
+                except Exception as e:
+                    errors.append((entry.output_filename, str(e)))
+
+            self.progress_value.emit(total, total)
+
+            session.output_tracks = output_tracks
+            session.config["_topology_apply_errors"] = errors
+            self.finished.emit()
+
+        except Exception as e:
+            self.error.emit(str(e))
+
+
 class BatchReanalyzeWorker(QThread):
     """Re-run detectors and/or processors for a subset of tracks.
 

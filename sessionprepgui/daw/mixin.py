@@ -350,7 +350,8 @@ class DawMixin:
         if not self._active_daw_processor or not self._session:
             return
 
-        output_folder = self._config.get("app", {}).get("output_folder", "processed")
+        output_folder = self._config.get("app", {}).get(
+            "phase2_output_folder", "sp_02_processed")
 
         # Refresh pipeline config from current session widgets so that
         # processor enabled/disabled changes made after analysis take effect.

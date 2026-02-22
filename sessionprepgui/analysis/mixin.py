@@ -21,10 +21,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from sessionpreplib.audio import AUDIO_EXTENSIONS
+from sessionpreplib.audio import AUDIO_EXTENSIONS, discover_track
 from sessionpreplib.config import default_config, flatten_structured_config
 from sessionpreplib.detectors import default_detectors
+from sessionpreplib.models import SessionContext
 from sessionpreplib.processors import default_processors
+from sessionpreplib.topology import build_default_topology
 from sessionpreplib.utils import protools_sort_key
 
 from ..helpers import track_analysis_label
@@ -180,14 +182,15 @@ class AnalysisMixin:
 
         self._on_stop()
         self._source_dir = path
+        self._topology_dir = None
         self._track_table.set_source_dir(path)
         self._session = None
         self._summary = None
         self._current_track = None
 
         # Reset UI
-        self._phase_tabs.setCurrentIndex(_PHASE_ANALYSIS)
-        self._phase_tabs.setTabEnabled(_PHASE_TOPOLOGY, False)
+        self._phase_tabs.setCurrentIndex(_PHASE_TOPOLOGY)
+        self._phase_tabs.setTabEnabled(_PHASE_ANALYSIS, False)
         self._phase_tabs.setTabEnabled(_PHASE_SETUP, False)
         self._track_table.setRowCount(0)
         self._setup_table.setRowCount(0)
@@ -206,7 +209,9 @@ class AnalysisMixin:
         self._groups_tab_table.setRowCount(0)
 
         wav_files = sorted(
-            f for f in os.listdir(path) if f.lower().endswith(AUDIO_EXTENSIONS)
+            (f for f in os.listdir(path)
+             if f.lower().endswith(AUDIO_EXTENSIONS)),
+            key=protools_sort_key,
         )
 
         if not wav_files:
@@ -214,27 +219,33 @@ class AnalysisMixin:
             self._analyze_action.setEnabled(False)
             return
 
-        self._track_table.setSortingEnabled(False)
-        self._track_table.setRowCount(len(wav_files))
-        for row, fname in enumerate(wav_files):
-            item = _SortableItem(fname, protools_sort_key(fname))
-            item.setForeground(FILE_COLOR_OK)
-            self._track_table.setItem(row, 0, item)
-            for col in range(1, 6):
-                cell = _SortableItem("", "")
-                cell.setForeground(QColor(COLORS["dim"]))
-                self._track_table.setItem(row, col, cell)
-        self._track_table.setSortingEnabled(True)
-        self._auto_fit_track_table()
+        # Lightweight file discovery — metadata only, no audio data loaded
+        tracks = []
+        for fname in wav_files:
+            try:
+                tc = discover_track(os.path.join(path, fname))
+                tracks.append(tc)
+            except Exception:
+                pass  # skip unreadable files
+
+        if not tracks:
+            self._status_bar.showMessage(f"No readable audio files in {path}")
+            self._analyze_action.setEnabled(False)
+            return
+
+        # Create session with discovered tracks + default passthrough topology
+        self._session = SessionContext(tracks=tracks, config={})
+        self._session.topology = build_default_topology(tracks)
+
+        # Populate Phase 1 topology tables
+        self._populate_topology_tab()
 
         self._analyze_action.setEnabled(True)
         self._status_bar.showMessage(
-            f"Loaded {len(wav_files)} file(s) from {path}"
+            f"Discovered {len(tracks)} file(s) from {path} — "
+            "edit topology, then click Apply"
         )
         self.setWindowTitle("SessionPrep")
-
-        # Auto-start analysis
-        self._on_analyze()
 
     @Slot()
     def _on_save_session(self):
@@ -258,6 +269,7 @@ class AnalysisMixin:
                 "tracks": self._session.tracks,
                 "topology": self._session.topology,
                 "transfer_manifest": self._session.transfer_manifest,
+                "topology_applied": self._topology_dir is not None,
             })
             self._status_bar.showMessage(f"Session saved to {path}")
         except Exception as exc:
@@ -299,13 +311,14 @@ class AnalysisMixin:
         # ── Reset UI (same as _on_open_path but without auto-analyze) ────────
         self._on_stop()
         self._source_dir = source_dir
+        self._topology_dir = None
         self._track_table.set_source_dir(source_dir)
         self._session = None
         self._summary = None
         self._current_track = None
 
-        self._phase_tabs.setCurrentIndex(_PHASE_ANALYSIS)
-        self._phase_tabs.setTabEnabled(_PHASE_TOPOLOGY, False)
+        self._phase_tabs.setCurrentIndex(_PHASE_TOPOLOGY)
+        self._phase_tabs.setTabEnabled(_PHASE_ANALYSIS, False)
         self._phase_tabs.setTabEnabled(_PHASE_SETUP, False)
         self._track_table.setRowCount(0)
         self._setup_table.setRowCount(0)
@@ -383,13 +396,22 @@ class AnalysisMixin:
         self._populate_table(session)
         self._render_summary()
 
+        # ── Restore topology_dir if topology was applied ─────────────────────
+        if data.get("topology_applied", False):
+            output_folder = self._config.get("app", {}).get(
+                "phase1_output_folder", "sp_01_topology")
+            topo_dir = os.path.join(source_dir, output_folder)
+            if os.path.isdir(topo_dir):
+                self._topology_dir = topo_dir
+
         # ── Enable post-analysis UI ───────────────────────────────────────────
         self._right_stack.setCurrentIndex(_PAGE_TABS)
         self._detail_tabs.setCurrentIndex(_TAB_SUMMARY)
         self._detail_tabs.setTabEnabled(_TAB_GROUPS, True)
         self._detail_tabs.setTabEnabled(_TAB_SESSION, True)
-        self._phase_tabs.setTabEnabled(_PHASE_TOPOLOGY, True)
         self._populate_topology_tab()
+        self._phase_tabs.setTabEnabled(_PHASE_ANALYSIS, True)
+        self._phase_tabs.setCurrentIndex(_PHASE_ANALYSIS)
         has_manifest = bool(session.transfer_manifest)
         self._phase_tabs.setTabEnabled(_PHASE_SETUP, has_manifest)
         if has_manifest:
@@ -415,6 +437,9 @@ class AnalysisMixin:
     def _on_analyze(self):
         if not self._source_dir:
             return
+
+        # Phase 2 analysis reads from sp_01_topology/ if available
+        analyze_dir = self._topology_dir or self._source_dir
 
         # Snapshot existing group assignments so we can restore after re-analysis
         self._prev_group_assignments = {}
@@ -442,7 +467,7 @@ class AnalysisMixin:
 
         self._progress_bar.setRange(0, 0)  # indeterminate until first value
 
-        self._worker = AnalyzeWorker(self._source_dir, config)
+        self._worker = AnalyzeWorker(analyze_dir, config)
         self._worker.progress.connect(self._on_worker_progress)
         self._worker.progress_value.connect(self._on_worker_progress_value)
         self._worker.track_analyzed.connect(self._on_track_analyzed)
@@ -599,6 +624,24 @@ class AnalysisMixin:
             self._populate_groups_tab()
             self._refresh_group_combos()
 
+        # Rebuild track table rows from the new session — required because
+        # analysis may have run on sp_01_topology/ whose filenames differ
+        # from the rows created during _on_open_path.
+        tracks = session.tracks
+        self._track_table.setSortingEnabled(False)
+        self._track_table.setRowCount(len(tracks))
+        for row, track in enumerate(tracks):
+            item = _SortableItem(
+                track.filename, protools_sort_key(track.filename))
+            item.setForeground(
+                FILE_COLOR_OK if track.status == "OK" else FILE_COLOR_ERROR)
+            self._track_table.setItem(row, 0, item)
+            for col in range(1, self._track_table.columnCount()):
+                cell = _SortableItem("", "")
+                cell.setForeground(QColor(COLORS["dim"]))
+                self._track_table.setItem(row, col, cell)
+        self._track_table.setSortingEnabled(True)
+
         self._populate_table(session)
         self._render_summary()
 
@@ -608,8 +651,7 @@ class AnalysisMixin:
         self._detail_tabs.setTabEnabled(_TAB_GROUPS, True)
         self._detail_tabs.setTabEnabled(_TAB_SESSION, True)
 
-        # Enable Channel Topology tab after analysis
-        self._phase_tabs.setTabEnabled(_PHASE_TOPOLOGY, True)
+        # Refresh topology tab (always enabled as Phase 1 landing page)
         self._populate_topology_tab()
 
         # Enable Session Setup phase only if transfer_manifest is populated
@@ -660,7 +702,7 @@ class AnalysisMixin:
             return  # already running
 
         output_folder = self._config.get("app", {}).get(
-            "output_folder", "processed")
+            "phase2_output_folder", "sp_02_processed")
         output_dir = os.path.join(self._source_dir, output_folder)
 
         # Refresh pipeline config from current session widgets so that
@@ -704,6 +746,7 @@ class AnalysisMixin:
         # Enable Session Setup now that transfer_manifest is populated
         if self._session and self._session.transfer_manifest:
             self._phase_tabs.setTabEnabled(_PHASE_SETUP, True)
+            self._phase_tabs.setCurrentIndex(_PHASE_SETUP)
 
         prepared = sum(
             1 for t in self._session.tracks

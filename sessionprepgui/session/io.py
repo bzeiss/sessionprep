@@ -36,7 +36,7 @@ from sessionpreplib.topology import (
 # Version & migration table
 # ---------------------------------------------------------------------------
 
-CURRENT_VERSION: int = 2
+CURRENT_VERSION: int = 3
 
 # Each entry upgrades from key-version to key+1.
 _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
@@ -45,6 +45,11 @@ _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
         "topology": None,
         "transfer_manifest": [],
         "version": 2,
+    },
+    2: lambda d: {
+        **d,
+        "topology_applied": False,
+        "version": 3,
     },
 }
 
@@ -338,6 +343,7 @@ def save_session(path: str, data: dict) -> None:
             _ser_transfer_entry(e)
             for e in data.get("transfer_manifest", [])
         ],
+        "topology_applied": data.get("topology_applied", False),
     }
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2, ensure_ascii=False)
@@ -386,4 +392,5 @@ def load_session(path: str) -> dict:
         "tracks": tracks,
         "topology": topology,
         "transfer_manifest": transfer_manifest,
+        "topology_applied": raw.get("topology_applied", False),
     }

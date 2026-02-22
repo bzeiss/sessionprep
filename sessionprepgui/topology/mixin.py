@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMenu,
     QMessageBox,
+    QSizePolicy,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -19,6 +20,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from ..widgets import ProgressPanel
 
 from sessionpreplib.topology import (
     build_default_topology,
@@ -32,7 +35,7 @@ from sessionpreplib.topology import (
 from sessionpreplib.utils import protools_sort_key
 
 from ..theme import COLORS, FILE_COLOR_OK
-from ..tracks.table_widgets import _PHASE_TOPOLOGY
+from ..tracks.table_widgets import _PHASE_TOPOLOGY, _PHASE_ANALYSIS, _PHASE_SETUP
 
 
 class TopologyMixin:
@@ -57,6 +60,13 @@ class TopologyMixin:
         toolbar.setMovable(False)
         toolbar.setIconSize(toolbar.iconSize())
 
+        topo_open_action = QAction("Open", self)
+        topo_open_action.setToolTip("Open a directory containing audio files")
+        topo_open_action.triggered.connect(self._on_open_path)
+        toolbar.addAction(topo_open_action)
+
+        toolbar.addSeparator()
+
         self._topo_reset_action = QAction("Reset to Default", self)
         self._topo_reset_action.setToolTip(
             "Rebuild the default passthrough topology from input tracks")
@@ -69,6 +79,18 @@ class TopologyMixin:
         self._topo_status_label.setStyleSheet(
             f"QLabel {{ color: {COLORS['dim']}; padding: 0 8px; }}")
         toolbar.addWidget(self._topo_status_label)
+
+        # Spacer pushes Apply to the right
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        toolbar.addWidget(spacer)
+
+        self._topo_apply_action = QAction("Apply", self)
+        self._topo_apply_action.setToolTip(
+            "Write channel-rerouted files to the topology output folder")
+        self._topo_apply_action.triggered.connect(self._on_topo_apply)
+        self._topo_apply_action.setEnabled(False)
+        toolbar.addAction(self._topo_apply_action)
 
         layout.addWidget(toolbar)
 
@@ -86,9 +108,17 @@ class TopologyMixin:
         left_layout.addWidget(left_label)
 
         self._topo_input_table = QTableWidget()
-        self._topo_input_table.setColumnCount(4)
+        self._topo_input_table.setColumnCount(3)
         self._topo_input_table.setHorizontalHeaderLabels(
-            ["File", "Ch", "Group", "Routing"])
+            ["File", "Ch", "Routing"])
+        self._topo_input_table.horizontalHeader().setDefaultAlignment(
+            Qt.AlignLeft | Qt.AlignVCenter)
+        ih = self._topo_input_table.horizontalHeader()
+        ih.setSectionResizeMode(0, QHeaderView.Stretch)
+        ih.setSectionResizeMode(1, QHeaderView.Fixed)
+        ih.resizeSection(1, 32)
+        ih.setSectionResizeMode(2, QHeaderView.Interactive)
+        ih.resizeSection(2, 120)
         self._topo_input_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._topo_input_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._topo_input_table.verticalHeader().setVisible(False)
@@ -110,9 +140,16 @@ class TopologyMixin:
         right_layout.addWidget(right_label)
 
         self._topo_output_table = QTableWidget()
-        self._topo_output_table.setColumnCount(4)
+        self._topo_output_table.setColumnCount(3)
         self._topo_output_table.setHorizontalHeaderLabels(
-            ["File", "Ch", "Group", "Sources"])
+            ["File", "Ch", "Sources"])
+        self._topo_output_table.horizontalHeader().setDefaultAlignment(
+            Qt.AlignLeft | Qt.AlignVCenter)
+        oh = self._topo_output_table.horizontalHeader()
+        oh.setSectionResizeMode(0, QHeaderView.Stretch)
+        oh.setSectionResizeMode(1, QHeaderView.Fixed)
+        oh.resizeSection(1, 32)
+        oh.setSectionResizeMode(2, QHeaderView.Stretch)
         self._topo_output_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._topo_output_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._topo_output_table.verticalHeader().setVisible(False)
@@ -125,6 +162,13 @@ class TopologyMixin:
 
         splitter.setSizes([400, 400])
         layout.addWidget(splitter, 1)
+
+        # Progress panel for Apply operation
+        self._topo_progress = ProgressPanel()
+        layout.addWidget(self._topo_progress)
+
+        # Worker reference
+        self._topo_apply_worker = None
 
         return page
 
@@ -161,25 +205,20 @@ class TopologyMixin:
             ch_item.setForeground(QColor(COLORS["dim"]))
             self._topo_input_table.setItem(row, 1, ch_item)
 
-            # Group
-            grp = track.group or ""
-            grp_item = QTableWidgetItem(grp)
-            grp_item.setForeground(QColor(COLORS["dim"]))
-            self._topo_input_table.setItem(row, 2, grp_item)
-
             # Routing description
             routing = self._describe_routing(track.filename, topo)
             routing_item = QTableWidgetItem(routing)
             is_excluded = routing == "Excluded"
             routing_color = COLORS["dim"] if is_excluded else COLORS["clean"]
             routing_item.setForeground(QColor(routing_color))
-            self._topo_input_table.setItem(row, 3, routing_item)
+            self._topo_input_table.setItem(row, 2, routing_item)
 
             # Dim the whole row if excluded
             if is_excluded:
                 item.setForeground(QColor(COLORS["dim"]))
 
         self._topo_input_table.setSortingEnabled(True)
+        self._topo_input_table.sortByColumn(0, Qt.AscendingOrder)
 
         # Auto-fit
         ih = self._topo_input_table.horizontalHeader()
@@ -187,17 +226,12 @@ class TopologyMixin:
         ih.setSectionResizeMode(1, QHeaderView.Fixed)
         ih.resizeSection(1, 32)
         ih.setSectionResizeMode(2, QHeaderView.Interactive)
-        ih.resizeSection(2, 90)
-        ih.setSectionResizeMode(3, QHeaderView.Interactive)
-        ih.resizeSection(3, 120)
+        ih.resizeSection(2, 120)
 
         # ── Output panel ──────────────────────────────────────────────
         entries = topo.entries if topo else []
         self._topo_output_table.setSortingEnabled(False)
         self._topo_output_table.setRowCount(len(entries))
-
-        # Build a map of input_filename→group for source lookups
-        track_map = self._topo_track_map()
 
         for row, entry in enumerate(entries):
             # File
@@ -210,40 +244,29 @@ class TopologyMixin:
             ch_item.setForeground(QColor(COLORS["dim"]))
             self._topo_output_table.setItem(row, 1, ch_item)
 
-            # Group — derive from the first source's group
-            grp = ""
-            for src in entry.sources:
-                t = track_map.get(src.input_filename)
-                if t and t.group:
-                    grp = t.group
-                    break
-            grp_item = QTableWidgetItem(grp)
-            grp_item.setForeground(QColor(COLORS["dim"]))
-            self._topo_output_table.setItem(row, 2, grp_item)
-
             # Sources summary
             src_names = [s.input_filename for s in entry.sources]
             src_text = ", ".join(src_names) if src_names else "\u2014"
             src_item = QTableWidgetItem(src_text)
             src_item.setForeground(QColor(COLORS["dim"]))
-            self._topo_output_table.setItem(row, 3, src_item)
+            self._topo_output_table.setItem(row, 2, src_item)
 
         self._topo_output_table.setSortingEnabled(True)
+        self._topo_output_table.sortByColumn(0, Qt.AscendingOrder)
 
         # Auto-fit
         oh = self._topo_output_table.horizontalHeader()
         oh.setSectionResizeMode(0, QHeaderView.Stretch)
         oh.setSectionResizeMode(1, QHeaderView.Fixed)
         oh.resizeSection(1, 32)
-        oh.setSectionResizeMode(2, QHeaderView.Interactive)
-        oh.resizeSection(2, 90)
-        oh.setSectionResizeMode(3, QHeaderView.Stretch)
+        oh.setSectionResizeMode(2, QHeaderView.Stretch)
 
-        # Status
+        # Status + Apply button
         n_in = len(ok_tracks)
         n_out = len(entries)
         self._topo_status_label.setText(
             f"{n_in} input → {n_out} output tracks")
+        self._topo_apply_action.setEnabled(n_out > 0)
 
     # ── Helpers ────────────────────────────────────────────────────────
 
@@ -320,8 +343,14 @@ class TopologyMixin:
         return {t.filename: t for t in self._session.tracks if t.status == "OK"}
 
     def _topo_changed(self):
-        """Refresh UI and mark prepare stale after a topology edit."""
+        """Refresh UI and invalidate downstream phases after a topology edit."""
         self._populate_topology_tab()
+        # If topology was already applied, the output is now stale —
+        # disable Phase 2 + 3 until user re-applies.
+        if self._topology_dir is not None:
+            self._topology_dir = None
+            self._phase_tabs.setTabEnabled(_PHASE_ANALYSIS, False)
+            self._phase_tabs.setTabEnabled(_PHASE_SETUP, False)
         self._mark_prepare_stale()
 
     def _topo_output_names(self) -> set[str]:
@@ -341,6 +370,85 @@ class TopologyMixin:
         while f"{base}_{n}{ext}" in existing:
             n += 1
         return f"{base}_{n}{ext}"
+
+    # ── Apply topology ─────────────────────────────────────────────────
+
+    @Slot()
+    def _on_topo_apply(self):
+        """Write channel-rerouted files to sp_01_topology/ folder."""
+        if not self._session or not self._source_dir:
+            return
+        if self._topo_apply_worker is not None:
+            return  # already running
+
+        from ..analysis.worker import TopologyApplyWorker
+
+        output_folder = self._config.get("app", {}).get(
+            "phase1_output_folder", "sp_01_topology")
+        output_dir = os.path.join(self._source_dir, output_folder)
+
+        self._topo_apply_action.setEnabled(False)
+        self._topo_reset_action.setEnabled(False)
+        self._topo_status_label.setText("Applying topology…")
+        self._topo_progress.start("Applying topology…")
+
+        self._topo_apply_worker = TopologyApplyWorker(
+            self._session, output_dir)
+        self._topo_apply_worker.progress.connect(self._on_topo_apply_progress)
+        self._topo_apply_worker.progress_value.connect(
+            self._on_topo_apply_progress_value)
+        self._topo_apply_worker.finished.connect(self._on_topo_apply_done)
+        self._topo_apply_worker.error.connect(self._on_topo_apply_error)
+        self._topo_apply_worker.start()
+
+    @Slot(str)
+    def _on_topo_apply_progress(self, message: str):
+        self._topo_progress.set_message(message)
+        self._status_bar.showMessage(message)
+
+    @Slot(int, int)
+    def _on_topo_apply_progress_value(self, current: int, total: int):
+        self._topo_progress.set_progress(current, total)
+
+    @Slot()
+    def _on_topo_apply_done(self):
+        self._topo_apply_worker = None
+        self._topo_apply_action.setEnabled(True)
+        self._topo_reset_action.setEnabled(True)
+
+        errors = self._session.config.get("_topology_apply_errors", [])
+        n_out = len(self._session.output_tracks)
+        if errors:
+            msg = (f"Topology applied: {n_out} file(s) written, "
+                   f"{len(errors)} error(s)")
+            self._topo_progress.finish(msg)
+            self._status_bar.showMessage(msg)
+            detail = "\n".join(f"• {fn}: {err}" for fn, err in errors)
+            QMessageBox.warning(
+                self, "Apply Topology — errors",
+                f"{msg}\n\n{detail}")
+        else:
+            msg = f"Topology applied: {n_out} file(s) written"
+            self._topo_progress.finish(msg)
+            self._status_bar.showMessage(msg)
+
+        # Store topology output dir for Phase 2
+        output_folder = self._config.get("app", {}).get(
+            "phase1_output_folder", "sp_01_topology")
+        self._topology_dir = os.path.join(self._source_dir, output_folder)
+
+        # Enable Phase 2, switch to it, auto-trigger analysis
+        self._phase_tabs.setTabEnabled(_PHASE_ANALYSIS, True)
+        self._phase_tabs.setCurrentIndex(_PHASE_ANALYSIS)
+        self._on_analyze()
+
+    @Slot(str)
+    def _on_topo_apply_error(self, message: str):
+        self._topo_apply_worker = None
+        self._topo_apply_action.setEnabled(True)
+        self._topo_reset_action.setEnabled(True)
+        self._topo_progress.fail(message)
+        self._status_bar.showMessage(f"Apply topology error: {message}")
 
     # ── Actions ───────────────────────────────────────────────────────
 

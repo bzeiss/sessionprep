@@ -205,7 +205,7 @@ class DawProjectDawProcessor(DawProcessor):
         from PySide6.QtWidgets import QFileDialog
 
         source_dir = session.config.get("_source_dir", "")
-        output_folder = session.config.get("_output_folder", "processed")
+        output_folder = session.config.get("_output_folder", "sp_02_processed")
         output_dir = os.path.join(source_dir, output_folder) if source_dir else ""
 
         safe_name = self._template_name or self.name or "dawproject"

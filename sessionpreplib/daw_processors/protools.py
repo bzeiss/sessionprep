@@ -383,14 +383,17 @@ class ProToolsDawProcessor(DawProcessor):
                         error=f"Manifest entry {eid} not found"))
                     continue
                 out_tc = out_track_map.get(entry.output_filename)
-                if not out_tc or not out_tc.processed_filepath:
+                audio_path = (
+                    out_tc.processed_filepath or out_tc.filepath
+                ) if out_tc else None
+                if not out_tc or not audio_path:
                     results.append(DawCommandResult(
                         command=DawCommand("import_to_clip_list", eid,
                                            {"folder_name": folder["name"]}),
                         success=False,
                         error=f"Output track not found for {entry.output_filename}"))
                     continue
-                filepath = os.path.abspath(out_tc.processed_filepath)
+                filepath = os.path.abspath(audio_path)
                 track_stem = os.path.splitext(entry.daw_track_name)[0]
                 track_format = (
                     "TF_Mono" if out_tc.channels == 1 else "TF_Stereo")

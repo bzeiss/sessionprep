@@ -63,6 +63,27 @@ _SUBTYPE_MAP = {
 }
 
 
+def discover_track(filepath: str) -> TrackContext:
+    """Read audio file metadata without loading audio data.
+
+    Returns a TrackContext with filename, filepath, channels, samplerate,
+    total_samples, bitdepth, subtype, duration_sec populated.
+    ``audio_data`` is left as ``None``.
+    """
+    info = sf.info(filepath)
+    return TrackContext(
+        filename=os.path.basename(filepath),
+        filepath=filepath,
+        audio_data=None,
+        samplerate=info.samplerate,
+        channels=info.channels,
+        total_samples=info.frames,
+        bitdepth=_SUBTYPE_MAP.get(info.subtype, info.subtype),
+        subtype=info.subtype,
+        duration_sec=info.duration,
+    )
+
+
 def load_track(filepath: str) -> TrackContext:
     """Read an audio file (WAV/AIFF) and return a fully populated TrackContext."""
     info = sf.info(filepath)
