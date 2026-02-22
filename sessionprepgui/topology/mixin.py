@@ -36,6 +36,7 @@ from sessionpreplib.utils import protools_sort_key
 
 from ..theme import COLORS, FILE_COLOR_OK
 from ..tracks.table_widgets import _PHASE_TOPOLOGY, _PHASE_ANALYSIS, _PHASE_SETUP
+from ..waveform import WaveformPanel
 
 
 class TopologyMixin:
@@ -95,7 +96,7 @@ class TopologyMixin:
         layout.addWidget(toolbar)
 
         # Dual-panel splitter
-        splitter = QSplitter(Qt.Horizontal)
+        h_splitter = QSplitter(Qt.Horizontal)
 
         # Left: input tracks (read-only)
         left_panel = QWidget()
@@ -127,7 +128,7 @@ class TopologyMixin:
         self._topo_input_table.customContextMenuRequested.connect(
             self._on_topo_input_context_menu)
         left_layout.addWidget(self._topo_input_table)
-        splitter.addWidget(left_panel)
+        h_splitter.addWidget(left_panel)
 
         # Right: output tracks (topology entries)
         right_panel = QWidget()
@@ -158,17 +159,41 @@ class TopologyMixin:
         self._topo_output_table.customContextMenuRequested.connect(
             self._on_topo_output_context_menu)
         right_layout.addWidget(self._topo_output_table)
-        splitter.addWidget(right_panel)
+        h_splitter.addWidget(right_panel)
 
-        splitter.setSizes([400, 400])
-        layout.addWidget(splitter, 1)
+        h_splitter.setSizes([400, 400])
+
+        # Cross-table exclusive selection
+        self._topo_input_table.currentCellChanged.connect(
+            self._on_topo_input_selected)
+        self._topo_output_table.currentCellChanged.connect(
+            self._on_topo_output_selected)
+
+        # Waveform preview panel (no analysis overlays)
+        self._topo_wf_panel = WaveformPanel(analysis_mode=False)
+        self._topo_wf_panel.setVisible(False)
+        self._topo_wf_panel.play_clicked.connect(self._on_topo_play)
+        self._topo_wf_panel.stop_clicked.connect(self._on_topo_stop)
+        self._topo_wf_panel.position_clicked.connect(self._on_topo_wf_seek)
+
+        # Vertical splitter: tables on top, waveform at bottom
+        v_splitter = QSplitter(Qt.Vertical)
+        v_splitter.addWidget(h_splitter)
+        v_splitter.addWidget(self._topo_wf_panel)
+        v_splitter.setSizes([700, 300])
+        layout.addWidget(v_splitter, 1)
 
         # Progress panel for Apply operation
         self._topo_progress = ProgressPanel()
         layout.addWidget(self._topo_progress)
 
-        # Worker reference
+        # Worker references
         self._topo_apply_worker = None
+        self._topo_audio_worker = None
+        self._topo_wf_worker = None
+        self._topo_resolve_worker = None
+        self._topo_selected_side: str | None = None
+        self._topo_cached_audio: tuple[str, object, int] | None = None
 
         return page
 
@@ -352,6 +377,20 @@ class TopologyMixin:
             self._phase_tabs.setTabEnabled(_PHASE_ANALYSIS, False)
             self._phase_tabs.setTabEnabled(_PHASE_SETUP, False)
         self._mark_prepare_stale()
+
+        # Auto-refresh waveform preview if an output track was selected
+        if self._topo_selected_side == "output":
+            row = self._topo_output_table.currentRow()
+            topo = self._session.topology if self._session else None
+            if topo and 0 <= row < len(topo.entries):
+                self._topo_load_output_waveform(row)
+            else:
+                # Selected row no longer exists — clear waveform
+                self._topo_cancel_workers()
+                self._topo_cached_audio = None
+                self._topo_wf_panel.waveform.set_audio(None, 44100)
+                self._topo_wf_panel.play_btn.setEnabled(False)
+                self._topo_selected_side = None
 
     def _topo_output_names(self) -> set[str]:
         """Return set of current output filenames in the topology."""
@@ -798,3 +837,200 @@ class TopologyMixin:
             return
         del topo.entries[entry_index]
         self._topo_changed()
+
+    # ── Cross-table exclusive selection ────────────────────────────────
+
+    @Slot(int, int, int, int)
+    def _on_topo_input_selected(self, row, col, prev_row, prev_col):
+        if row < 0:
+            return
+        # Clear output selection when user clicks input
+        if self._topo_selected_side != "input":
+            self._topo_output_table.blockSignals(True)
+            self._topo_output_table.clearSelection()
+            self._topo_output_table.setCurrentCell(-1, -1)
+            self._topo_output_table.blockSignals(False)
+        self._topo_selected_side = "input"
+        self._topo_load_input_waveform(row)
+
+    @Slot(int, int, int, int)
+    def _on_topo_output_selected(self, row, col, prev_row, prev_col):
+        if row < 0:
+            return
+        # Clear input selection when user clicks output
+        if self._topo_selected_side != "output":
+            self._topo_input_table.blockSignals(True)
+            self._topo_input_table.clearSelection()
+            self._topo_input_table.setCurrentCell(-1, -1)
+            self._topo_input_table.blockSignals(False)
+        self._topo_selected_side = "output"
+        self._topo_load_output_waveform(row)
+
+    # ── Waveform loading (input tracks) ────────────────────────────────
+
+    def _topo_cancel_workers(self):
+        """Cancel all in-flight topology waveform workers."""
+        for attr in ("_topo_audio_worker", "_topo_wf_worker",
+                     "_topo_resolve_worker"):
+            w = getattr(self, attr, None)
+            if w is not None:
+                w.cancel()
+                try:
+                    w.finished.disconnect()
+                except RuntimeError:
+                    pass
+                setattr(self, attr, None)
+
+    def _topo_load_input_waveform(self, row: int):
+        """Load waveform for the input track at *row*."""
+        self._topo_cancel_workers()
+        self._on_topo_stop()
+
+        item = self._topo_input_table.item(row, 0)
+        if not item:
+            return
+        filename = item.text()
+        track_map = self._topo_track_map()
+        track = track_map.get(filename)
+        if not track:
+            return
+
+        # Check cache
+        cached = self._topo_cached_audio
+        if cached and cached[0] == track.filepath:
+            self._topo_show_waveform(cached[1], cached[2])
+            return
+
+        # Need to load from disk
+        self._topo_wf_panel.setVisible(True)
+        self._topo_wf_panel.waveform.set_loading(True)
+        self._topo_wf_panel.play_btn.setEnabled(False)
+
+        from ..analysis.worker import AudioLoadWorker
+        worker = AudioLoadWorker(track, parent=self)
+        self._topo_audio_worker = worker
+        worker.finished.connect(
+            lambda t, fp=track.filepath: self._on_topo_audio_loaded(t, fp))
+        worker.error.connect(self._on_topo_audio_error)
+        worker.start()
+
+    def _on_topo_audio_loaded(self, track, filepath: str):
+        self._topo_audio_worker = None
+        if track.audio_data is None:
+            return
+        self._topo_cached_audio = (filepath, track.audio_data, track.samplerate)
+        self._topo_show_waveform(track.audio_data, track.samplerate)
+
+    def _on_topo_audio_error(self, message: str):
+        self._topo_audio_worker = None
+        self._topo_wf_panel.waveform.set_loading(False)
+        self._status_bar.showMessage(f"Audio load error: {message}")
+
+    # ── Waveform loading (output tracks — virtual preview) ─────────────
+
+    def _topo_load_output_waveform(self, row: int):
+        """Resolve and display waveform for the output entry at *row*."""
+        self._topo_cancel_workers()
+        self._on_topo_stop()
+
+        topo = self._session.topology if self._session else None
+        if not topo or row >= len(topo.entries):
+            return
+        entry = topo.entries[row]
+
+        if not self._source_dir:
+            return
+
+        self._topo_wf_panel.setVisible(True)
+        self._topo_wf_panel.waveform.set_loading(True)
+        self._topo_wf_panel.play_btn.setEnabled(False)
+
+        from ..analysis.worker import TopoAudioResolveWorker
+        worker = TopoAudioResolveWorker(entry, self._source_dir, parent=self)
+        self._topo_resolve_worker = worker
+        worker.finished.connect(self._on_topo_resolve_done)
+        worker.error.connect(self._on_topo_resolve_error)
+        worker.start()
+
+    def _on_topo_resolve_done(self, audio_data, samplerate: int):
+        self._topo_resolve_worker = None
+        # Cache under a synthetic key so we don't confuse with input files
+        self._topo_cached_audio = ("__output__", audio_data, samplerate)
+        self._topo_show_waveform(audio_data, samplerate)
+
+    def _on_topo_resolve_error(self, message: str):
+        self._topo_resolve_worker = None
+        self._topo_wf_panel.waveform.set_loading(False)
+        self._status_bar.showMessage(f"Preview error: {message}")
+
+    # ── Common waveform display ────────────────────────────────────────
+
+    def _topo_show_waveform(self, audio_data, samplerate: int):
+        """Run WaveformLoadWorker (lightweight, no RMS) and display result."""
+        from ..waveform.compute import WaveformLoadWorker
+
+        self._topo_wf_panel.setVisible(True)
+        self._topo_wf_panel.waveform.set_loading(True)
+
+        worker = WaveformLoadWorker(
+            audio_data, samplerate, 0,
+            spec_n_fft=self._topo_wf_panel.waveform.spec_n_fft,
+            spec_window=self._topo_wf_panel.waveform.spec_window,
+            parent=self)
+        self._topo_wf_worker = worker
+        worker.finished.connect(self._on_topo_wf_loaded)
+        worker.start()
+
+    def _on_topo_wf_loaded(self, result: dict):
+        self._topo_wf_worker = None
+        self._topo_wf_panel.waveform.set_precomputed(result)
+        n_ch = len(result["channels"])
+        self._topo_wf_panel.update_play_mode_channels(n_ch)
+        self._topo_wf_panel.play_btn.setEnabled(True)
+        self._topo_update_time_label(0)
+
+    # ── Playback ───────────────────────────────────────────────────────
+
+    @Slot()
+    def _on_topo_play(self):
+        cached = self._topo_cached_audio
+        if not cached:
+            return
+        _, audio_data, samplerate = cached
+        self._on_topo_stop()
+        start = self._topo_wf_panel.waveform._cursor_sample
+        mode, channel = self._topo_wf_panel.play_mode
+        self._playback.play(audio_data, samplerate, start,
+                            mode=mode, channel=channel)
+        if self._playback.is_playing:
+            self._topo_wf_panel.play_btn.setEnabled(False)
+            self._topo_wf_panel.stop_btn.setEnabled(True)
+
+    @Slot()
+    def _on_topo_stop(self):
+        was_playing = self._playback.is_playing
+        start_sample = self._playback.play_start_sample
+        self._playback.stop()
+        self._topo_wf_panel.stop_btn.setEnabled(False)
+        self._topo_wf_panel.play_btn.setEnabled(
+            self._topo_cached_audio is not None)
+        if was_playing:
+            self._topo_wf_panel.waveform.set_cursor(start_sample)
+            self._topo_update_time_label(start_sample)
+
+    @Slot(int)
+    def _on_topo_wf_seek(self, sample: int):
+        if self._playback.is_playing:
+            self._on_topo_stop()
+        self._topo_update_time_label(sample)
+
+    def _topo_update_time_label(self, current_sample: int):
+        cached = self._topo_cached_audio
+        if not cached:
+            return
+        _, audio_data, sr = cached
+        total = audio_data.shape[0] if audio_data is not None else 0
+        from sessionpreplib.audio import format_duration
+        cur_str = format_duration(current_sample, sr)
+        tot_str = format_duration(total, sr)
+        self._topo_wf_panel.time_label.setText(f"{cur_str} / {tot_str}")

@@ -217,6 +217,9 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         self.setCentralWidget(self._phase_tabs)
 
         self._status_bar = QStatusBar()
+        self._status_bar.setStyleSheet(
+            "QStatusBar { background-color: #1e1e1e; border-top: 1px solid #444; }"
+            "QStatusBar::item { border: none; }")
         self.setStatusBar(self._status_bar)
         self._status_bar.showMessage("Open a directory containing .wav / .aif files to begin.")
 

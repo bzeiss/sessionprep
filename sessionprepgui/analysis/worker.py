@@ -231,6 +231,50 @@ class AudioLoadWorker(QThread):
             self.error.emit(str(exc))
 
 
+class TopoAudioResolveWorker(QThread):
+    """Load source audio and resolve a TopologyEntry off the UI thread.
+
+    Emits ``finished`` with ``(audio_ndarray, samplerate)`` on success.
+    """
+
+    finished = Signal(object, int)  # (audio_data, samplerate)
+    error = Signal(str)
+
+    def __init__(self, entry, source_dir: str, parent=None):
+        super().__init__(parent)
+        self._entry = entry
+        self._source_dir = source_dir
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        try:
+            import os
+            import soundfile as sf
+            from sessionpreplib.topology import resolve_entry_audio
+
+            track_audio: dict[str, tuple] = {}
+            sr = 44100
+
+            for src in self._entry.sources:
+                if self._cancelled:
+                    return
+                path = os.path.join(self._source_dir, src.input_filename)
+                data, file_sr = sf.read(path, dtype='float64')
+                track_audio[src.input_filename] = (data, file_sr)
+                sr = file_sr  # use last samplerate (all should match)
+
+            if self._cancelled:
+                return
+
+            resolved = resolve_entry_audio(self._entry, track_audio)
+            self.finished.emit(resolved, sr)
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
 class PrepareWorker(QThread):
     """Runs Pipeline.prepare() off the main thread with progress."""
 

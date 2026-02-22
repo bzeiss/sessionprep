@@ -12,7 +12,7 @@ from sessionpreplib.audio import get_window_samples
 
 from ..helpers import fmt_time
 from .report import render_summary_html, render_track_detail_html
-from ..tracks.table_widgets import _TAB_FILE, _TAB_SUMMARY
+from ..tracks.table_widgets import _TAB_FILE, _TAB_SUMMARY, _PHASE_TOPOLOGY
 from ..theme import COLORS
 from ..analysis.worker import AudioLoadWorker
 from ..waveform.compute import WaveformLoadWorker
@@ -270,8 +270,21 @@ class DetailMixin:
 
     @Slot()
     def _on_toggle_play(self):
+        # Stop always works regardless of which phase started playback
         if self._playback.is_playing:
-            self._on_stop()
+            self._playback.stop()
+            # Reset both phases' transport UI
+            self._stop_btn.setEnabled(False)
+            if self._current_track is not None:
+                self._play_btn.setEnabled(True)
+            self._topo_wf_panel.stop_btn.setEnabled(False)
+            self._topo_wf_panel.play_btn.setEnabled(
+                self._topo_cached_audio is not None)
+            return
+        # Start based on current tab
+        if self._phase_tabs.currentIndex() == _PHASE_TOPOLOGY:
+            if self._topo_cached_audio is not None:
+                self._on_topo_play()
         elif self._current_track is not None:
             self._on_play()
 
@@ -303,11 +316,18 @@ class DetailMixin:
 
     @Slot(int)
     def _on_cursor_updated(self, sample_pos: int):
+        if self._phase_tabs.currentIndex() == _PHASE_TOPOLOGY:
+            self._topo_wf_panel.waveform.set_cursor(sample_pos)
+            self._topo_update_time_label(sample_pos)
+            return
         self._waveform.set_cursor(sample_pos)
         self._update_time_label(sample_pos)
 
     @Slot()
     def _on_playback_finished(self):
+        if self._phase_tabs.currentIndex() == _PHASE_TOPOLOGY:
+            self._on_topo_stop()
+            return
         self._stop_btn.setEnabled(False)
         if self._current_track is not None:
             self._play_btn.setEnabled(True)
