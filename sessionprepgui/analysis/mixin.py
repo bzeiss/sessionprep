@@ -376,6 +376,21 @@ class AnalysisMixin:
         from sessionpreplib.rendering import build_diagnostic_summary
 
         tracks = data["tracks"]
+
+        # Phase 2 tracks live in sp_01_topology/, not source_dir.
+        # _deserialize_track resolves against source_dir — correct that here.
+        if data.get("topology_applied", False):
+            topo_folder = self._config.get("app", {}).get(
+                "phase1_output_folder", "sp_01_topology")
+            topo_dir = os.path.join(source_dir, topo_folder)
+            for track in tracks:
+                track.filepath = os.path.join(topo_dir, track.filename)
+                if not os.path.isfile(track.filepath):
+                    track.status = "Error"
+                elif track.status == "Error":
+                    # Was marked Error only because source_dir lookup failed
+                    track.status = "OK"
+
         flat = self._flat_config()
 
         # Re-instantiate detectors and processors (needed for label filtering)
