@@ -618,9 +618,12 @@ class OutputTree(QTreeWidget):
             if item:
                 data = item.data(COL_NAME, Qt.UserRole)
                 if data and data[0] in ("file", "channel"):
-                    # For reorder drags, show insert line; for external
-                    # drops, show target highlight
+                    # For reorder drags, only allow channel-level targets
                     if mime.hasFormat(MIME_REORDER):
+                        if data[0] != "channel":
+                            self._clear_drop_target()
+                            event.ignore()
+                            return
                         self._clear_drop_target()
                         self._update_insert_line(
                             item, int(event.position().y()))

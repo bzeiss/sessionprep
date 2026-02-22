@@ -570,6 +570,19 @@ def append_channels(
             ))
 
 
+def remove_empty_outputs(topo: TopologyMapping) -> int:
+    """Remove output entries that have no wired source channels.
+
+    Returns the number of entries removed.
+    """
+    before = len(topo.entries)
+    topo.entries = [
+        e for e in topo.entries
+        if e.sources and any(s.routes for s in e.sources)
+    ]
+    return before - len(topo.entries)
+
+
 def used_channels(topo: TopologyMapping) -> set[tuple[str, int]]:
     """Return set of (input_filename, source_channel) pairs used in the topology."""
     used: set[tuple[str, int]] = set()

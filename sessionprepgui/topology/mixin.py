@@ -71,6 +71,13 @@ class TopologyMixin:
         self._topo_reset_action.triggered.connect(self._on_topo_reset)
         toolbar.addAction(self._topo_reset_action)
 
+        self._topo_remove_empty_action = QAction("Remove Empty", self)
+        self._topo_remove_empty_action.setToolTip(
+            "Remove output tracks that have no wired source channels")
+        self._topo_remove_empty_action.triggered.connect(
+            self._on_topo_remove_empty)
+        toolbar.addAction(self._topo_remove_empty_action)
+
         toolbar.addSeparator()
 
         self._topo_status_label = QLabel("")
@@ -341,6 +348,19 @@ class TopologyMixin:
             return
         self._topo_topology = build_default_topology(self._topo_source_tracks)
         self._topo_changed()
+
+    @Slot()
+    def _on_topo_remove_empty(self):
+        """Remove output entries that have no wired source channels."""
+        if not self._topo_topology:
+            return
+        removed = ops.remove_empty_outputs(self._topo_topology)
+        if removed:
+            self._topo_changed()
+            self._status_bar.showMessage(
+                f"Removed {removed} empty output track(s)")
+        else:
+            self._status_bar.showMessage("No empty output tracks to remove")
 
     # ── Input tree context menu ───────────────────────────────────────
 
