@@ -187,16 +187,18 @@ def build_transfer_manifest(
     # Build group lookup from input tracks
     group_map = {t.filename: t.group for t in tracks}
 
+    import os
     result: list = []
     for entry in mapping.entries:
         # Determine group: take from first source's input track
         grp = None
         if entry.sources:
             grp = group_map.get(entry.sources[0].input_filename)
+        stem = os.path.splitext(entry.output_filename)[0]
         result.append(TransferEntry(
             entry_id=entry.output_filename,
             output_filename=entry.output_filename,
-            daw_track_name=entry.output_filename,
+            daw_track_name=stem,
             group=grp,
         ))
 

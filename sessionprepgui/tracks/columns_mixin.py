@@ -249,46 +249,51 @@ class TrackColumnsMixin:
                 if track and track.processor_results
                 else None
             )
-            # Column 0: checkmark (assigned to folder?)
-            assigned = entry.entry_id in assignments
-            chk_item = _SortableItem("✓" if assigned else "", int(not assigned))
-            if assigned:
-                chk_item.setForeground(QColor(COLORS["clean"]))
-            self._setup_table.setItem(row, 0, chk_item)
-
-            # Column 1: filename (output_filename from manifest)
-            fname_item = _SortableItem(
-                entry.output_filename,
-                protools_sort_key(entry.output_filename))
-            fname_item.setForeground(FILE_COLOR_OK)
-            # Store entry_id in UserRole for drag-drop and assignment lookups
-            fname_item.setData(Qt.UserRole, entry.entry_id)
-            self._setup_table.setItem(row, 1, fname_item)
-
-            # Column 2: track name (editable)
+            # Column 0: track name (editable)
             tn_item = _SortableItem(
                 entry.daw_track_name,
                 protools_sort_key(entry.daw_track_name))
             tn_item.setForeground(QColor(COLORS["text"]))
             tn_item.setFlags(tn_item.flags() | Qt.ItemIsEditable)
+            # Store entry_id in UserRole for drag-drop and assignment lookups
             tn_item.setData(Qt.UserRole, entry.entry_id)
-            self._setup_table.setItem(row, 2, tn_item)
+            self._setup_table.setItem(row, 0, tn_item)
+
+            # Column 1: assigned checkmark
+            assigned = entry.entry_id in assignments
+            chk_item = _SortableItem("✓" if assigned else "", int(not assigned))
+            chk_item.setFlags(chk_item.flags() & ~Qt.ItemIsEditable)
+            if assigned:
+                chk_item.setForeground(QColor(COLORS["clean"]))
+            self._setup_table.setItem(row, 1, chk_item)
+
+            # Column 2: filename (output_filename from manifest)
+            fname_item = _SortableItem(
+                entry.output_filename,
+                protools_sort_key(entry.output_filename))
+            fname_item.setForeground(FILE_COLOR_OK)
+            fname_item.setFlags(fname_item.flags() & ~Qt.ItemIsEditable)
+            fname_item.setData(Qt.UserRole, entry.entry_id)
+            self._setup_table.setItem(row, 2, fname_item)
 
             # Column 3: channels
             channels = track.channels if track else 0
             ch_item = _SortableItem(str(channels), channels)
+            ch_item.setFlags(ch_item.flags() & ~Qt.ItemIsEditable)
             ch_item.setForeground(QColor(COLORS["dim"]))
             self._setup_table.setItem(row, 3, ch_item)
 
             # Column 4: clip gain
             clip_gain = pr.gain_db if pr else 0.0
             cg_item = _SortableItem(f"{clip_gain:+.1f} dB", clip_gain)
+            cg_item.setFlags(cg_item.flags() & ~Qt.ItemIsEditable)
             cg_item.setForeground(QColor(COLORS["text"]))
             self._setup_table.setItem(row, 4, cg_item)
 
             # Column 5: fader gain
             fader_gain = pr.data.get("fader_offset", 0.0) if pr else 0.0
             fg_item = _SortableItem(f"{fader_gain:+.1f} dB", fader_gain)
+            fg_item.setFlags(fg_item.flags() & ~Qt.ItemIsEditable)
             fg_item.setForeground(QColor(COLORS["text"]))
             self._setup_table.setItem(row, 5, fg_item)
 
@@ -297,6 +302,7 @@ class TrackColumnsMixin:
             grp_label = self._group_display_name(grp, glm) if grp else ""
             grp_rank = gcm_rank.get(grp, len(gcm_rank)) if grp else len(gcm_rank)
             grp_item = _SortableItem(grp_label, grp_rank)
+            grp_item.setFlags(grp_item.flags() & ~Qt.ItemIsEditable)
             grp_item.setForeground(QColor(COLORS["text"]))
             self._setup_table.setItem(row, 6, grp_item)
 
@@ -312,9 +318,9 @@ class TrackColumnsMixin:
         for col in range(self._setup_table.columnCount()):
             sh.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         self._setup_table.resizeColumnsToContents()
-        sh.setSectionResizeMode(0, QHeaderView.Fixed)
-        sh.resizeSection(0, 24)
-        sh.setSectionResizeMode(1, QHeaderView.Stretch)
+        sh.setSectionResizeMode(0, QHeaderView.Stretch)
+        sh.setSectionResizeMode(1, QHeaderView.Fixed)
+        sh.resizeSection(1, 24)
         sh.setSectionResizeMode(2, QHeaderView.Interactive)
         sh.setSectionResizeMode(3, QHeaderView.Fixed)
         for col in range(4, self._setup_table.columnCount()):

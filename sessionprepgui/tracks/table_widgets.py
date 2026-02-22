@@ -6,7 +6,7 @@ import json
 import os
 
 from PySide6.QtCore import Qt, Signal, QUrl, QMimeData, QPoint
-from PySide6.QtGui import QColor, QDrag, QPainter, QPixmap
+from PySide6.QtGui import QColor, QDrag, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QLabel,
     QTableWidgetItem,
@@ -143,7 +143,7 @@ class _SetupDragTable(BatchEditTableWidget):
         # fall back to cell text for backward compatibility.
         entry_ids: set[str] = set()
         for item in items:
-            if item.column() == 1 and item.text():  # col 1 = File
+            if item.column() == 0 and item.text():  # col 0 = Track Name
                 eid = item.data(Qt.UserRole)
                 entry_ids.add(eid if eid else item.text())
         if not entry_ids:
@@ -162,9 +162,9 @@ class _SetupDragTable(BatchEditTableWidget):
             return
         drag = QDrag(self)
         drag.setMimeData(mime)
-        # Build a compact, semi-transparent label listing dragged filenames
+        # Build a compact, semi-transparent label listing dragged track names
         filenames = sorted({
-            it.text() for it in items if it.column() == 1 and it.text()})
+            it.text() for it in items if it.column() == 0 and it.text()})
         if not filenames:
             return
         label = "\n".join(filenames[:8])
@@ -210,7 +210,8 @@ class _FolderDropTree(QTreeWidget):
         self.setDragEnabled(True)
         self.setDragDropMode(QTreeWidget.DragDrop)
         self.setDefaultDropAction(Qt.MoveAction)
-        self.setDropIndicatorShown(True)
+        self.setDropIndicatorShown(False)
+        self._insert_line_y: int | None = None
 
     # -- MIME production (for internal drag of track items) -----------------
 
@@ -278,13 +279,25 @@ class _FolderDropTree(QTreeWidget):
         if not self._is_valid_mime(event.mimeData()):
             event.ignore()
             return
-        folder_id, _ = self._resolve_drop(event.position().toPoint())
+        pos = event.position().toPoint()
+        folder_id, idx = self._resolve_drop(pos)
         if folder_id is not None:
+            item = self.itemAt(pos)
+            if item and item.data(0, Qt.UserRole + 1) == "track":
+                self._update_insert_line(item, pos.y())
+            else:
+                self._clear_insert_line()
             event.acceptProposedAction()
         else:
+            self._clear_insert_line()
             event.ignore()
 
+    def dragLeaveEvent(self, event):
+        self._clear_insert_line()
+        super().dragLeaveEvent(event)
+
     def dropEvent(self, event):
+        self._clear_insert_line()
         if not self._is_valid_mime(event.mimeData()):
             event.ignore()
             return
@@ -297,6 +310,36 @@ class _FolderDropTree(QTreeWidget):
         filenames = json.loads(data)
         self.tracks_dropped.emit(filenames, folder_id, idx)
         event.acceptProposedAction()
+
+    # -- Insert-position indicator ------------------------------------------
+
+    def _update_insert_line(self, item, pos_y: int) -> None:
+        """Compute y-coordinate for the insert-position indicator."""
+        if item is None:
+            self._clear_insert_line()
+            return
+        rect = self.visualItemRect(item)
+        mid = rect.top() + rect.height() // 2
+        y = rect.top() if pos_y < mid else rect.bottom()
+        if y != self._insert_line_y:
+            self._insert_line_y = y
+            self.viewport().update()
+
+    def _clear_insert_line(self) -> None:
+        """Remove the insert-position indicator."""
+        if self._insert_line_y is not None:
+            self._insert_line_y = None
+            self.viewport().update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._insert_line_y is not None:
+            painter = QPainter(self.viewport())
+            pen = QPen(QColor(255, 255, 255, 200), 2)
+            painter.setPen(pen)
+            w = self.viewport().width()
+            painter.drawLine(0, self._insert_line_y, w, self._insert_line_y)
+            painter.end()
 
     # -- Delete to unassign ------------------------------------------------
 

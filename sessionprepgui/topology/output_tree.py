@@ -55,7 +55,7 @@ if TYPE_CHECKING:
 
 _DIM = QColor(COLORS["dim"])
 _EMPTY = "\u2014"  # em-dash for unwired slots
-_HIGHLIGHT_BG = QColor(90, 50, 130, 80)  # soft violet
+_HIGHLIGHT_BG = QColor(120, 70, 180, 100)  # violet usage highlight
 _DROP_TARGET_BG = QColor(120, 80, 180, 100)  # brighter violet for drop target
 _TRANSPARENT = QBrush(Qt.NoBrush)
 
@@ -430,10 +430,9 @@ class OutputTree(QTreeWidget):
                 for k in range(ch.childCount()):
                     self._set_row_bg(ch.child(k), _TRANSPARENT)
 
-    @staticmethod
-    def _set_row_bg(item: QTreeWidgetItem, brush) -> None:
+    def _set_row_bg(self, item: QTreeWidgetItem, brush) -> None:
         """Apply *brush* to every column of *item*."""
-        for col in range(item.columnCount()):
+        for col in range(self.columnCount()):
             item.setBackground(col, brush)
 
     @staticmethod

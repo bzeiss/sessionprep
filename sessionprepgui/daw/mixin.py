@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Qt, Slot, QSize
+from PySide6.QtCore import Qt, Slot, QSize, QTimer
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -70,6 +70,16 @@ class DawMixin:
 
         self._setup_toolbar.addSeparator()
 
+        self._reset_manifest_action = QAction("Reset to Default", self)
+        self._reset_manifest_action.setToolTip(
+            "Remove all duplicates and restore default track names")
+        self._reset_manifest_action.setEnabled(False)
+        self._reset_manifest_action.triggered.connect(
+            self._on_reset_manifest)
+        self._setup_toolbar.addAction(self._reset_manifest_action)
+
+        self._setup_toolbar.addSeparator()
+
         # ── Use Processed checkbox ─────────────────────────────────────
         self._use_processed_cb = QCheckBox("Use Processed")
         self._use_processed_cb.setLayoutDirection(Qt.RightToLeft)
@@ -98,9 +108,9 @@ class DawMixin:
         self._transfer_action.triggered.connect(self._on_daw_transfer)
         self._setup_toolbar.addAction(self._transfer_action)
 
-        self._sync_action = QAction("Sync", self)
-        self._sync_action.setEnabled(False)
-        self._setup_toolbar.addAction(self._sync_action)
+        # self._sync_action = QAction("Sync", self)
+        # self._sync_action.setEnabled(False)
+        # self._setup_toolbar.addAction(self._sync_action)
 
         # Populate combo after ALL toolbar widgets exist, then connect signal
         self._populate_daw_combo()
@@ -115,7 +125,7 @@ class DawMixin:
         self._setup_table = _SetupDragTable()
         self._setup_table.setColumnCount(7)
         self._setup_table.setHorizontalHeaderLabels(
-            ["", "File", "Track Name", "Ch", "Clip Gain", "Fader Gain", "Group"]
+            ["Track Name", "\u2713", "File", "Ch", "Clip Gain", "Fader Gain", "Group"]
         )
         self._setup_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._setup_table.setSelectionMode(QTableWidget.ExtendedSelection)
@@ -134,15 +144,15 @@ class DawMixin:
 
         sh = self._setup_table.horizontalHeader()
         sh.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        sh.setSectionResizeMode(0, QHeaderView.Fixed)
-        sh.resizeSection(0, 24)
-        sh.setSectionResizeMode(1, QHeaderView.Stretch)
+        sh.setSectionResizeMode(0, QHeaderView.Stretch)
+        sh.setSectionResizeMode(1, QHeaderView.Fixed)
+        sh.resizeSection(1, 24)
         sh.setSectionResizeMode(2, QHeaderView.Interactive)
         sh.setSectionResizeMode(3, QHeaderView.Fixed)
         sh.setSectionResizeMode(4, QHeaderView.Interactive)
         sh.setSectionResizeMode(5, QHeaderView.Interactive)
         sh.setSectionResizeMode(6, QHeaderView.Interactive)
-        sh.resizeSection(2, 150)
+        sh.resizeSection(2, 180)
         sh.resizeSection(3, 30)
         sh.resizeSection(4, 90)
         sh.resizeSection(5, 90)
@@ -197,9 +207,10 @@ class DawMixin:
         self._setup_right_stack.setCurrentIndex(_SETUP_RIGHT_PLACEHOLDER)
 
         setup_splitter.addWidget(self._setup_right_stack)
-        setup_splitter.setStretchFactor(0, 3)
-        setup_splitter.setStretchFactor(1, 2)
-        setup_splitter.setSizes([620, 480])
+        setup_splitter.setStretchFactor(0, 1)
+        setup_splitter.setStretchFactor(1, 1)
+        QTimer.singleShot(0, lambda: setup_splitter.setSizes(
+            [setup_splitter.width() // 2, setup_splitter.width() // 2]))
 
         layout.addWidget(setup_splitter, 1)
 
@@ -242,7 +253,9 @@ class DawMixin:
         has_assignments = bool(dp_state.get("assignments"))
         self._auto_assign_action.setEnabled(has_folders)
         self._transfer_action.setEnabled(has_processor and has_assignments)
-        self._sync_action.setEnabled(False)
+        has_manifest = bool(
+            self._session and self._session.transfer_manifest)
+        self._reset_manifest_action.setEnabled(has_manifest)
 
     @Slot(int)
     def _on_daw_combo_changed(self, index: int):
@@ -486,10 +499,14 @@ class DawMixin:
                 track_item = QTreeWidgetItem(item)
                 # Show daw_track_name alongside source filename
                 te = entry_map.get(fname)
-                if te and te.daw_track_name != te.output_filename:
+                if te:
                     import os
-                    stem = os.path.splitext(te.daw_track_name)[0]
-                    track_item.setText(0, f"{stem}  \u2190 {te.output_filename}")
+                    default_stem = os.path.splitext(te.output_filename)[0]
+                    if te.daw_track_name != default_stem:
+                        track_item.setText(
+                            0, f"{te.daw_track_name}  \u2190 {te.output_filename}")
+                    else:
+                        track_item.setText(0, fname)
                 else:
                     track_item.setText(0, fname)
                 track_item.setData(0, Qt.UserRole, fname)
@@ -687,8 +704,8 @@ class DawMixin:
         if row < 0:
             return
 
-        # Get entry_id from UserRole on column 1
-        fname_item = self._setup_table.item(row, 1)
+        # Get entry_id from UserRole on Track Name column (col 0)
+        fname_item = self._setup_table.item(row, 0)
         if not fname_item:
             return
         entry_id = fname_item.data(Qt.UserRole)
@@ -711,7 +728,7 @@ class DawMixin:
 
         # Duplicate for DAW — creates a new manifest entry referencing
         # the same output file but with a unique entry_id and editable name
-        dup_act = menu.addAction("Duplicate for DAW")
+        dup_act = menu.addAction("Duplicate")
         dup_act.triggered.connect(
             lambda checked, eid=entry_id: self._duplicate_transfer_entry(eid))
 
@@ -790,7 +807,7 @@ class DawMixin:
         """Commit inline edit of the Track Name column."""
         if self._setup_table_populating:
             return
-        if item.column() != 2:  # Track Name column
+        if item.column() != 0:  # Track Name column
             return
         entry_id = item.data(Qt.UserRole)
         if not entry_id or not self._session:
@@ -811,6 +828,22 @@ class DawMixin:
                     e.daw_track_name = new_name
                     self._populate_folder_tree()
                 return
+
+    def _on_reset_manifest(self):
+        """Reset the transfer manifest to default: one entry per output file,
+        default track names, no user-added duplicates."""
+        if not self._session or not self._session.topology:
+            return
+        from sessionpreplib.topology import build_transfer_manifest
+        self._session.transfer_manifest = build_transfer_manifest(
+            self._session.topology,
+            self._session.tracks,
+            existing_manifest=None,  # discard all user edits
+        )
+        self._populate_setup_table()
+        self._populate_folder_tree()
+        self._update_daw_lifecycle_buttons()
+        self._status_bar.showMessage("Transfer manifest reset to default")
 
     def _remove_transfer_entry(self, entry_id: str):
         """Remove a user-added duplicate transfer entry."""
