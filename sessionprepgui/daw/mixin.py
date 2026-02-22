@@ -113,16 +113,19 @@ class DawMixin:
 
         # ── Left: track table ─────────────────────────────────────────────
         self._setup_table = _SetupDragTable()
-        self._setup_table.setColumnCount(6)
+        self._setup_table.setColumnCount(7)
         self._setup_table.setHorizontalHeaderLabels(
-            ["", "File", "Ch", "Clip Gain", "Fader Gain", "Group"]
+            ["", "File", "Track Name", "Ch", "Clip Gain", "Fader Gain", "Group"]
         )
         self._setup_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._setup_table.setSelectionMode(QTableWidget.ExtendedSelection)
-        self._setup_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._setup_table.setEditTriggers(QTableWidget.DoubleClicked)
         self._setup_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self._setup_table.customContextMenuRequested.connect(
             self._on_setup_table_context_menu)
+        self._setup_table.itemChanged.connect(
+            self._on_setup_table_item_changed)
+        self._setup_table_populating = False
         self._setup_table.verticalHeader().setVisible(False)
         self._setup_table.setMinimumWidth(300)
         self._setup_table.setShowGrid(True)
@@ -134,14 +137,16 @@ class DawMixin:
         sh.setSectionResizeMode(0, QHeaderView.Fixed)
         sh.resizeSection(0, 24)
         sh.setSectionResizeMode(1, QHeaderView.Stretch)
-        sh.setSectionResizeMode(2, QHeaderView.Fixed)
-        sh.setSectionResizeMode(3, QHeaderView.Interactive)
+        sh.setSectionResizeMode(2, QHeaderView.Interactive)
+        sh.setSectionResizeMode(3, QHeaderView.Fixed)
         sh.setSectionResizeMode(4, QHeaderView.Interactive)
         sh.setSectionResizeMode(5, QHeaderView.Interactive)
-        sh.resizeSection(2, 30)
-        sh.resizeSection(3, 90)
+        sh.setSectionResizeMode(6, QHeaderView.Interactive)
+        sh.resizeSection(2, 150)
+        sh.resizeSection(3, 30)
         sh.resizeSection(4, 90)
-        sh.resizeSection(5, 110)
+        sh.resizeSection(5, 90)
+        sh.resizeSection(6, 110)
 
         setup_splitter.addWidget(self._setup_table)
 
@@ -442,8 +447,10 @@ class DawMixin:
         # Group color map for track items
         gcm = self._group_color_map()
         track_map = {}
+        entry_map: dict[str, Any] = {}
         if self._session:
             track_map = {t.filename: t for t in self._session.output_tracks}
+            entry_map = {e.entry_id: e for e in self._session.transfer_manifest}
 
         # Icons – small colored squares to distinguish folder types
         def _folder_icon(color_hex: str) -> QIcon:
@@ -477,14 +484,22 @@ class DawMixin:
             # Add assigned tracks as children
             for fname in folder_tracks.get(folder["id"], []):
                 track_item = QTreeWidgetItem(item)
-                track_item.setText(0, fname)
+                # Show daw_track_name alongside source filename
+                te = entry_map.get(fname)
+                if te and te.daw_track_name != te.output_filename:
+                    import os
+                    stem = os.path.splitext(te.daw_track_name)[0]
+                    track_item.setText(0, f"{stem}  \u2190 {te.output_filename}")
+                else:
+                    track_item.setText(0, fname)
                 track_item.setData(0, Qt.UserRole, fname)
                 track_item.setData(0, Qt.UserRole + 1, "track")
                 track_item.setFlags(
                     (track_item.flags() | Qt.ItemIsDragEnabled)
                     & ~Qt.ItemIsDropEnabled)
                 # Row background from group color (matches table tint)
-                tc = track_map.get(fname)
+                out_fn = te.output_filename if te else fname
+                tc = track_map.get(out_fn)
                 if tc and tc.group:
                     tint = self._tint_group_color(tc.group, gcm)
                     if tint:
@@ -700,11 +715,6 @@ class DawMixin:
         dup_act.triggered.connect(
             lambda checked, eid=entry_id: self._duplicate_transfer_entry(eid))
 
-        # Rename DAW track name
-        rename_act = menu.addAction("Rename DAW Track…")
-        rename_act.triggered.connect(
-            lambda checked, eid=entry_id: self._rename_transfer_entry(eid))
-
         # Remove Duplicate — only for user-added entries (entry_id != output_filename)
         if entry.entry_id != entry.output_filename:
             menu.addSeparator()
@@ -715,8 +725,14 @@ class DawMixin:
         menu.exec(self._setup_table.viewport().mapToGlobal(pos))
 
     def _duplicate_transfer_entry(self, source_entry_id: str):
-        """Duplicate a transfer entry for multi-track DAW scenarios."""
+        """Duplicate a transfer entry for multi-track DAW scenarios.
+
+        Naming convention: ``stem-[1]``, ``stem-[2]``, etc.
+        On first duplication the original is also renamed to ``-[1]``.
+        """
         from sessionpreplib.models import TransferEntry
+        import os
+        import re
         import uuid
 
         manifest = self._session.transfer_manifest
@@ -730,47 +746,71 @@ class DawMixin:
         if source is None:
             return
 
-        # Count existing entries with same output_filename for naming
-        count = sum(1 for e in manifest
-                    if e.output_filename == source.output_filename)
+        # Collect all siblings (same output_filename)
+        siblings = [e for e in manifest
+                    if e.output_filename == source.output_filename]
+
+        # Find highest existing -[N] suffix among siblings
+        suffix_re = re.compile(r"-\[(\d+)\]$")
+        max_n = 0
+        for sib in siblings:
+            m = suffix_re.search(sib.daw_track_name)
+            if m:
+                max_n = max(max_n, int(m.group(1)))
+
+        # Derive the base stem (strip extension if it matches filename,
+        # strip any existing -[N] suffix)
         stem = source.daw_track_name
         if stem == source.output_filename:
-            import os
             stem = os.path.splitext(stem)[0]
+        stem = suffix_re.sub("", stem)
+
+        if max_n == 0:
+            # First duplication — rename the original to -[1]
+            source.daw_track_name = f"{stem}-[1]"
+            new_n = 2
+        else:
+            new_n = max_n + 1
 
         new_entry = TransferEntry(
             entry_id=f"{source.output_filename}:{uuid.uuid4().hex[:8]}",
             output_filename=source.output_filename,
-            daw_track_name=f"{stem} ({count + 1})",
+            daw_track_name=f"{stem}-[{new_n}]",
             group=source.group,
         )
 
         # Insert right after the source entry
         manifest.insert(source_idx + 1, new_entry)
         self._populate_setup_table()
+        self._populate_folder_tree()
         self._status_bar.showMessage(
-            f"Duplicated '{source.daw_track_name}' → '{new_entry.daw_track_name}'")
+            f"Duplicated → '{new_entry.daw_track_name}'")
 
-    def _rename_transfer_entry(self, entry_id: str):
-        """Rename the DAW track name for a transfer entry."""
-        manifest = self._session.transfer_manifest
-        entry = None
-        for e in manifest:
+    def _on_setup_table_item_changed(self, item):
+        """Commit inline edit of the Track Name column."""
+        if self._setup_table_populating:
+            return
+        if item.column() != 2:  # Track Name column
+            return
+        entry_id = item.data(Qt.UserRole)
+        if not entry_id or not self._session:
+            return
+        new_name = item.text().strip()
+        if not new_name:
+            # Revert — find old name
+            for e in self._session.transfer_manifest:
+                if e.entry_id == entry_id:
+                    self._setup_table.blockSignals(True)
+                    item.setText(e.daw_track_name)
+                    self._setup_table.blockSignals(False)
+                    return
+            return
+        for e in self._session.transfer_manifest:
             if e.entry_id == entry_id:
-                entry = e
-                break
-        if entry is None:
-            return
-
-        new_name, ok = QInputDialog.getText(
-            self, "Rename DAW Track",
-            "DAW track name:",
-            text=entry.daw_track_name,
-        )
-        if not ok or not new_name.strip():
-            return
-        entry.daw_track_name = new_name.strip()
-        self._populate_setup_table()
+                if e.daw_track_name != new_name:
+                    e.daw_track_name = new_name
+                    self._populate_folder_tree()
+                return
 
     def _remove_transfer_entry(self, entry_id: str):
         """Remove a user-added duplicate transfer entry."""

@@ -217,6 +217,7 @@ class TrackColumnsMixin:
         """Refresh the Session Setup track table from the transfer manifest."""
         if not self._session:
             return
+        self._setup_table_populating = True
         self._setup_table.setSortingEnabled(False)
         self._setup_table.setRowCount(0)
 
@@ -264,37 +265,47 @@ class TrackColumnsMixin:
             fname_item.setData(Qt.UserRole, entry.entry_id)
             self._setup_table.setItem(row, 1, fname_item)
 
-            # Column 2: channels
+            # Column 2: track name (editable)
+            tn_item = _SortableItem(
+                entry.daw_track_name,
+                protools_sort_key(entry.daw_track_name))
+            tn_item.setForeground(QColor(COLORS["text"]))
+            tn_item.setFlags(tn_item.flags() | Qt.ItemIsEditable)
+            tn_item.setData(Qt.UserRole, entry.entry_id)
+            self._setup_table.setItem(row, 2, tn_item)
+
+            # Column 3: channels
             channels = track.channels if track else 0
             ch_item = _SortableItem(str(channels), channels)
             ch_item.setForeground(QColor(COLORS["dim"]))
-            self._setup_table.setItem(row, 2, ch_item)
+            self._setup_table.setItem(row, 3, ch_item)
 
-            # Column 3: clip gain
+            # Column 4: clip gain
             clip_gain = pr.gain_db if pr else 0.0
             cg_item = _SortableItem(f"{clip_gain:+.1f} dB", clip_gain)
             cg_item.setForeground(QColor(COLORS["text"]))
-            self._setup_table.setItem(row, 3, cg_item)
+            self._setup_table.setItem(row, 4, cg_item)
 
-            # Column 4: fader gain
+            # Column 5: fader gain
             fader_gain = pr.data.get("fader_offset", 0.0) if pr else 0.0
             fg_item = _SortableItem(f"{fader_gain:+.1f} dB", fader_gain)
             fg_item.setForeground(QColor(COLORS["text"]))
-            self._setup_table.setItem(row, 4, fg_item)
+            self._setup_table.setItem(row, 5, fg_item)
 
-            # Column 5: group (read-only, with link indicator)
+            # Column 6: group (read-only, with link indicator)
             grp = entry.group
             grp_label = self._group_display_name(grp, glm) if grp else ""
             grp_rank = gcm_rank.get(grp, len(gcm_rank)) if grp else len(gcm_rank)
             grp_item = _SortableItem(grp_label, grp_rank)
             grp_item.setForeground(QColor(COLORS["text"]))
-            self._setup_table.setItem(row, 5, grp_item)
+            self._setup_table.setItem(row, 6, grp_item)
 
             # Row background from group color
             self._apply_row_group_color(row, grp, gcm,
                                         table=self._setup_table)
 
         self._setup_table.setSortingEnabled(True)
+        self._setup_table_populating = False
 
         # Auto-fit columns to content
         sh = self._setup_table.horizontalHeader()
@@ -304,8 +315,9 @@ class TrackColumnsMixin:
         sh.setSectionResizeMode(0, QHeaderView.Fixed)
         sh.resizeSection(0, 24)
         sh.setSectionResizeMode(1, QHeaderView.Stretch)
-        sh.setSectionResizeMode(2, QHeaderView.Fixed)
-        for col in range(3, self._setup_table.columnCount()):
+        sh.setSectionResizeMode(2, QHeaderView.Interactive)
+        sh.setSectionResizeMode(3, QHeaderView.Fixed)
+        for col in range(4, self._setup_table.columnCount()):
             sh.setSectionResizeMode(col, QHeaderView.Interactive)
 
     # ── Classification override helpers ───────────────────────────────────
