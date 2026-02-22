@@ -243,6 +243,9 @@ class AnalysisMixin:
             self._analyze_action.setEnabled(False)
             return
 
+        # Preserve original source tracks for Phase 1 topology input table
+        self._topo_source_tracks = list(tracks)
+
         # Create session with discovered tracks + default passthrough topology
         self._session = SessionContext(tracks=tracks, config={})
         self._session.topology = build_default_topology(tracks)
@@ -323,6 +326,20 @@ class AnalysisMixin:
         self._source_dir = source_dir
         self._topology_dir = None
         self._track_table.set_source_dir(source_dir)
+
+        # Re-discover original source tracks for Phase 1 topology input table
+        source_tracks = []
+        for fname in sorted(
+            (f for f in os.listdir(source_dir)
+             if f.lower().endswith(AUDIO_EXTENSIONS)),
+            key=protools_sort_key,
+        ):
+            try:
+                source_tracks.append(discover_track(os.path.join(source_dir, fname)))
+            except Exception:
+                pass
+        self._topo_source_tracks = source_tracks
+
         self._session = None
         self._summary = None
         self._current_track = None
@@ -616,6 +633,11 @@ class AnalysisMixin:
 
     @Slot(object, object)
     def _on_analyze_done(self, session, summary):
+        # Carry forward topology from pre-analysis session so Phase 1
+        # retains its configuration after the analysis replaces the session.
+        if self._session and self._session.topology:
+            session.topology = self._session.topology
+
         self._session = session
         self._summary = summary
         self._analyze_action.setEnabled(True)

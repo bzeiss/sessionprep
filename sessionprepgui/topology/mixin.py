@@ -210,13 +210,13 @@ class TopologyMixin:
 
         # Auto-build default topology if none exists
         if self._session.topology is None:
-            ok = [t for t in self._session.tracks if t.status == "OK"]
+            ok = [t for t in self._topo_source_tracks if t.status == "OK"]
             if ok:
                 self._session.topology = build_default_topology(
-                    self._session.tracks)
+                    self._topo_source_tracks)
 
         topo = self._session.topology
-        ok_tracks = [t for t in self._session.tracks if t.status == "OK"]
+        ok_tracks = [t for t in self._topo_source_tracks if t.status == "OK"]
 
         # ── Input panel ───────────────────────────────────────────────
         self._topo_input_table.setSortingEnabled(False)
@@ -366,10 +366,8 @@ class TopologyMixin:
         return "Custom"
 
     def _topo_track_map(self) -> dict:
-        """Return {filename: TrackContext} for OK input tracks."""
-        if not self._session:
-            return {}
-        return {t.filename: t for t in self._session.tracks if t.status == "OK"}
+        """Return {filename: TrackContext} for OK original source tracks."""
+        return {t.filename: t for t in self._topo_source_tracks if t.status == "OK"}
 
     def _topo_changed(self):
         """Refresh UI and invalidate downstream phases after a topology edit."""
@@ -504,7 +502,7 @@ class TopologyMixin:
         """Reset topology to default passthrough."""
         if not self._session:
             return
-        self._session.topology = build_default_topology(self._session.tracks)
+        self._session.topology = build_default_topology(self._topo_source_tracks)
         self._topo_changed()
 
     # ── Input table context menu ──────────────────────────────────────
