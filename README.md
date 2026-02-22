@@ -144,13 +144,13 @@ distribution instructions.
 
 ## How It Works
 
-SessionPrep operates in three stages:
+SessionPrep operates in three phases:
 
-| Stage | Name | What happens | When |
+| Phase | Name | What happens | When |
 |-------|------|-------------|------|
-| **1** | Analysis & Preparation | Format checks, clipping, DC offset, stereo compatibility, silence, subsonic, peak/RMS measurement, classification, tail exceedance | Always |
-| **2** | Processing | Bimodal normalization (clip gain adjustment) | GUI Prepare / CLI execute (`-x`) |
-| **3** | DAW Integration | Transfer tracks into DAW session; fader offsets applied automatically (Pro Tools via PTSL, DAWproject via file generation) to restore rough mix balance | GUI Transfer |
+| **1** | Channel Topology | Define how source tracks map to output files: channel routing, reordering, splitting, merging. Drag-and-drop between input/output trees with visual insert-position indicator. | GUI Phase 1 (always available) |
+| **2** | Analysis & Preparation | Format checks, clipping, DC offset, stereo compatibility, silence, subsonic, peak/RMS measurement, classification, tail exceedance. Bimodal normalization (clip gain adjustment) via Prepare. | GUI Phase 2 / CLI |
+| **3** | DAW Transfer | Transfer tracks into DAW session with per-track naming and folder assignment. Duplicate entries for multi-track scenarios (same clip on different tracks). Fader offsets applied automatically (Pro Tools via PTSL, DAWproject via file generation). | GUI Phase 3 |
 
 
 ### Diagnostic categories

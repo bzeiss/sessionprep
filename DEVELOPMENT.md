@@ -320,6 +320,8 @@ sessionpreplib/
     pipeline.py                  # 3-phase orchestrator + validation
     queue.py                     # SessionQueue / SessionJob
     rendering.py                 # Diagnostic summary builder + PlainText renderer
+    topology.py                  # TopologyMapping, TopologyEntry, TopologySource, ChannelRoute,
+                                 #   build_default_topology(), rebuild_transfer_manifest(), validate_topology()
     detectors/
         __init__.py              # Exports all detectors; provides default_detectors()
         silence.py               # SilenceDetector
@@ -373,6 +375,13 @@ sessionprepgui/                  # GUI package (PySide6)
         page_groups.py           # GroupsPage — named group presets via NamedPresetPanel
         dialog.py                # PreferencesDialog — thin ~270-line orchestrator
         param_widgets.py         # Backward-compatible re-export shim → param_form + config_pages
+    topology/
+        mixin.py                 # TopologyMixin — Phase 1 Channel Topology UI, Apply worker, waveform preview
+        input_tree.py            # InputTree — QTreeWidget for source tracks with drag-out support
+        output_tree.py           # OutputTree — QTreeWidget for output tracks with drag-in, reorder,
+                                 #   cross-file channel moves, insert-position indicator
+        operations.py            # Topology mutation functions: add/remove/reorder/move/wire channels,
+                                 #   rename/remove outputs, move_channel (cross-file)
     session/
         io.py                    # Session save/load (.spsession JSON) — serialises analysis state
     tracks/
@@ -607,6 +616,9 @@ class SessionContext:
     daw_state: dict[str, Any] = field(default_factory=dict)
     daw_command_log: list[DawCommandResult] = field(default_factory=list)
     prepare_state: str = "none"
+    topology: Any = None  # TopologyMapping | None
+    output_tracks: list[TrackContext] = field(default_factory=list)
+    transfer_manifest: list[TransferEntry] = field(default_factory=list)
 ```
 
 - `daw_state` — namespaced per DAW processor id. Each processor stores fetched
@@ -618,8 +630,41 @@ class SessionContext:
   `"none"` (never prepared), `"ready"` (prepared and up-to-date), `"stale"`
   (prepared but invalidated by changes to gain, classification, RMS anchor,
   processor selection, or re-analysis).
+- `topology` — the channel topology mapping (`TopologyMapping`), or `None` if
+  not yet configured. Defines how input tracks are routed to output files.
+- `output_tracks` — `TrackContext` objects for the topology-resolved output
+  files (populated after Phase 1 Apply).
+- `transfer_manifest` — list of `TransferEntry` objects representing logical
+  DAW tracks. Multiple entries can reference the same output file (for
+  duplication scenarios). Rebuilt from the topology on Apply.
 
-### 4.9 SessionResult / SessionJob / JobStatus
+### 4.9 TransferEntry
+
+Represents a logical DAW track in the transfer manifest. Multiple entries can
+reference the same output file, enabling N:1 mapping from DAW tracks to
+physical output files (e.g. guitar doubling with the same clip on multiple
+tracks).
+
+```python
+@dataclass
+class TransferEntry:
+    entry_id: str              # unique identifier (output_filename for originals, filename:uuid for duplicates)
+    output_filename: str       # references a TopologyEntry.output_filename
+    daw_track_name: str        # name shown in DAW (defaults to output filename)
+    group: str | None = None   # group for DAW folder assignment (inherits from source)
+```
+
+- `entry_id` — primary key for assignments and drag-drop. For original entries
+  it equals `output_filename`; for user-created duplicates it is
+  `output_filename:hex8`.
+- `daw_track_name` — the name used for track creation in the DAW. Editable
+  inline in the Phase 3 setup table (Track Name column). On duplication, the
+  original is renamed to `stem-[1]` and the new entry gets `stem-[2]`;
+  subsequent duplications increment the suffix.
+- Both DAW processors (`protools.py`, `dawproject.py`) use
+  `entry.daw_track_name` (stem, without extension) as the track name.
+
+### 4.10 SessionResult / SessionJob / JobStatus
 
 Used by the queue layer.
 
@@ -1566,7 +1611,11 @@ group).
 | `log.py` | `dbg(msg)` — lightweight debug logging to stderr, gated by `SP_DEBUG` env var. Timestamped output with caller class name. Used by `pipeline.py`, `dawproject.py`, and other modules via conditional import. |
 | `analysis/mixin.py` | `AnalysisMixin` — open/save/load session, analyze, prepare, session Config tab wiring |
 | `analysis/worker.py` | QThread workers: `AnalyzeWorker` (pipeline in background, thread-safe progress, per-track signals), `BatchReanalyzeWorker` (subset re-analysis after batch overrides), `PrepareWorker` (runs `Pipeline.prepare()` in background with progress), `DawCheckWorker` (connectivity check), `DawFetchWorker` (folder fetch), `DawTransferWorker` (transfer with progress + progress_value signals) |
-| `daw/mixin.py` | `DawMixin` — DAW processor selection, check/fetch/transfer/sync, folder tree, drag-and-drop track assignment |
+| `daw/mixin.py` | `DawMixin` — DAW processor selection, check/fetch/transfer/sync, folder tree, drag-and-drop track assignment, Track Name inline editing, duplication with `-[N]` naming |
+| `topology/mixin.py` | `TopologyMixin` — Phase 1 Channel Topology UI, input/output tree wiring, Apply worker, collapsible waveform preview |
+| `topology/input_tree.py` | `InputTree` — QTreeWidget for source tracks, drag-out of channels via custom MIME |
+| `topology/output_tree.py` | `OutputTree` — QTreeWidget for output tracks, drag-in from input tree, internal channel reorder with insert-position line, cross-file channel moves |
+| `topology/operations.py` | Topology mutation functions: add/remove/reorder/move/wire channels, rename/remove outputs |
 | `detail/mixin.py` | `DetailMixin` — file detail view, waveform display, detector overlay panel, playback toolbar wiring |
 | `detail/playback.py` | `PlaybackController` — sounddevice OutputStream lifecycle, QTimer cursor updates, signal-based API |
 | `detail/report.py` | HTML rendering: `render_summary_html()`, `render_fader_table_html()`, `render_track_detail_html()` |
@@ -1762,10 +1811,20 @@ leaves. `prefs/` reads `ParamSpec` metadata from detectors and processors.
     button and Use Processed toggle labels.
   - **Output directory** — resolved from `config["app"]["output_folder"]`
     (default: `"processed"`), relative to the session source directory.
-- **DAW integration** — the Session Setup tab provides a toolbar with
-  Connect/Check, Fetch, Transfer, and Sync actions. A combo box selects the
-  active DAW processor. The folder tree (right side of a splitter) supports
-  drag-and-drop assignment of tracks to folders. Transfer runs asynchronously
+- **DAW integration** — the Phase 3 (DAW Transfer) tab provides a toolbar with
+  Connect/Check, Fetch, Auto-Assign, Transfer, and Sync actions. A combo box
+  selects the active DAW processor. The left side shows a setup table with
+  columns: checkmark (assigned?), File, **Track Name** (inline-editable),
+  Ch, Clip Gain, Fader Gain, Group. The Track Name column displays
+  `TransferEntry.daw_track_name` and is editable via double-click; changes
+  are committed to the model and reflected in the folder tree. The right side
+  shows a folder tree (from `_FolderDropTree`) that supports drag-and-drop
+  assignment of tracks to folders. Assigned tracks display both the
+  `daw_track_name` and `output_filename` (as `"track_name ← filename"`)
+  when they differ. The "Duplicate for DAW" context menu action creates new
+  manifest entries sharing the same output file with `-[N]` suffixed track
+  names (first duplication renames the original to `-[1]`, new entry gets
+  `-[2]`, subsequent duplications increment). Transfer runs asynchronously
   via `DawTransferWorker`, with a progress panel (label + `QProgressBar`)
   below the tree that auto-hides 2 seconds after completion.
 - **Waveform worker cancellation** — `WaveformLoadWorker` and
