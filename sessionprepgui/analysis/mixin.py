@@ -505,11 +505,23 @@ class AnalysisMixin:
         # Phase 2 analysis reads from sp_01_topology/ if available
         analyze_dir = self._topology_dir or self._source_dir
 
-        # Snapshot existing group assignments so we can restore after re-analysis
+        # Snapshot existing group assignments and user overrides so we can
+        # restore them after re-analysis (filenames that survive are matched).
         self._prev_group_assignments = {}
+        self._prev_track_overrides = {}
         if self._session:
             self._prev_group_assignments = {
                 t.filename: t.group for t in self._session.tracks if t.group}
+            for t in self._session.tracks:
+                overrides = {}
+                if t.classification_override:
+                    overrides["classification_override"] = t.classification_override
+                if t.rms_anchor_override:
+                    overrides["rms_anchor_override"] = t.rms_anchor_override
+                if t.processor_skip:
+                    overrides["processor_skip"] = set(t.processor_skip)
+                if overrides:
+                    self._prev_track_overrides[t.filename] = overrides
 
         self._analyze_action.setEnabled(False)
         self._current_track = None
@@ -690,10 +702,20 @@ class AnalysisMixin:
             self._merge_groups_from_preset()
             self._populate_group_preset_combo()
         else:
-            # Re-analysis — restore previous group assignments by filename
+            # Re-analysis — restore previous group assignments and
+            # user overrides by filename match.
             prev = self._prev_group_assignments
+            prev_ov = self._prev_track_overrides
             for track in session.tracks:
                 track.group = prev.get(track.filename)
+                ov = prev_ov.get(track.filename)
+                if ov:
+                    track.classification_override = ov.get(
+                        "classification_override")
+                    track.rms_anchor_override = ov.get(
+                        "rms_anchor_override")
+                    track.processor_skip = ov.get(
+                        "processor_skip", set())
             self._populate_groups_tab()
             self._refresh_group_combos()
 
