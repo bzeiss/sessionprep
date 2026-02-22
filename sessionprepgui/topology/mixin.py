@@ -381,8 +381,7 @@ class TopologyMixin:
         # Auto-refresh waveform preview if an output track was selected
         if self._topo_selected_side == "output":
             row = self._topo_output_table.currentRow()
-            topo = self._session.topology if self._session else None
-            if topo and 0 <= row < len(topo.entries):
+            if 0 <= row < self._topo_output_table.rowCount():
                 self._topo_load_output_waveform(row)
             else:
                 # Selected row no longer exists — clear waveform
@@ -599,21 +598,21 @@ class TopologyMixin:
         if row < 0:
             return
 
-        topo = self._session.topology
-        if row >= len(topo.entries):
+        item = self._topo_output_table.item(row, 0)
+        if not item:
             return
-        entry = topo.entries[row]
+        filename = item.text()
 
         menu = QMenu(self)
 
         rename_act = menu.addAction("Rename Output…")
         rename_act.triggered.connect(
-            lambda checked, idx=row: self._topo_rename_output(idx))
+            lambda checked, fn=filename: self._topo_rename_output(fn))
 
         menu.addSeparator()
         remove_act = menu.addAction("Remove Output")
         remove_act.triggered.connect(
-            lambda checked, idx=row: self._topo_remove_output(idx))
+            lambda checked, fn=filename: self._topo_remove_output(fn))
 
         menu.exec(self._topo_output_table.viewport().mapToGlobal(pos))
 
@@ -803,12 +802,13 @@ class TopologyMixin:
         ]
         self._topo_changed()
 
-    def _topo_rename_output(self, entry_index: int):
+    def _topo_rename_output(self, output_filename: str):
         """Rename an output file in the topology via input dialog."""
         topo = self._session.topology
-        if entry_index >= len(topo.entries):
+        entry = next((e for e in topo.entries
+                      if e.output_filename == output_filename), None)
+        if entry is None:
             return
-        entry = topo.entries[entry_index]
 
         new_name, ok = QInputDialog.getText(
             self, "Rename Output",
@@ -830,12 +830,11 @@ class TopologyMixin:
         entry.output_filename = new_name
         self._topo_changed()
 
-    def _topo_remove_output(self, entry_index: int):
+    def _topo_remove_output(self, output_filename: str):
         """Remove an output entry from the topology."""
         topo = self._session.topology
-        if entry_index >= len(topo.entries):
-            return
-        del topo.entries[entry_index]
+        topo.entries = [e for e in topo.entries
+                        if e.output_filename != output_filename]
         self._topo_changed()
 
     # ── Cross-table exclusive selection ────────────────────────────────
@@ -933,10 +932,20 @@ class TopologyMixin:
         self._topo_cancel_workers()
         self._on_topo_stop()
 
-        topo = self._session.topology if self._session else None
-        if not topo or row >= len(topo.entries):
+        item = self._topo_output_table.item(row, 0)
+        if not item:
             return
-        entry = topo.entries[row]
+        filename = item.text()
+        topo = self._session.topology if self._session else None
+        if not topo:
+            return
+        entry = None
+        for e in topo.entries:
+            if e.output_filename == filename:
+                entry = e
+                break
+        if entry is None:
+            return
 
         if not self._source_dir:
             return
