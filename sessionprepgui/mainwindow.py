@@ -91,6 +91,7 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         self._source_dir = None
         self._topology_dir = None  # path to sp_01_topology/ after Phase 1 Apply
         self._topo_source_tracks = []  # original source tracks for Phase 1 input table
+        self._topo_topology = None  # Phase 1 topology (separate from session.topology)
         self._worker = None
         self._batch_worker: BatchReanalyzeWorker | None = None
         self._batch_filenames: set[str] = set()

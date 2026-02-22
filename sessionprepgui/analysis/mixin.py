@@ -246,9 +246,12 @@ class AnalysisMixin:
         # Preserve original source tracks for Phase 1 topology input table
         self._topo_source_tracks = list(tracks)
 
-        # Create session with discovered tracks + default passthrough topology
+        # Phase 1 topology stored separately from session so Prepare
+        # doesn't confuse original-source references with Phase 1 outputs.
+        self._topo_topology = build_default_topology(tracks)
+
+        # Create session with discovered tracks (no topology on session)
         self._session = SessionContext(tracks=tracks, config={})
-        self._session.topology = build_default_topology(tracks)
 
         # Populate Phase 1 topology tables
         self._populate_topology_tab()
@@ -280,7 +283,7 @@ class AnalysisMixin:
                 "session_groups": self._session_groups,
                 "daw_state": self._session.daw_state,
                 "tracks": self._session.tracks,
-                "topology": self._session.topology,
+                "topology": self._topo_topology,
                 "transfer_manifest": self._session.transfer_manifest,
                 "topology_applied": self._topology_dir is not None,
             })
@@ -339,6 +342,7 @@ class AnalysisMixin:
             except Exception:
                 pass
         self._topo_source_tracks = source_tracks
+        self._topo_topology = data.get("topology")
 
         self._session = None
         self._summary = None
@@ -397,7 +401,6 @@ class AnalysisMixin:
             processors=all_processors,
             daw_state=data.get("daw_state", {}),
             prepare_state="none",
-            topology=data.get("topology"),
             transfer_manifest=data.get("transfer_manifest", []),
         )
 
@@ -633,10 +636,12 @@ class AnalysisMixin:
 
     @Slot(object, object)
     def _on_analyze_done(self, session, summary):
-        # Carry forward topology from pre-analysis session so Phase 1
-        # retains its configuration after the analysis replaces the session.
-        if self._session and self._session.topology:
-            session.topology = self._session.topology
+        # Preserve Phase 1 topology in GUI attribute (already set).
+        # Do NOT carry it onto the analysis session — Prepare must see
+        # topology=None so it builds a default passthrough from the
+        # Phase 1 output files that are now session.tracks.
+        if self._session and self._session.topology and not self._topo_topology:
+            self._topo_topology = self._session.topology
 
         self._session = session
         self._summary = summary

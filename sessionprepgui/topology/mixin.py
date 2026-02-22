@@ -209,13 +209,13 @@ class TopologyMixin:
             return
 
         # Auto-build default topology if none exists
-        if self._session.topology is None:
+        if self._topo_topology is None:
             ok = [t for t in self._topo_source_tracks if t.status == "OK"]
             if ok:
-                self._session.topology = build_default_topology(
+                self._topo_topology = build_default_topology(
                     self._topo_source_tracks)
 
-        topo = self._session.topology
+        topo = self._topo_topology
         ok_tracks = [t for t in self._topo_source_tracks if t.status == "OK"]
 
         # ── Input panel ───────────────────────────────────────────────
@@ -400,7 +400,7 @@ class TopologyMixin:
 
     def _topo_output_names(self) -> set[str]:
         """Return set of current output filenames in the topology."""
-        topo = self._session.topology if self._session else None
+        topo = self._topo_topology
         if not topo:
             return set()
         return {e.output_filename for e in topo.entries}
@@ -437,6 +437,8 @@ class TopologyMixin:
         self._topo_status_label.setText("Applying topology…")
         self._topo_progress.start("Applying topology…")
 
+        # Put Phase 1 topology on session for the worker to read
+        self._session.topology = self._topo_topology
         self._topo_apply_worker = TopologyApplyWorker(
             self._session, output_dir)
         self._topo_apply_worker.progress.connect(self._on_topo_apply_progress)
@@ -502,7 +504,7 @@ class TopologyMixin:
         """Reset topology to default passthrough."""
         if not self._session:
             return
-        self._session.topology = build_default_topology(self._topo_source_tracks)
+        self._topo_topology = build_default_topology(self._topo_source_tracks)
         self._topo_changed()
 
     # ── Input table context menu ──────────────────────────────────────
@@ -510,7 +512,7 @@ class TopologyMixin:
     @Slot(QPoint)
     def _on_topo_input_context_menu(self, pos: QPoint):
         """Show context menu for the input tracks table."""
-        if not self._session or not self._session.topology:
+        if not self._session or not self._topo_topology:
             return
         row = self._topo_input_table.rowAt(pos.y())
         if row < 0:
@@ -525,7 +527,7 @@ class TopologyMixin:
         if not track:
             return
 
-        topo = self._session.topology
+        topo = self._topo_topology
         routing = self._describe_routing(filename, topo)
         is_excluded = routing == "Excluded"
 
@@ -599,7 +601,7 @@ class TopologyMixin:
     @Slot(QPoint)
     def _on_topo_output_context_menu(self, pos: QPoint):
         """Show context menu for the output tracks table."""
-        if not self._session or not self._session.topology:
+        if not self._session or not self._topo_topology:
             return
         row = self._topo_output_table.rowAt(pos.y())
         if row < 0:
@@ -627,7 +629,7 @@ class TopologyMixin:
 
     def _topo_split_stereo(self, input_filename: str):
         """Replace a stereo passthrough with two mono extract entries."""
-        topo = self._session.topology
+        topo = self._topo_topology
         track_map = self._topo_track_map()
         track = track_map.get(input_filename)
         if not track or track.channels < 2:
@@ -660,7 +662,7 @@ class TopologyMixin:
 
     def _topo_extract_channel(self, input_filename: str, channel: int):
         """Replace entry with a mono extract of a single channel."""
-        topo = self._session.topology
+        topo = self._topo_topology
         track_map = self._topo_track_map()
         track = track_map.get(input_filename)
         if not track or channel >= track.channels:
@@ -689,7 +691,7 @@ class TopologyMixin:
 
     def _topo_sum_to_mono(self, input_filename: str):
         """Replace entry with a mono sum of all channels."""
-        topo = self._session.topology
+        topo = self._topo_topology
         track_map = self._topo_track_map()
         track = track_map.get(input_filename)
         if not track:
@@ -717,7 +719,7 @@ class TopologyMixin:
 
     def _topo_merge_stereo(self, left_filename: str, right_filename: str):
         """Merge two mono inputs into one stereo output."""
-        topo = self._session.topology
+        topo = self._topo_topology
         track_map = self._topo_track_map()
         t_l = track_map.get(left_filename)
         t_r = track_map.get(right_filename)
@@ -753,7 +755,7 @@ class TopologyMixin:
 
     def _topo_include_input(self, input_filename: str):
         """Re-include an excluded input track as a passthrough entry."""
-        topo = self._session.topology
+        topo = self._topo_topology
         track_map = self._topo_track_map()
         track = track_map.get(input_filename)
         if not track:
@@ -773,7 +775,7 @@ class TopologyMixin:
 
     def _topo_reset_to_passthrough(self, input_filename: str):
         """Reset an input track's routing back to default passthrough."""
-        topo = self._session.topology
+        topo = self._topo_topology
         track_map = self._topo_track_map()
         track = track_map.get(input_filename)
         if not track:
@@ -801,7 +803,7 @@ class TopologyMixin:
 
     def _topo_exclude_input(self, input_filename: str):
         """Remove all topology entries that reference the given input."""
-        topo = self._session.topology
+        topo = self._topo_topology
         topo.entries = [
             e for e in topo.entries
             if not any(s.input_filename == input_filename
@@ -811,7 +813,7 @@ class TopologyMixin:
 
     def _topo_rename_output(self, output_filename: str):
         """Rename an output file in the topology via input dialog."""
-        topo = self._session.topology
+        topo = self._topo_topology
         entry = next((e for e in topo.entries
                       if e.output_filename == output_filename), None)
         if entry is None:
@@ -839,7 +841,7 @@ class TopologyMixin:
 
     def _topo_remove_output(self, output_filename: str):
         """Remove an output entry from the topology."""
-        topo = self._session.topology
+        topo = self._topo_topology
         topo.entries = [e for e in topo.entries
                         if e.output_filename != output_filename]
         self._topo_changed()
@@ -979,7 +981,7 @@ class TopologyMixin:
         self._topo_cancel_workers()
         self._on_topo_stop()
 
-        topo = self._session.topology if self._session else None
+        topo = self._topo_topology if self._session else None
         if not topo or not self._source_dir:
             return
 
@@ -1033,7 +1035,7 @@ class TopologyMixin:
         if not item:
             return
         filename = item.text()
-        topo = self._session.topology if self._session else None
+        topo = self._topo_topology if self._session else None
         if not topo:
             return
         entry = None
