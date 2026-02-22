@@ -344,6 +344,12 @@ def save_session(path: str, data: dict) -> None:
             for e in data.get("transfer_manifest", [])
         ],
         "topology_applied": data.get("topology_applied", False),
+        "prepare_state": data.get("prepare_state", "none"),
+        "base_transfer_manifest": [
+            _ser_transfer_entry(e)
+            for e in data.get("base_transfer_manifest", [])
+        ],
+        "use_processed": data.get("use_processed", False),
     }
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2, ensure_ascii=False)
@@ -393,4 +399,10 @@ def load_session(path: str) -> dict:
         "topology": topology,
         "transfer_manifest": transfer_manifest,
         "topology_applied": raw.get("topology_applied", False),
+        "prepare_state": raw.get("prepare_state", "none"),
+        "base_transfer_manifest": [
+            _deser_transfer_entry(e)
+            for e in raw.get("base_transfer_manifest", [])
+        ],
+        "use_processed": raw.get("use_processed", False),
     }

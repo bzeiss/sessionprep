@@ -570,6 +570,9 @@ class Pipeline:
             topology, session.tracks,
             session.transfer_manifest or None,
         )
+        import copy
+        session.base_transfer_manifest = copy.deepcopy(
+            session.transfer_manifest)
         session.prepare_state = "ready"
         return session
 

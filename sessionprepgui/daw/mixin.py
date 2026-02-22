@@ -831,14 +831,21 @@ class DawMixin:
     def _on_reset_manifest(self):
         """Reset the transfer manifest to default: one entry per output file,
         default track names, no user-added duplicates."""
-        if not self._session or not self._session.topology:
+        if not self._session:
             return
-        from sessionpreplib.topology import build_transfer_manifest
-        self._session.transfer_manifest = build_transfer_manifest(
-            self._session.topology,
-            self._session.tracks,
-            existing_manifest=None,  # discard all user edits
-        )
+        import copy
+        if self._session.base_transfer_manifest:
+            self._session.transfer_manifest = copy.deepcopy(
+                self._session.base_transfer_manifest)
+        elif self._session.topology:
+            from sessionpreplib.topology import build_transfer_manifest
+            self._session.transfer_manifest = build_transfer_manifest(
+                self._session.topology,
+                self._session.tracks,
+                existing_manifest=None,
+            )
+        else:
+            return
         self._populate_setup_table()
         self._populate_folder_tree()
         self._update_daw_lifecycle_buttons()

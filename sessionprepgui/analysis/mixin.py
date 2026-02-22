@@ -35,6 +35,7 @@ from ..detail.report import render_track_detail_html
 from ..session.io import save_session as _save_session_file, load_session as _load_session_file
 from ..settings import build_defaults, resolve_config_preset
 from ..tracks.table_widgets import (
+    _SETUP_RIGHT_TREE,
     _SortableItem, _make_analysis_cell,
     _TAB_FILE, _TAB_GROUPS, _TAB_SESSION, _TAB_SUMMARY,
     _PAGE_PROGRESS, _PAGE_TABS,
@@ -286,6 +287,9 @@ class AnalysisMixin:
                 "topology": self._topo_topology,
                 "transfer_manifest": self._session.transfer_manifest,
                 "topology_applied": self._topology_dir is not None,
+                "prepare_state": self._session.prepare_state,
+                "base_transfer_manifest": self._session.base_transfer_manifest,
+                "use_processed": self._use_processed_cb.isChecked(),
             })
             self._status_bar.showMessage(f"Session saved to {path}")
         except Exception as exc:
@@ -415,8 +419,9 @@ class AnalysisMixin:
             detectors=all_detectors,
             processors=all_processors,
             daw_state=data.get("daw_state", {}),
-            prepare_state="none",
+            prepare_state=data.get("prepare_state", "none"),
             transfer_manifest=data.get("transfer_manifest", []),
+            base_transfer_manifest=data.get("base_transfer_manifest", []),
         )
 
         self._session = session
@@ -464,6 +469,20 @@ class AnalysisMixin:
         self._analyze_action.setEnabled(True)
         self._save_session_action.setEnabled(True)
         self._update_prepare_button()
+        # Restore "Use Processed" checkbox state
+        use_processed = data.get("use_processed", False)
+        if use_processed and session.prepare_state in ("ready", "stale"):
+            session.config["_use_processed"] = True
+            self._use_processed_cb.setChecked(True)
+        self._update_use_processed_action()
+        self._update_daw_lifecycle_buttons()
+        # Show folder tree if daw_state already has assignments
+        if has_manifest and self._active_daw_processor:
+            dp_state = session.daw_state.get(
+                self._active_daw_processor.id, {})
+            if dp_state.get("folders"):
+                self._populate_folder_tree()
+                self._setup_right_stack.setCurrentIndex(_SETUP_RIGHT_TREE)
         self._auto_fit_track_table()
 
         ok_count = sum(1 for t in tracks if t.status == "OK")

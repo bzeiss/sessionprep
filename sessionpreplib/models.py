@@ -145,6 +145,7 @@ class SessionContext:
     topology: Any = None  # TopologyMapping | None — typed as Any to avoid circular import
     output_tracks: list[TrackContext] = field(default_factory=list)
     transfer_manifest: list[TransferEntry] = field(default_factory=list)
+    base_transfer_manifest: list[TransferEntry] = field(default_factory=list)
 
 
 @dataclass
