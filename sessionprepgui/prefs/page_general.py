@@ -50,11 +50,22 @@ _APP_PARAMS = [
         ),
     ),
     ParamSpec(
-        key="output_folder", type=str, default="processed",
-        label="Output folder name",
+        key="phase1_output_folder", type=str, default="sp_01_tracklayout",
+        label="Phase 1: track layout folder name",
         description=(
             "Name of the subfolder (relative to the project directory) "
-            "where processed audio files are written. "
+            "where track-layout audio files are written after "
+            "applying the channel topology. "
+            "Must be a simple folder name without path separators."
+        ),
+    ),
+    ParamSpec(
+        key="phase2_output_folder", type=str, default="sp_02_prepared",
+        label="Phase 2: prepared folder name",
+        description=(
+            "Name of the subfolder (relative to the project directory) "
+            "where processed audio files are written after "
+            "applying analysis processors (e.g. normalization). "
             "Must be a simple folder name without path separators."
         ),
     ),
@@ -106,13 +117,15 @@ class GeneralPage(QWidget):
             app[key] = _read_widget(widget)
 
     def validate(self) -> str | None:
-        """Return an error message if output_folder is invalid, else None."""
+        """Return an error message if any output folder name is invalid."""
         for key, widget in self._widgets:
-            if key == "output_folder":
+            if key in ("phase1_output_folder", "phase2_output_folder"):
                 raw = _read_widget(widget)
                 if sanitize_output_folder(str(raw)) is None:
+                    label = ("Phase 1 track layout" if "phase1" in key
+                             else "Phase 2 prepared")
                     return (
-                        "The output folder name is invalid.\n\n"
+                        f"The {label} folder name is invalid.\n\n"
                         "It must be a simple folder name without path "
                         "separators, special characters, or reserved names."
                     )

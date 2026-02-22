@@ -320,6 +320,8 @@ sessionpreplib/
     pipeline.py                  # 3-phase orchestrator + validation
     queue.py                     # SessionQueue / SessionJob
     rendering.py                 # Diagnostic summary builder + PlainText renderer
+    topology.py                  # TopologyMapping, TopologyEntry, TopologySource, ChannelRoute,
+                                 #   build_default_topology(), rebuild_transfer_manifest(), validate_topology()
     detectors/
         __init__.py              # Exports all detectors; provides default_detectors()
         silence.py               # SilenceDetector
@@ -373,6 +375,13 @@ sessionprepgui/                  # GUI package (PySide6)
         page_groups.py           # GroupsPage — named group presets via NamedPresetPanel
         dialog.py                # PreferencesDialog — thin ~270-line orchestrator
         param_widgets.py         # Backward-compatible re-export shim → param_form + config_pages
+    topology/
+        mixin.py                 # TopologyMixin — Phase 1 Channel Topology UI, Apply worker, waveform preview
+        input_tree.py            # InputTree — QTreeWidget for source tracks with drag-out support
+        output_tree.py           # OutputTree — QTreeWidget for output tracks with drag-in, reorder,
+                                 #   cross-file channel moves, insert-position indicator
+        operations.py            # Topology mutation functions: add/remove/reorder/move/wire channels,
+                                 #   rename/remove outputs, move_channel (cross-file)
     session/
         io.py                    # Session save/load (.spsession JSON) — serialises analysis state
     tracks/
@@ -583,6 +592,11 @@ class TrackContext:
     processor_skip: set[str] = field(default_factory=set)
 ```
 
+- `filename` — when recursive folder scanning is active, stores a
+  forward-slash–separated relative path (e.g. `"drums/01_Kick.wav"`)
+  instead of a bare filename. This relative key propagates through topology
+  entries, transfer manifest, and all UI tables. `filepath` always remains
+  the absolute path on disk.
 - `processed_filepath` — absolute path to the processed output file (set by
   `Pipeline.prepare()`), or `None` if not yet prepared.
 - `applied_processors` — list of processor IDs that were applied during the
@@ -607,6 +621,9 @@ class SessionContext:
     daw_state: dict[str, Any] = field(default_factory=dict)
     daw_command_log: list[DawCommandResult] = field(default_factory=list)
     prepare_state: str = "none"
+    topology: Any = None  # TopologyMapping | None
+    output_tracks: list[TrackContext] = field(default_factory=list)
+    transfer_manifest: list[TransferEntry] = field(default_factory=list)
 ```
 
 - `daw_state` — namespaced per DAW processor id. Each processor stores fetched
@@ -618,8 +635,43 @@ class SessionContext:
   `"none"` (never prepared), `"ready"` (prepared and up-to-date), `"stale"`
   (prepared but invalidated by changes to gain, classification, RMS anchor,
   processor selection, or re-analysis).
+- `topology` — the channel topology mapping (`TopologyMapping`), or `None` if
+  not yet configured. Defines how input tracks are routed to output files.
+- `output_tracks` — `TrackContext` objects for the topology-resolved output
+  files (populated after Phase 1 Apply).
+- `transfer_manifest` — list of `TransferEntry` objects representing logical
+  DAW tracks. Multiple entries can reference the same output file (for
+  duplication scenarios). Rebuilt from the topology on Apply.
 
-### 4.9 SessionResult / SessionJob / JobStatus
+### 4.9 TransferEntry
+
+Represents a logical DAW track in the transfer manifest. Multiple entries can
+reference the same output file, enabling N:1 mapping from DAW tracks to
+physical output files (e.g. guitar doubling with the same clip on multiple
+tracks).
+
+```python
+@dataclass
+class TransferEntry:
+    entry_id: str              # unique identifier (output_filename for originals, filename:uuid for duplicates)
+    output_filename: str       # references a TopologyEntry.output_filename
+    daw_track_name: str        # name shown in DAW (defaults to output filename)
+    group: str | None = None   # group for DAW folder assignment (inherits from source)
+```
+
+- `entry_id` — primary key for assignments and drag-drop. For original entries
+  it equals `output_filename`; for user-created duplicates it is
+  `output_filename:hex8`.
+- `daw_track_name` — the name used for track creation in the DAW. Always
+  the basename stem (e.g. `"01_Kick"` even when `output_filename` is
+  `"drums/01_Kick.wav"`). Editable inline in the Phase 3 setup table
+  (Track Name column). On duplication, the original is renamed to
+  `stem-[1]` and the new entry gets `stem-[2]`; subsequent duplications
+  increment the suffix.
+- Both DAW processors (`protools.py`, `dawproject.py`) use
+  `entry.daw_track_name` (stem, without extension) as the track name.
+
+### 4.10 SessionResult / SessionJob / JobStatus
 
 Used by the queue layer.
 
@@ -677,9 +729,14 @@ Contains audio I/O, cached DSP helpers, and stateless DSP functions.
 - `db_to_linear(db) -> float`
 - `format_duration(samples, samplerate) -> str`
 
+**File discovery:**
+
+- `discover_track(filepath) -> TrackContext` — reads audio file metadata (channels, samplerate, bitdepth, duration) without loading audio data. Sets `filename = os.path.basename(filepath)` — callers override with relative paths when recursive scanning is active.
+- `discover_audio_files(root_dir, recursive=False, skip_folders=None) -> list[str]` — returns a sorted list of audio file paths relative to *root_dir*. When `recursive=False`, returns bare filenames (flat `os.listdir`). When `True`, walks subdirectories via `os.walk(followlinks=False)` and returns forward-slash–separated relative paths (e.g. `"drums/01_Kick.wav"`). Directories whose name appears in `skip_folders` are pruned (e.g. `{"sp_01_tracklayout", "sp_02_prepared"}`). Results sorted by `protools_sort_key`.
+
 **File I/O:**
 
-- `load_track(filepath) -> TrackContext` — reads WAV via soundfile, returns populated TrackContext
+- `load_track(filepath) -> TrackContext` — reads WAV via soundfile, returns populated TrackContext. Sets `filename = os.path.basename(filepath)` — callers override with relative paths when recursive scanning is active.
 - `write_track(track, output_path) -> None` — writes audio_data preserving original subtype
 
 ### 5.2 `sessionpreplib/utils.py`
@@ -1188,8 +1245,9 @@ originals.
 
 **Behaviour:**
 
-1. Remove stale *audio* files from `output_dir`, preserving non-audio
-   artefacts (e.g. `.dawproject` files written by DAW transfer).
+1. Remove stale *audio* files from `output_dir` recursively (via
+   `os.walk`), preserving non-audio artefacts (e.g. `.dawproject` files
+   written by DAW transfer). Empty subdirectories are pruned afterwards.
 2. For each OK track, determine applicable processors: all enabled processors
    whose ID is **not** in `track.processor_skip`.
 3. Filter to processors with a valid (non-error) `ProcessorResult`.
@@ -1267,11 +1325,14 @@ at the number of tracks.
 ### 9.7 `load_session()` Helper
 
 ```python
-def load_session(source_dir, config, event_bus=None) -> SessionContext
+def load_session(source_dir, config, event_bus=None, recursive=False) -> SessionContext
 ```
 
-Loads all WAVs from `source_dir` in parallel, assigns groups (named,
-first-match-wins), appends overlap warnings to `session.warnings`.
+Loads all audio files from `source_dir` in parallel using
+`discover_audio_files()`, assigns groups (named, first-match-wins),
+appends overlap warnings to `session.warnings`. When `recursive=True`,
+subdirectories are scanned and `TrackContext.filename` stores
+forward-slash–separated relative paths (e.g. `"drums/01_Kick.wav"`).
 
 ### 9.8 Topological Sort
 
@@ -1566,11 +1627,15 @@ group).
 | `log.py` | `dbg(msg)` — lightweight debug logging to stderr, gated by `SP_DEBUG` env var. Timestamped output with caller class name. Used by `pipeline.py`, `dawproject.py`, and other modules via conditional import. |
 | `analysis/mixin.py` | `AnalysisMixin` — open/save/load session, analyze, prepare, session Config tab wiring |
 | `analysis/worker.py` | QThread workers: `AnalyzeWorker` (pipeline in background, thread-safe progress, per-track signals), `BatchReanalyzeWorker` (subset re-analysis after batch overrides), `PrepareWorker` (runs `Pipeline.prepare()` in background with progress), `DawCheckWorker` (connectivity check), `DawFetchWorker` (folder fetch), `DawTransferWorker` (transfer with progress + progress_value signals) |
-| `daw/mixin.py` | `DawMixin` — DAW processor selection, check/fetch/transfer/sync, folder tree, drag-and-drop track assignment |
+| `daw/mixin.py` | `DawMixin` — DAW processor selection, check/fetch/transfer/sync, folder tree, drag-and-drop track assignment, Track Name inline editing, duplication with `-[N]` naming |
+| `topology/mixin.py` | `TopologyMixin` — Phase 1 Channel Topology UI, "Scan subfolders" checkbox (recursive discovery), Apply worker, collapsible waveform preview |
+| `topology/input_tree.py` | `InputTree` — QTreeWidget for source tracks, drag-out of channels via custom MIME |
+| `topology/output_tree.py` | `OutputTree` — QTreeWidget for output tracks, drag-in from input tree, internal channel reorder with insert-position line, cross-file channel moves |
+| `topology/operations.py` | Topology mutation functions: add/remove/reorder/move/wire channels, rename/remove outputs |
 | `detail/mixin.py` | `DetailMixin` — file detail view, waveform display, detector overlay panel, playback toolbar wiring |
 | `detail/playback.py` | `PlaybackController` — sounddevice OutputStream lifecycle, QTimer cursor updates, signal-based API |
 | `detail/report.py` | HTML rendering: `render_summary_html()`, `render_fader_table_html()`, `render_track_detail_html()` |
-| `session/io.py` | Session save/load — serialises full analysis state (detector + processor results, user edits) to `.spsession` JSON without re-running analysis. Versioned format with forward-compatible migrations. |
+| `session/io.py` | Session save/load — serialises full analysis state (detector + processor results, user edits, recursive_scan flag) to `.spsession` JSON without re-running analysis. Versioned format (v4) with forward-compatible migrations. |
 | `tracks/columns_mixin.py` | `TrackColumnsMixin` — track table column definitions, cell rendering, sorting |
 | `tracks/groups_mixin.py` | `GroupsMixin` — group assignment UI, color rendering in track table |
 | `tracks/table_widgets.py` | Track table widget classes (custom cell widgets, batch-edit base classes) |
@@ -1762,10 +1827,38 @@ leaves. `prefs/` reads `ParamSpec` metadata from detectors and processors.
     button and Use Processed toggle labels.
   - **Output directory** — resolved from `config["app"]["output_folder"]`
     (default: `"processed"`), relative to the session source directory.
-- **DAW integration** — the Session Setup tab provides a toolbar with
-  Connect/Check, Fetch, Transfer, and Sync actions. A combo box selects the
-  active DAW processor. The folder tree (right side of a splitter) supports
-  drag-and-drop assignment of tracks to folders. Transfer runs asynchronously
+- **Recursive folder scanning** — the Phase 1 toolbar includes a "Scan
+  subfolders" checkbox (`QCheckBox`) that enables recursive audio file
+  discovery via `discover_audio_files()`. When enabled:
+  - Subdirectories are walked via `os.walk(followlinks=False)`.
+  - Configured output folder names (`phase1_output_folder`,
+    `phase2_output_folder`) are skipped during scanning.
+  - `TrackContext.filename` stores forward-slash–separated relative paths
+    (e.g. `"drums/01_Kick.wav"`) instead of bare filenames.
+  - Output directories mirror the subfolder structure (`os.makedirs`
+    before writing).
+  - Stale file cleanup walks the output tree recursively and prunes empty
+    subdirectories afterwards.
+  - `daw_track_name` in `TransferEntry` always uses the basename stem
+    (not the full relative path).
+  - The setting is persisted in `config["app"]["recursive_scan"]` and
+    saved/restored in `.spsession` files.
+  - `AnalyzeWorker` and `load_session()` both accept a `recursive`
+    parameter so Phase 2 analysis also discovers files in subfolders.
+- **DAW integration** — the Phase 3 (DAW Transfer) tab provides a toolbar with
+  Connect/Check, Fetch, Auto-Assign, Transfer, and Sync actions. A combo box
+  selects the active DAW processor. The left side shows a setup table with
+  columns: checkmark (assigned?), File, **Track Name** (inline-editable),
+  Ch, Clip Gain, Fader Gain, Group. The Track Name column displays
+  `TransferEntry.daw_track_name` and is editable via double-click; changes
+  are committed to the model and reflected in the folder tree. The right side
+  shows a folder tree (from `_FolderDropTree`) that supports drag-and-drop
+  assignment of tracks to folders. Assigned tracks display both the
+  `daw_track_name` and `output_filename` (as `"track_name ← filename"`)
+  when they differ. The "Duplicate for DAW" context menu action creates new
+  manifest entries sharing the same output file with `-[N]` suffixed track
+  names (first duplication renames the original to `-[1]`, new entry gets
+  `-[2]`, subsequent duplications increment). Transfer runs asynchronously
   via `DawTransferWorker`, with a progress panel (label + `QProgressBar`)
   below the tree that auto-hides 2 seconds after completion.
 - **Waveform worker cancellation** — `WaveformLoadWorker` and
@@ -1815,6 +1908,9 @@ preferences directory:
         "scale_factor": 1.0,
         "report_verbosity": "normal",
         "output_folder": "",
+        "phase1_output_folder": "sp_01_tracklayout",
+        "phase2_output_folder": "sp_02_prepared",
+        "recursive_scan": false,
         "spectrogram_colormap": "magma",
         "invert_scroll": "default",
         "default_project_dir": "",
@@ -1857,8 +1953,9 @@ preferences directory:
 ```
 
 - **`app`** — global application settings (HiDPI scale, colormap, scroll
-  direction, default project directory, active preset names); not consumed
-  by the analysis pipeline
+  direction, default project directory, active preset names, Phase 1/2
+  output folder names, recursive scan toggle); not consumed by the
+  analysis pipeline
 - **`colors`** — global color palette (name + ARGB hex pairs), referenced
   by group presets
 - **`config_presets`** — named config presets, each containing five

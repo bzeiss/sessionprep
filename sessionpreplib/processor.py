@@ -9,7 +9,12 @@ from .config import ParamSpec
 from .models import ProcessorResult, TrackContext
 
 
+# Processor phase constants
+PHASE_PRE_LAYOUT = "pre_layout"
+PHASE_POST_LAYOUT = "post_layout"
+
 # Priority band constants
+PRIORITY_RESTORE = -100
 PRIORITY_CLEANUP = 0
 PRIORITY_NORMALIZE = 100
 PRIORITY_POST = 200
@@ -26,6 +31,7 @@ class AudioProcessor(ABC):
     name: str = ""
     shorthand: str = ""  # short abbreviation for compact UI labels, e.g. "BN"
     priority: int = PRIORITY_NORMALIZE
+    phase: str = PHASE_POST_LAYOUT
 
     @classmethod
     def config_params(cls) -> list[ParamSpec]:

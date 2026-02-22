@@ -85,7 +85,7 @@ wheels = [
 [[package]]
 name = "dawproject"
 version = "0.1.0"
-source = { git = "https://github.com/roex-audio/dawproject-py.git?rev=e848bd06b00408018ff97dfb54942f3fa303a6a6#e848bd06b00408018ff97dfb54942f3fa303a6a6" }
+source = { git = "https://github.com/roex-audio/dawproject-py.git?rev=70e65aeb7b260cfec3871ca89ca8d80022c44496#70e65aeb7b260cfec3871ca89ca8d80022c44496" }
 dependencies = [
     { name = "lxml" },
 ]
@@ -584,7 +584,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dawproject", marker = "extra == 'gui'", git = "https://github.com/roex-audio/dawproject-py.git?rev=e848bd06b00408018ff97dfb54942f3fa303a6a6" },
+    { name = "dawproject", marker = "extra == 'gui'", git = "https://github.com/roex-audio/dawproject-py.git?rev=70e65aeb7b260cfec3871ca89ca8d80022c44496" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "py-ptsl", marker = "extra == 'gui'", specifier = ">=600.2.0" },
     { name = "pyside6", marker = "extra == 'gui'", specifier = ">=6.10.2" },

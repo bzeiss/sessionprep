@@ -91,17 +91,19 @@ class AnalyzeWorker(QThread):
     finished = Signal(object, object)     # (session, diagnostic_summary)
     error = Signal(str)
 
-    def __init__(self, source_dir: str, config: dict):
+    def __init__(self, source_dir: str, config: dict, recursive: bool = False):
         super().__init__()
         self.source_dir = source_dir
         self.config = config
+        self.recursive = recursive
 
     def run(self):
         try:
             event_bus = EventBus()
 
             self.progress.emit("Loading session\u2026")
-            session = load_session(self.source_dir, self.config, event_bus=event_bus)
+            session = load_session(self.source_dir, self.config, event_bus=event_bus,
+                                  recursive=self.recursive)
 
             if not session.tracks:
                 self.error.emit("No audio files found in directory.")
@@ -231,6 +233,172 @@ class AudioLoadWorker(QThread):
             self.error.emit(str(exc))
 
 
+class TopoAudioResolveWorker(QThread):
+    """Load source audio and resolve a TopologyEntry off the UI thread.
+
+    Emits ``finished`` with ``(audio_ndarray, samplerate)`` on success.
+    """
+
+    finished = Signal(object, int)  # (audio_data, samplerate)
+    error = Signal(str)
+
+    def __init__(self, entry, source_dir: str, parent=None):
+        super().__init__(parent)
+        self._entry = entry
+        self._source_dir = source_dir
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        try:
+            import os
+            import soundfile as sf
+            from sessionpreplib.topology import resolve_entry_audio
+
+            track_audio: dict[str, tuple] = {}
+            sr = 44100
+
+            for src in self._entry.sources:
+                if self._cancelled:
+                    return
+                path = os.path.join(self._source_dir, src.input_filename)
+                data, file_sr = sf.read(path, dtype='float64')
+                track_audio[src.input_filename] = (data, file_sr)
+                sr = file_sr  # use last samplerate (all should match)
+
+            if self._cancelled:
+                return
+
+            resolved = resolve_entry_audio(self._entry, track_audio)
+            self.finished.emit(resolved, sr)
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
+class TopoMultiAudioWorker(QThread):
+    """Load multiple tracks and produce stacked display + downmixed playback.
+
+    Emits ``finished(display_audio, playback_audio, samplerate, labels)``
+    where *display_audio* has all tracks' channels concatenated and
+    *playback_audio* is summed by channel position.
+    """
+
+    finished = Signal(object, object, int, list)  # display, playback, sr, labels
+    error = Signal(str)
+
+    def __init__(self, items: list, side: str, source_dir: str, parent=None):
+        """
+        Parameters
+        ----------
+        items : list
+            For ``side="input"``: list of ``(filepath, display_name, n_channels)``.
+            For ``side="output"``: list of ``(TopologyEntry, display_name)``.
+        side : str
+            ``"input"`` or ``"output"``.
+        source_dir : str
+            Root directory for source audio files.
+        """
+        super().__init__(parent)
+        self._items = items
+        self._side = side
+        self._source_dir = source_dir
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        try:
+            import os
+            import numpy as np
+            import soundfile as sf
+
+            track_arrays = []   # list of 2-D arrays (samples, ch)
+            track_names = []    # display names for labels
+            track_ch_counts = []
+            sr = 44100
+
+            if self._side == "input":
+                for filepath, name, _n_ch in self._items:
+                    if self._cancelled:
+                        return
+                    data, file_sr = sf.read(filepath, dtype='float64')
+                    sr = file_sr
+                    if data.ndim == 1:
+                        data = data.reshape(-1, 1)
+                    track_arrays.append(data)
+                    track_names.append(name)
+                    track_ch_counts.append(data.shape[1])
+            else:  # output
+                from sessionpreplib.topology import resolve_entry_audio
+                for entry, name in self._items:
+                    if self._cancelled:
+                        return
+                    # Load source audio for this entry
+                    track_audio: dict[str, tuple] = {}
+                    for src in entry.sources:
+                        if self._cancelled:
+                            return
+                        path = os.path.join(self._source_dir, src.input_filename)
+                        data, file_sr = sf.read(path, dtype='float64')
+                        track_audio[src.input_filename] = (data, file_sr)
+                        sr = file_sr
+                    resolved = resolve_entry_audio(entry, track_audio)
+                    if resolved.ndim == 1:
+                        resolved = resolved.reshape(-1, 1)
+                    track_arrays.append(resolved)
+                    track_names.append(name)
+                    track_ch_counts.append(resolved.shape[1])
+
+            if self._cancelled or not track_arrays:
+                return
+
+            # --- Build display audio (all channels concatenated) ---
+            max_samples = max(a.shape[0] for a in track_arrays)
+            padded = []
+            for a in track_arrays:
+                if a.shape[0] < max_samples:
+                    pad = np.zeros((max_samples - a.shape[0], a.shape[1]),
+                                   dtype=np.float64)
+                    a = np.vstack([a, pad])
+                padded.append(a)
+            display_audio = np.hstack(padded)  # (max_samples, total_ch)
+
+            # --- Build playback audio (summed by channel position) ---
+            max_ch = max(track_ch_counts)
+            n_tracks = len(track_arrays)
+            playback = np.zeros((max_samples, max_ch), dtype=np.float64)
+            for a in padded:
+                playback[:, :a.shape[1]] += a
+            playback /= n_tracks
+
+            # Squeeze mono
+            if playback.shape[1] == 1:
+                playback = playback[:, 0]
+            if display_audio.shape[1] == 1:
+                display_audio = display_audio[:, 0]
+
+            # --- Channel labels ---
+            from sessionprepgui.waveform.panel import WaveformPanel
+            labels = []
+            ch_idx = 0
+            for i, name in enumerate(track_names):
+                n_ch = track_ch_counts[i]
+                for c in range(n_ch):
+                    ch_labels = WaveformPanel._CHANNEL_LABELS.get(n_ch)
+                    if ch_labels and c < len(ch_labels):
+                        labels.append(f"{name} {ch_labels[c]}")
+                    else:
+                        labels.append(f"{name} Ch{c}")
+                    ch_idx += 1
+
+            self.finished.emit(display_audio, playback, sr, labels)
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
 class PrepareWorker(QThread):
     """Runs Pipeline.prepare() off the main thread with progress."""
 
@@ -266,6 +434,170 @@ class PrepareWorker(QThread):
                 progress_cb=self._on_progress,
             )
             self.finished.emit()
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class TopologyApplyWorker(QThread):
+    """Resolve channel topology and write rerouted files to output dir.
+
+    This worker loads source audio on demand, applies the channel routing
+    defined in the session topology, and writes the resulting files.
+    No audio processors are applied — that is Phase 2's job.
+    """
+
+    progress = Signal(str)
+    progress_value = Signal(int, int)
+    finished = Signal()
+    error = Signal(str)
+
+    def __init__(self, session, output_dir: str, source_dir: str | None = None):
+        super().__init__()
+        self._session = session
+        self._output_dir = output_dir
+        self._source_dir = source_dir
+
+    def run(self):
+        try:
+            import os
+            import numpy as np
+            import soundfile as sf
+            from sessionpreplib.audio import load_track, AUDIO_EXTENSIONS
+            from sessionpreplib.topology import resolve_entry_audio
+            from sessionpreplib.models import TrackContext
+
+            session = self._session
+            topology = session.topology
+            if topology is None:
+                self.error.emit("No topology defined.")
+                return
+
+            output_dir = self._output_dir
+
+            # Clean stale audio files from output dir (recursive)
+            if os.path.isdir(output_dir):
+                for dirpath, _dirnames, filenames in os.walk(
+                        output_dir, topdown=False):
+                    for fname in filenames:
+                        if os.path.splitext(fname)[1].lower() not in AUDIO_EXTENSIONS:
+                            continue
+                        fp = os.path.join(dirpath, fname)
+                        try:
+                            os.unlink(fp)
+                        except OSError:
+                            pass
+                    # Prune empty subdirectories
+                    if dirpath != output_dir:
+                        try:
+                            os.rmdir(dirpath)
+                        except OSError:
+                            pass
+            os.makedirs(output_dir, exist_ok=True)
+
+            # Collect source filenames referenced by topology
+            ok_tracks = [t for t in session.tracks if t.status == "OK"]
+            track_map = {t.filename: t for t in ok_tracks}
+
+            needed_sources: set[str] = set()
+            for entry in topology.entries:
+                for src in entry.sources:
+                    needed_sources.add(src.input_filename)
+
+            total = len(needed_sources) + len(topology.entries)
+
+            # Phase A: Load source audio
+            # After a previous Apply+Analyze cycle, session.tracks may
+            # only contain *output* filenames.  Sources that were merged
+            # (e.g. 12_ElecGtr2.wav into 11_ElecGtr1.wav) won't be in
+            # track_map.  Fall back to loading directly from source_dir.
+            source_audio: dict[str, tuple] = {}
+            for step, filename in enumerate(sorted(needed_sources)):
+                self.progress.emit(f"Loading {filename}")
+                self.progress_value.emit(step, total)
+                track = track_map.get(filename)
+                if track and track.audio_data is not None and track.audio_data.size > 0:
+                    source_audio[filename] = (track.audio_data, track.samplerate)
+                    continue
+                # Determine best path to load from
+                src_path = None
+                if self._source_dir:
+                    candidate = os.path.join(self._source_dir, filename)
+                    if os.path.isfile(candidate):
+                        src_path = candidate
+                if src_path is None and track:
+                    src_path = track.filepath
+                if src_path is None:
+                    continue
+                loaded = load_track(src_path)
+                if track:
+                    track.audio_data = loaded.audio_data
+                    track.samplerate = loaded.samplerate
+                    track.total_samples = loaded.total_samples
+                source_audio[filename] = (loaded.audio_data, loaded.samplerate)
+
+            # Phase B: Resolve topology + write output files
+            output_tracks = []
+            errors = []
+            base_step = len(needed_sources)
+            for idx, entry in enumerate(topology.entries):
+                step = base_step + idx
+                self.progress.emit(f"Writing {entry.output_filename}")
+                self.progress_value.emit(step, total)
+
+                try:
+                    # Check all sources are available before resolving
+                    missing = [
+                        s.input_filename for s in entry.sources
+                        if s.input_filename not in source_audio
+                    ]
+                    if missing:
+                        errors.append((
+                            entry.output_filename,
+                            f"missing source(s): {', '.join(missing)}"))
+                        continue
+                    resolved = resolve_entry_audio(entry, source_audio)
+                    # Get format info from first source (track_map or source_audio)
+                    src_track = None
+                    sr = 44100
+                    subtype = "PCM_24"
+                    bitdepth = "24-bit"
+                    if entry.sources:
+                        first_src = entry.sources[0].input_filename
+                        src_track = track_map.get(first_src)
+                        if src_track:
+                            sr = src_track.samplerate
+                            subtype = src_track.subtype
+                            bitdepth = src_track.bitdepth
+                        elif first_src in source_audio:
+                            _, sr = source_audio[first_src]
+
+                    dst = os.path.join(output_dir, entry.output_filename)
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    sf.write(dst, resolved, sr, subtype=subtype)
+
+                    n_samples = resolved.shape[0]
+                    out_tc = TrackContext(
+                        filename=entry.output_filename,
+                        filepath=dst,
+                        audio_data=None,
+                        samplerate=sr,
+                        channels=entry.output_channels,
+                        total_samples=n_samples,
+                        bitdepth=bitdepth,
+                        subtype=subtype,
+                        duration_sec=(n_samples / sr) if sr > 0 else 0.0,
+                        group=src_track.group if src_track else None,
+                    )
+                    output_tracks.append(out_tc)
+                except Exception as e:
+                    errors.append((entry.output_filename, str(e)))
+
+            self.progress_value.emit(total, total)
+
+            session.output_tracks = output_tracks
+            session.config["_topology_apply_errors"] = errors
+            self.finished.emit()
+
         except Exception as e:
             self.error.emit(str(e))
 

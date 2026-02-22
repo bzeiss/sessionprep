@@ -63,6 +63,27 @@ _SUBTYPE_MAP = {
 }
 
 
+def discover_track(filepath: str) -> TrackContext:
+    """Read audio file metadata without loading audio data.
+
+    Returns a TrackContext with filename, filepath, channels, samplerate,
+    total_samples, bitdepth, subtype, duration_sec populated.
+    ``audio_data`` is left as ``None``.
+    """
+    info = sf.info(filepath)
+    return TrackContext(
+        filename=os.path.basename(filepath),
+        filepath=filepath,
+        audio_data=None,
+        samplerate=info.samplerate,
+        channels=info.channels,
+        total_samples=info.frames,
+        bitdepth=_SUBTYPE_MAP.get(info.subtype, info.subtype),
+        subtype=info.subtype,
+        duration_sec=info.duration,
+    )
+
+
 def load_track(filepath: str) -> TrackContext:
     """Read an audio file (WAV/AIFF) and return a fully populated TrackContext."""
     info = sf.info(filepath)
@@ -84,6 +105,47 @@ def load_track(filepath: str) -> TrackContext:
         duration_sec=info.duration,
         chunk_ids=cids,
     )
+
+
+def discover_audio_files(
+    root_dir: str,
+    recursive: bool = False,
+    skip_folders: set[str] | None = None,
+) -> list[str]:
+    """Return a sorted list of audio file paths relative to *root_dir*.
+
+    When *recursive* is ``False``, returns bare filenames (flat listing).
+    When ``True``, walks subdirectories (symlinks are **not** followed)
+    and returns forward-slash–separated relative paths such as
+    ``"drums/01_Kick.wav"``.
+
+    Directories whose name appears in *skip_folders* are pruned from the
+    walk (e.g. ``{"sp_01_tracklayout", "sp_02_prepared"}``).
+    """
+    from .utils import protools_sort_key
+
+    skip = skip_folders or set()
+    result: list[str] = []
+
+    if not recursive:
+        for fname in os.listdir(root_dir):
+            if fname.lower().endswith(AUDIO_EXTENSIONS):
+                result.append(fname)
+    else:
+        for dirpath, dirnames, filenames in os.walk(root_dir, followlinks=False):
+            # Prune skipped directories in-place so os.walk won't descend
+            dirnames[:] = [
+                d for d in dirnames if d not in skip
+            ]
+            for fname in filenames:
+                if fname.lower().endswith(AUDIO_EXTENSIONS):
+                    rel = os.path.relpath(
+                        os.path.join(dirpath, fname), root_dir)
+                    # Normalise to forward slashes for cross-platform keys
+                    result.append(rel.replace("\\", "/"))
+
+    result.sort(key=protools_sort_key)
+    return result
 
 
 def write_track(track: TrackContext, output_path: str) -> None:

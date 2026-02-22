@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Qt, Slot, QSize
+from PySide6.QtCore import Qt, Slot, QSize, QTimer
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
+    QMenu,
     QMessageBox,
     QSizePolicy,
     QSplitter,
@@ -68,6 +70,16 @@ class DawMixin:
 
         self._setup_toolbar.addSeparator()
 
+        self._reset_manifest_action = QAction("Reset to Default", self)
+        self._reset_manifest_action.setToolTip(
+            "Remove all duplicates and restore default track names")
+        self._reset_manifest_action.setEnabled(False)
+        self._reset_manifest_action.triggered.connect(
+            self._on_reset_manifest)
+        self._setup_toolbar.addAction(self._reset_manifest_action)
+
+        self._setup_toolbar.addSeparator()
+
         # ── Use Processed checkbox ─────────────────────────────────────
         self._use_processed_cb = QCheckBox("Use Processed")
         self._use_processed_cb.setLayoutDirection(Qt.RightToLeft)
@@ -96,9 +108,9 @@ class DawMixin:
         self._transfer_action.triggered.connect(self._on_daw_transfer)
         self._setup_toolbar.addAction(self._transfer_action)
 
-        self._sync_action = QAction("Sync", self)
-        self._sync_action.setEnabled(False)
-        self._setup_toolbar.addAction(self._sync_action)
+        # self._sync_action = QAction("Sync", self)
+        # self._sync_action.setEnabled(False)
+        # self._setup_toolbar.addAction(self._sync_action)
 
         # Populate combo after ALL toolbar widgets exist, then connect signal
         self._populate_daw_combo()
@@ -111,13 +123,20 @@ class DawMixin:
 
         # ── Left: track table ─────────────────────────────────────────────
         self._setup_table = _SetupDragTable()
-        self._setup_table.setColumnCount(6)
+        self._setup_table.setColumnCount(7)
         self._setup_table.setHorizontalHeaderLabels(
-            ["", "File", "Ch", "Clip Gain", "Fader Gain", "Group"]
+            ["Track Name", "\u2713", "File", "Ch", "Clip Gain", "Fader Gain", "Group"]
         )
         self._setup_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._setup_table.setSelectionMode(QTableWidget.ExtendedSelection)
-        self._setup_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._setup_table.setEditTriggers(QTableWidget.DoubleClicked)
+        self._setup_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._setup_table.customContextMenuRequested.connect(
+            self._on_setup_table_context_menu)
+        self._setup_table.itemChanged.connect(
+            self._on_setup_table_item_changed)
+        self._setup_table_populating = False
+        self._setup_table.verticalHeader().setDefaultSectionSize(24)
         self._setup_table.verticalHeader().setVisible(False)
         self._setup_table.setMinimumWidth(300)
         self._setup_table.setShowGrid(True)
@@ -126,17 +145,19 @@ class DawMixin:
 
         sh = self._setup_table.horizontalHeader()
         sh.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        sh.setSectionResizeMode(0, QHeaderView.Fixed)
-        sh.resizeSection(0, 24)
-        sh.setSectionResizeMode(1, QHeaderView.Stretch)
-        sh.setSectionResizeMode(2, QHeaderView.Fixed)
-        sh.setSectionResizeMode(3, QHeaderView.Interactive)
+        sh.setSectionResizeMode(0, QHeaderView.Stretch)
+        sh.setSectionResizeMode(1, QHeaderView.Fixed)
+        sh.resizeSection(1, 24)
+        sh.setSectionResizeMode(2, QHeaderView.Interactive)
+        sh.setSectionResizeMode(3, QHeaderView.Fixed)
         sh.setSectionResizeMode(4, QHeaderView.Interactive)
         sh.setSectionResizeMode(5, QHeaderView.Interactive)
-        sh.resizeSection(2, 30)
-        sh.resizeSection(3, 90)
+        sh.setSectionResizeMode(6, QHeaderView.Interactive)
+        sh.resizeSection(2, 180)
+        sh.resizeSection(3, 30)
         sh.resizeSection(4, 90)
-        sh.resizeSection(5, 110)
+        sh.resizeSection(5, 90)
+        sh.resizeSection(6, 110)
 
         setup_splitter.addWidget(self._setup_table)
 
@@ -168,8 +189,6 @@ class DawMixin:
         self._folder_tree.setAlternatingRowColors(True)
         # Match visual size to the setup table; semi-transparent selection
         self._folder_tree.setStyleSheet(
-            "QTreeWidget { font-size: 10pt; }"
-            "QTreeWidget::item { min-height: 22px; }"
             "QTreeWidget::item:selected {"
             "  background-color: rgba(42, 109, 181, 128);"
             "}"
@@ -187,9 +206,10 @@ class DawMixin:
         self._setup_right_stack.setCurrentIndex(_SETUP_RIGHT_PLACEHOLDER)
 
         setup_splitter.addWidget(self._setup_right_stack)
-        setup_splitter.setStretchFactor(0, 3)
-        setup_splitter.setStretchFactor(1, 2)
-        setup_splitter.setSizes([620, 480])
+        setup_splitter.setStretchFactor(0, 1)
+        setup_splitter.setStretchFactor(1, 1)
+        QTimer.singleShot(0, lambda: setup_splitter.setSizes(
+            [setup_splitter.width() // 2, setup_splitter.width() // 2]))
 
         layout.addWidget(setup_splitter, 1)
 
@@ -232,7 +252,9 @@ class DawMixin:
         has_assignments = bool(dp_state.get("assignments"))
         self._auto_assign_action.setEnabled(has_folders)
         self._transfer_action.setEnabled(has_processor and has_assignments)
-        self._sync_action.setEnabled(False)
+        has_manifest = bool(
+            self._session and self._session.transfer_manifest)
+        self._reset_manifest_action.setEnabled(has_manifest)
 
     @Slot(int)
     def _on_daw_combo_changed(self, index: int):
@@ -345,7 +367,8 @@ class DawMixin:
         if not self._active_daw_processor or not self._session:
             return
 
-        output_folder = self._config.get("app", {}).get("output_folder", "processed")
+        output_folder = self._config.get("app", {}).get(
+            "phase2_output_folder", "sp_02_prepared")
 
         # Refresh pipeline config from current session widgets so that
         # processor enabled/disabled changes made after analysis take effect.
@@ -436,8 +459,10 @@ class DawMixin:
         # Group color map for track items
         gcm = self._group_color_map()
         track_map = {}
+        entry_map: dict[str, Any] = {}
         if self._session:
-            track_map = {t.filename: t for t in self._session.tracks}
+            track_map = {t.filename: t for t in self._session.output_tracks}
+            entry_map = {e.entry_id: e for e in self._session.transfer_manifest}
 
         # Icons – small colored squares to distinguish folder types
         def _folder_icon(color_hex: str) -> QIcon:
@@ -471,14 +496,26 @@ class DawMixin:
             # Add assigned tracks as children
             for fname in folder_tracks.get(folder["id"], []):
                 track_item = QTreeWidgetItem(item)
-                track_item.setText(0, fname)
+                # Show daw_track_name alongside source filename
+                te = entry_map.get(fname)
+                if te:
+                    import os
+                    default_stem = os.path.splitext(te.output_filename)[0]
+                    if te.daw_track_name != default_stem:
+                        track_item.setText(
+                            0, f"{te.daw_track_name}  \u2190 {te.output_filename}")
+                    else:
+                        track_item.setText(0, fname)
+                else:
+                    track_item.setText(0, fname)
                 track_item.setData(0, Qt.UserRole, fname)
                 track_item.setData(0, Qt.UserRole + 1, "track")
                 track_item.setFlags(
                     (track_item.flags() | Qt.ItemIsDragEnabled)
                     & ~Qt.ItemIsDropEnabled)
                 # Row background from group color (matches table tint)
-                tc = track_map.get(fname)
+                out_fn = te.output_filename if te else fname
+                tc = track_map.get(out_fn)
                 if tc and tc.group:
                     tint = self._tint_group_color(tc.group, gcm)
                     if tint:
@@ -596,22 +633,22 @@ class DawMixin:
                 "group that should be mapped to a DAW folder.")
             return
 
-        # Collect assignments: folder_id → [filenames]
+        # Collect assignments: folder_id → [entry_ids]
         batch: dict[str, list[str]] = {}
         no_group = 0
         no_target = 0
         no_folder = 0
         already_assigned = 0
-        for track in self._session.tracks:
-            # Skip already-assigned tracks
-            if track.filename in assignments:
+        for entry in self._session.transfer_manifest:
+            # Skip already-assigned entries
+            if entry.entry_id in assignments:
                 already_assigned += 1
                 continue
-            # Skip tracks without a group or without a DAW target
-            if not track.group:
+            # Skip entries without a group or without a DAW target
+            if not entry.group:
                 no_group += 1
                 continue
-            target_key = group_target.get(track.group)
+            target_key = group_target.get(entry.group)
             if not target_key:
                 no_target += 1
                 continue
@@ -619,7 +656,7 @@ class DawMixin:
             if not folder_id:
                 no_folder += 1
                 continue
-            batch.setdefault(folder_id, []).append(track.filename)
+            batch.setdefault(folder_id, []).append(entry.entry_id)
 
         if not batch:
             reasons: list[str] = []
@@ -654,3 +691,175 @@ class DawMixin:
         self._status_bar.showMessage(
             f"Auto-Assign: assigned {total} track(s) to "
             f"{len(batch)} folder(s).")
+
+    # ── Setup table context menu ─────────────────────────────────────────
+
+    @Slot()
+    def _on_setup_table_context_menu(self, pos):
+        """Show context menu for the Session Setup track table."""
+        if not self._session:
+            return
+        row = self._setup_table.rowAt(pos.y())
+        if row < 0:
+            return
+
+        # Get entry_id from UserRole on Track Name column (col 0)
+        fname_item = self._setup_table.item(row, 0)
+        if not fname_item:
+            return
+        entry_id = fname_item.data(Qt.UserRole)
+        if not entry_id:
+            return
+
+        # Find the TransferEntry
+        manifest = self._session.transfer_manifest
+        entry = None
+        entry_idx = None
+        for i, e in enumerate(manifest):
+            if e.entry_id == entry_id:
+                entry = e
+                entry_idx = i
+                break
+        if entry is None:
+            return
+
+        menu = QMenu(self)
+
+        # Duplicate for DAW — creates a new manifest entry referencing
+        # the same output file but with a unique entry_id and editable name
+        dup_act = menu.addAction("Duplicate")
+        dup_act.triggered.connect(
+            lambda checked, eid=entry_id: self._duplicate_transfer_entry(eid))
+
+        # Remove Duplicate — only for user-added entries (entry_id != output_filename)
+        if entry.entry_id != entry.output_filename:
+            menu.addSeparator()
+            remove_act = menu.addAction("Remove Duplicate")
+            remove_act.triggered.connect(
+                lambda checked, eid=entry_id: self._remove_transfer_entry(eid))
+
+        menu.exec(self._setup_table.viewport().mapToGlobal(pos))
+
+    def _duplicate_transfer_entry(self, source_entry_id: str):
+        """Duplicate a transfer entry for multi-track DAW scenarios.
+
+        Naming convention: ``stem-[1]``, ``stem-[2]``, etc.
+        On first duplication the original is also renamed to ``-[1]``.
+        """
+        from sessionpreplib.models import TransferEntry
+        import os
+        import re
+        import uuid
+
+        manifest = self._session.transfer_manifest
+        source = None
+        source_idx = None
+        for i, e in enumerate(manifest):
+            if e.entry_id == source_entry_id:
+                source = e
+                source_idx = i
+                break
+        if source is None:
+            return
+
+        # Collect all siblings (same output_filename)
+        siblings = [e for e in manifest
+                    if e.output_filename == source.output_filename]
+
+        # Find highest existing -[N] suffix among siblings
+        suffix_re = re.compile(r"-\[(\d+)\]$")
+        max_n = 0
+        for sib in siblings:
+            m = suffix_re.search(sib.daw_track_name)
+            if m:
+                max_n = max(max_n, int(m.group(1)))
+
+        # Derive the base stem (strip extension if it matches filename,
+        # strip any existing -[N] suffix)
+        stem = source.daw_track_name
+        if stem == source.output_filename:
+            stem = os.path.splitext(stem)[0]
+        stem = suffix_re.sub("", stem)
+
+        if max_n == 0:
+            # First duplication — rename the original to -[1]
+            source.daw_track_name = f"{stem}-[1]"
+            new_n = 2
+        else:
+            new_n = max_n + 1
+
+        new_entry = TransferEntry(
+            entry_id=f"{source.output_filename}:{uuid.uuid4().hex[:8]}",
+            output_filename=source.output_filename,
+            daw_track_name=f"{stem}-[{new_n}]",
+            group=source.group,
+        )
+
+        # Insert right after the source entry
+        manifest.insert(source_idx + 1, new_entry)
+        self._populate_setup_table()
+        self._populate_folder_tree()
+        self._status_bar.showMessage(
+            f"Duplicated → '{new_entry.daw_track_name}'")
+
+    def _on_setup_table_item_changed(self, item):
+        """Commit inline edit of the Track Name column."""
+        if self._setup_table_populating:
+            return
+        if item.column() != 0:  # Track Name column
+            return
+        entry_id = item.data(Qt.UserRole)
+        if not entry_id or not self._session:
+            return
+        new_name = item.text().strip()
+        if not new_name:
+            # Revert — find old name
+            for e in self._session.transfer_manifest:
+                if e.entry_id == entry_id:
+                    self._setup_table.blockSignals(True)
+                    item.setText(e.daw_track_name)
+                    self._setup_table.blockSignals(False)
+                    return
+            return
+        for e in self._session.transfer_manifest:
+            if e.entry_id == entry_id:
+                if e.daw_track_name != new_name:
+                    e.daw_track_name = new_name
+                    self._populate_folder_tree()
+                return
+
+    def _on_reset_manifest(self):
+        """Reset the transfer manifest to default: one entry per output file,
+        default track names, no user-added duplicates."""
+        if not self._session:
+            return
+        import copy
+        if self._session.base_transfer_manifest:
+            self._session.transfer_manifest = copy.deepcopy(
+                self._session.base_transfer_manifest)
+        elif self._session.topology:
+            from sessionpreplib.topology import build_transfer_manifest
+            self._session.transfer_manifest = build_transfer_manifest(
+                self._session.topology,
+                self._session.tracks,
+                existing_manifest=None,
+            )
+        else:
+            return
+        self._populate_setup_table()
+        self._populate_folder_tree()
+        self._update_daw_lifecycle_buttons()
+        self._status_bar.showMessage("Transfer manifest reset to default")
+
+    def _remove_transfer_entry(self, entry_id: str):
+        """Remove a user-added duplicate transfer entry."""
+        manifest = self._session.transfer_manifest
+        for i, e in enumerate(manifest):
+            if e.entry_id == entry_id:
+                # Safety: only remove user-added duplicates
+                if e.entry_id != e.output_filename:
+                    del manifest[i]
+                    self._populate_setup_table()
+                    self._status_bar.showMessage(
+                        f"Removed duplicate '{e.daw_track_name}'")
+                break

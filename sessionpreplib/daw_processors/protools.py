@@ -314,19 +314,22 @@ class ProToolsDawProcessor(DawProcessor):
 
         # Build lookups
         folder_map = {f["id"]: f for f in folders}
-        track_map = {t.filename: t for t in session.tracks}
+        manifest_map = {
+            e.entry_id: e for e in session.transfer_manifest}
+        out_track_map = {
+            t.filename: t for t in session.output_tracks}
 
-        # Build ordered work list: [(filename, folder_id), ...]
+        # Build ordered work list: [(entry_id, folder_id), ...]
         work: list[tuple[str, str]] = []
         seen: set[str] = set()
         for fid, ordered_names in track_order.items():
-            for fname in ordered_names:
-                if fname in assignments and assignments[fname] == fid:
-                    work.append((fname, fid))
-                    seen.add(fname)
-        for fname, fid in sorted(assignments.items()):
-            if fname not in seen:
-                work.append((fname, fid))
+            for eid in ordered_names:
+                if eid in assignments and assignments[eid] == fid:
+                    work.append((eid, fid))
+                    seen.add(eid)
+        for eid, fid in sorted(assignments.items()):
+            if eid not in seen:
+                work.append((eid, fid))
 
         total = len(work)
         dbg(f"work list: {total} items")
@@ -347,49 +350,55 @@ class ProToolsDawProcessor(DawProcessor):
             # Pre-compute group → palette index
             group_palette_idx: dict[str, int] = {}
             if pt_palette:
-                for track in session.tracks:
-                    if track.group and track.group not in group_palette_idx:
+                for entry in session.transfer_manifest:
+                    if entry.group and entry.group not in group_palette_idx:
                         argb = self._resolve_group_color(
-                            track.group, session)
+                            entry.group, session)
                         if argb:
                             idx = _closest_palette_index(argb, pt_palette)
                             if idx is not None:
-                                group_palette_idx[track.group] = idx
+                                group_palette_idx[entry.group] = idx
 
             audio_files_dir = ptslh.get_session_audio_dir(engine)
             dbg(f"Setup done: palette={len(pt_palette)}, "
                 f"audio_dir={audio_files_dir}")
 
             # Validate work items and collect filepaths for batch import
-            use_processed = session.config.get("_use_processed", False)
-            # valid_work: [(fname, fid, filepath, track_stem, track_format, tc)]
+            # valid_work: [(entry_id, fid, filepath, track_stem, track_format, out_tc)]
             valid_work: list[tuple[str, str, str, str, str, Any]] = []
-            for fname, fid in work:
+            for eid, fid in work:
                 folder = folder_map.get(fid)
                 if not folder:
                     results.append(DawCommandResult(
-                        command=DawCommand("import_to_clip_list", fname,
+                        command=DawCommand("import_to_clip_list", eid,
                                            {"folder_id": fid}),
                         success=False, error=f"Folder {fid} not found"))
                     continue
-                tc = track_map.get(fname)
-                if not tc:
+                entry = manifest_map.get(eid)
+                if not entry:
                     results.append(DawCommandResult(
-                        command=DawCommand("import_to_clip_list", fname,
+                        command=DawCommand("import_to_clip_list", eid,
                                            {"folder_name": folder["name"]}),
                         success=False,
-                        error=f"Track {fname} not in session"))
+                        error=f"Manifest entry {eid} not found"))
                     continue
-                if (use_processed and tc.processed_filepath
-                        and os.path.isfile(tc.processed_filepath)):
-                    filepath = os.path.abspath(tc.processed_filepath)
-                else:
-                    filepath = os.path.abspath(tc.filepath)
-                track_stem = os.path.splitext(fname)[0]
+                out_tc = out_track_map.get(entry.output_filename)
+                audio_path = (
+                    out_tc.processed_filepath or out_tc.filepath
+                ) if out_tc else None
+                if not out_tc or not audio_path:
+                    results.append(DawCommandResult(
+                        command=DawCommand("import_to_clip_list", eid,
+                                           {"folder_name": folder["name"]}),
+                        success=False,
+                        error=f"Output track not found for {entry.output_filename}"))
+                    continue
+                filepath = os.path.abspath(audio_path)
+                track_stem = os.path.splitext(entry.daw_track_name)[0]
                 track_format = (
-                    "TF_Mono" if tc.channels == 1 else "TF_Stereo")
+                    "TF_Mono" if out_tc.channels == 1 else "TF_Stereo")
                 valid_work.append(
-                    (fname, fid, filepath, track_stem, track_format, tc))
+                    (eid, fid, filepath, track_stem, track_format, out_tc))
 
             if not valid_work:
                 dbg("No valid work items, returning early")
@@ -409,7 +418,9 @@ class ProToolsDawProcessor(DawProcessor):
             if progress_cb:
                 progress_cb(0, total, "Importing audio to clip list…")
 
-            all_filepaths = [fp for _, _, fp, _, _, _ in valid_work]
+            # Deduplicate: multiple manifest entries may share the same file
+            all_filepaths = list(dict.fromkeys(
+                fp for _, _, fp, _, _, _ in valid_work))
             clip_cmd = DawCommand(
                 "batch_import_to_clip_list", "",
                 {"file_count": len(all_filepaths),
@@ -582,11 +593,11 @@ class ProToolsDawProcessor(DawProcessor):
                     results.append(DawCommandResult(
                         command=color_cmd, success=False, error=str(e)))
 
-            # ── Set fader offsets (processed files only) ───────────
+            # ── Set fader offsets ──────────────────────────────────
 
             proc_id = "bimodal_normalize"
             bn_enabled = session.config.get(f"{proc_id}_enabled", True)
-            if use_processed and bn_enabled:
+            if bn_enabled:
                 fader_count = 0
                 for t_stem, t_id, tc in created_tracks:
                     if proc_id in tc.processor_skip:

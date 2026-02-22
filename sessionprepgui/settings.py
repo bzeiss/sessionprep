@@ -57,7 +57,8 @@ _PRESENTATION_DEFAULTS: dict[str, Any] = {
 _APP_DEFAULTS: dict[str, Any] = {
     "scale_factor": 1.0,
     "report_verbosity": "normal",
-    "output_folder": "processed",
+    "phase1_output_folder": "sp_01_tracklayout",
+    "phase2_output_folder": "sp_02_prepared",
     "spectrogram_colormap": "magma",
     "default_project_dir": "",
     "invert_scroll": "default",
@@ -212,6 +213,11 @@ def load_config() -> dict[str, Any]:
     # -- Migrate old flat config if needed --
     if "gui" in data or ("analysis" in data and "config_presets" not in data):
         data = _migrate_legacy_config(data)
+
+    # -- Migrate old output_folder → phase2_output_folder --
+    app_data = data.get("app", {})
+    if "output_folder" in app_data and "phase2_output_folder" not in app_data:
+        app_data["phase2_output_folder"] = app_data.pop("output_folder")
 
     # -- Merge: defaults ← file overrides --
     merged = _merge_structured(defaults, data)

@@ -12,7 +12,7 @@ from sessionpreplib.audio import get_window_samples
 
 from ..helpers import fmt_time
 from .report import render_summary_html, render_track_detail_html
-from ..tracks.table_widgets import _TAB_FILE, _TAB_SUMMARY
+from ..tracks.table_widgets import _TAB_FILE, _TAB_SUMMARY, _PHASE_TOPOLOGY
 from ..theme import COLORS
 from ..analysis.worker import AudioLoadWorker
 from ..waveform.compute import WaveformLoadWorker
@@ -158,6 +158,7 @@ class DetailMixin:
             all_issues.extend(getattr(det_result, "issues", []))
         self._waveform.set_issues(all_issues)
         self._update_overlay_menu(all_issues)
+        self._wf_panel.update_play_mode_channels(len(result["channels"]))
         self._play_btn.setEnabled(True)
         self._update_time_label(0)
 
@@ -246,30 +247,6 @@ class DetailMixin:
         self._overlay_btn.setText(f"Detector Overlays ({n})" if n else "Detector Overlays")
 
     @Slot(QAction)
-    def _on_display_mode_changed(self, action):
-        """Switch waveform widget display mode and toggle toolbar controls."""
-        is_waveform = action == self._wf_action
-        mode = "waveform" if is_waveform else "spectrogram"
-        self._display_mode_btn.setText(action.text())
-        self._waveform.set_display_mode(mode)
-
-        # Hide waveform-only toolbar controls in spectrogram mode
-        self._wf_settings_btn.setVisible(is_waveform)
-        self._markers_toggle.setVisible(is_waveform)
-        self._rms_lr_toggle.setVisible(is_waveform)
-        self._rms_avg_toggle.setVisible(is_waveform)
-        # Show spectrogram-only controls
-        self._spec_settings_btn.setVisible(not is_waveform)
-
-    @Slot(bool)
-    def _on_wf_aa_changed(self, checked: bool):
-        self._waveform.set_wf_antialias(checked)
-
-    @Slot(QAction)
-    def _on_wf_line_width_changed(self, action):
-        self._waveform.set_wf_line_width(int(action.data()))
-
-    @Slot(QAction)
     def _on_spec_fft_changed(self, action):
         self._waveform.set_spec_fft(int(action.data()))
 
@@ -293,8 +270,21 @@ class DetailMixin:
 
     @Slot()
     def _on_toggle_play(self):
+        # Stop always works regardless of which phase started playback
         if self._playback.is_playing:
-            self._on_stop()
+            self._playback.stop()
+            # Reset both phases' transport UI
+            self._stop_btn.setEnabled(False)
+            if self._current_track is not None:
+                self._play_btn.setEnabled(True)
+            self._topo_wf_panel.stop_btn.setEnabled(False)
+            self._topo_wf_panel.play_btn.setEnabled(
+                self._topo_cached_audio is not None)
+            return
+        # Start based on current tab
+        if self._phase_tabs.currentIndex() == _PHASE_TOPOLOGY:
+            if self._topo_cached_audio is not None:
+                self._on_topo_play()
         elif self._current_track is not None:
             self._on_play()
 
@@ -305,8 +295,9 @@ class DetailMixin:
             return
         self._on_stop()
         start = self._waveform._cursor_sample
+        mode, channel = self._wf_panel.play_mode
         self._playback.play(track.audio_data, track.samplerate, start,
-                            mono=self._mono_btn.isChecked())
+                            mode=mode, channel=channel)
         if self._playback.is_playing:
             self._play_btn.setEnabled(False)
             self._stop_btn.setEnabled(True)
@@ -325,11 +316,18 @@ class DetailMixin:
 
     @Slot(int)
     def _on_cursor_updated(self, sample_pos: int):
+        if self._phase_tabs.currentIndex() == _PHASE_TOPOLOGY:
+            self._topo_wf_panel.waveform.set_cursor(sample_pos)
+            self._topo_update_time_label(sample_pos)
+            return
         self._waveform.set_cursor(sample_pos)
         self._update_time_label(sample_pos)
 
     @Slot()
     def _on_playback_finished(self):
+        if self._phase_tabs.currentIndex() == _PHASE_TOPOLOGY:
+            self._on_topo_stop()
+            return
         self._stop_btn.setEnabled(False)
         if self._current_track is not None:
             self._play_btn.setEnabled(True)

@@ -117,6 +117,20 @@ class TrackContext:
 
 
 @dataclass
+class TransferEntry:
+    """A logical DAW track. Multiple entries can reference the same output file.
+
+    Used by the transfer manifest to allow N:1 mapping from DAW tracks to
+    physical output files (e.g. guitar doubling with the same clip on
+    multiple tracks).
+    """
+    entry_id: str              # unique identifier (e.g. UUID or sequential)
+    output_filename: str       # references a TopologyEntry.output_filename
+    daw_track_name: str        # name shown in DAW (defaults to output filename stem)
+    group: str | None = None   # group for DAW folder assignment (inherits from source)
+
+
+@dataclass
 class SessionContext:
     tracks: list[TrackContext]
     config: dict[str, Any]
@@ -127,6 +141,11 @@ class SessionContext:
     daw_state: dict[str, Any] = field(default_factory=dict)
     daw_command_log: list[DawCommandResult] = field(default_factory=list)
     prepare_state: str = "none"
+    # Channel topology: None means "not yet configured" (use build_default_topology)
+    topology: Any = None  # TopologyMapping | None — typed as Any to avoid circular import
+    output_tracks: list[TrackContext] = field(default_factory=list)
+    transfer_manifest: list[TransferEntry] = field(default_factory=list)
+    base_transfer_manifest: list[TransferEntry] = field(default_factory=list)
 
 
 @dataclass

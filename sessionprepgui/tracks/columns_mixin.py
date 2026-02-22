@@ -214,90 +214,128 @@ class TrackColumnsMixin:
         self._auto_fit_track_table()
 
     def _populate_setup_table(self):
-        """Refresh the Session Setup track table from the current session."""
+        """Refresh the Session Setup track table from the transfer manifest."""
         if not self._session:
             return
+        self._setup_table_populating = True
         self._setup_table.setSortingEnabled(False)
         self._setup_table.setRowCount(0)
 
-        ok_tracks = [t for t in self._session.tracks if t.status == "OK"]
-        self._setup_table.setRowCount(len(ok_tracks))
+        manifest = self._session.transfer_manifest
+        if not manifest:
+            return
+
+        # Build lookup: output_filename → TrackContext from output_tracks
+        out_map: dict[str, Any] = {
+            t.filename: t for t in self._session.output_tracks
+        }
+
+        self._setup_table.setRowCount(len(manifest))
         gcm = self._group_color_map()
         gcm_rank = self._group_rank_map()
         glm = self._gain_linked_map()
 
-        # Determine which tracks are assigned to a DAW folder
+        # Determine which entries are assigned to a DAW folder
         assignments = {}
         if self._session.daw_state and self._active_daw_processor:
             dp_state = self._session.daw_state.get(
                 self._active_daw_processor.id, {})
             assignments = dp_state.get("assignments", {})
 
-        for row, track in enumerate(ok_tracks):
+        for row, entry in enumerate(manifest):
+            track = out_map.get(entry.output_filename)
             pr = (
                 next(iter(track.processor_results.values()), None)
-                if track.processor_results
+                if track and track.processor_results
                 else None
             )
-            # Column 0: checkmark (assigned to folder?)
-            assigned = track.filename in assignments
+            # Column 0: track name (editable)
+            tn_item = _SortableItem(
+                entry.daw_track_name,
+                protools_sort_key(entry.daw_track_name))
+            tn_item.setForeground(QColor(COLORS["text"]))
+            tn_item.setFlags(tn_item.flags() | Qt.ItemIsEditable)
+            # Store entry_id in UserRole for drag-drop and assignment lookups
+            tn_item.setData(Qt.UserRole, entry.entry_id)
+            self._setup_table.setItem(row, 0, tn_item)
+
+            # Column 1: assigned checkmark
+            assigned = entry.entry_id in assignments
             chk_item = _SortableItem("✓" if assigned else "", int(not assigned))
+            chk_item.setFlags(chk_item.flags() & ~Qt.ItemIsEditable)
             if assigned:
                 chk_item.setForeground(QColor(COLORS["clean"]))
-            self._setup_table.setItem(row, 0, chk_item)
+            self._setup_table.setItem(row, 1, chk_item)
 
-            # Column 1: filename
+            # Column 2: filename (output_filename from manifest)
             fname_item = _SortableItem(
-                track.filename, protools_sort_key(track.filename))
+                entry.output_filename,
+                protools_sort_key(entry.output_filename))
             fname_item.setForeground(FILE_COLOR_OK)
-            self._setup_table.setItem(row, 1, fname_item)
+            fname_item.setFlags(fname_item.flags() & ~Qt.ItemIsEditable)
+            fname_item.setData(Qt.UserRole, entry.entry_id)
+            self._setup_table.setItem(row, 2, fname_item)
 
-            # Column 2: channels
-            ch_item = _SortableItem(str(track.channels), track.channels)
+            # Column 3: channels
+            channels = track.channels if track else 0
+            ch_item = _SortableItem(str(channels), channels)
+            ch_item.setFlags(ch_item.flags() & ~Qt.ItemIsEditable)
             ch_item.setForeground(QColor(COLORS["dim"]))
-            self._setup_table.setItem(row, 2, ch_item)
+            self._setup_table.setItem(row, 3, ch_item)
 
-            # Column 3: clip gain
+            # Column 4: clip gain
             clip_gain = pr.gain_db if pr else 0.0
             cg_item = _SortableItem(f"{clip_gain:+.1f} dB", clip_gain)
+            cg_item.setFlags(cg_item.flags() & ~Qt.ItemIsEditable)
             cg_item.setForeground(QColor(COLORS["text"]))
-            self._setup_table.setItem(row, 3, cg_item)
+            self._setup_table.setItem(row, 4, cg_item)
 
-            # Column 4: fader gain
+            # Column 5: fader gain
             fader_gain = pr.data.get("fader_offset", 0.0) if pr else 0.0
             fg_item = _SortableItem(f"{fader_gain:+.1f} dB", fader_gain)
+            fg_item.setFlags(fg_item.flags() & ~Qt.ItemIsEditable)
             fg_item.setForeground(QColor(COLORS["text"]))
-            self._setup_table.setItem(row, 4, fg_item)
+            self._setup_table.setItem(row, 5, fg_item)
 
-            # Column 5: group (read-only, with link indicator)
-            grp_label = self._group_display_name(track.group, glm) if track.group else ""
-            grp_rank = gcm_rank.get(track.group, len(gcm_rank)) if track.group else len(gcm_rank)
+            # Column 6: group (read-only, with link indicator)
+            grp = entry.group
+            grp_label = self._group_display_name(grp, glm) if grp else ""
+            grp_rank = gcm_rank.get(grp, len(gcm_rank)) if grp else len(gcm_rank)
             grp_item = _SortableItem(grp_label, grp_rank)
+            grp_item.setFlags(grp_item.flags() & ~Qt.ItemIsEditable)
             grp_item.setForeground(QColor(COLORS["text"]))
-            self._setup_table.setItem(row, 5, grp_item)
+            self._setup_table.setItem(row, 6, grp_item)
 
             # Row background from group color
-            self._apply_row_group_color(row, track.group, gcm,
+            self._apply_row_group_color(row, grp, gcm,
                                         table=self._setup_table)
 
         self._setup_table.setSortingEnabled(True)
+        self._setup_table_populating = False
 
         # Auto-fit columns to content
         sh = self._setup_table.horizontalHeader()
         for col in range(self._setup_table.columnCount()):
             sh.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         self._setup_table.resizeColumnsToContents()
-        sh.setSectionResizeMode(0, QHeaderView.Fixed)
-        sh.resizeSection(0, 24)
-        sh.setSectionResizeMode(1, QHeaderView.Stretch)
-        sh.setSectionResizeMode(2, QHeaderView.Fixed)
-        for col in range(3, self._setup_table.columnCount()):
+        sh.setSectionResizeMode(0, QHeaderView.Stretch)
+        sh.setSectionResizeMode(1, QHeaderView.Fixed)
+        sh.resizeSection(1, 24)
+        sh.setSectionResizeMode(2, QHeaderView.Interactive)
+        sh.setSectionResizeMode(3, QHeaderView.Fixed)
+        for col in range(4, self._setup_table.columnCount()):
             sh.setSectionResizeMode(col, QHeaderView.Interactive)
 
     # ── Classification override helpers ───────────────────────────────────
 
     def _style_classification_combo(self, combo: QComboBox, cls_text: str):
-        """Apply classification-specific color to a combo box."""
+        """Apply classification-specific color to a combo box.
+
+        On initial creation this works fine via setStyleSheet, but dynamic
+        updates on a combo already embedded via setCellWidget don't repaint
+        on Windows/Fusion.  Callers that need a visual update after the
+        initial creation should use _replace_classification_combo instead.
+        """
         if cls_text == "Transient":
             color = FILE_COLOR_TRANSIENT.name()
         elif cls_text == "Sustained":
@@ -305,6 +343,20 @@ class TrackColumnsMixin:
         else:
             color = FILE_COLOR_SILENT.name()
         combo.setStyleSheet(f"QComboBox {{ color: {color}; font-weight: bold; }}")
+
+    def _replace_classification_combo(self, row: int, cls_text: str, fname: str):
+        """Recreate the classification combo at *row* with the correct color."""
+        combo = BatchComboBox()
+        combo.addItems(["Transient", "Sustained", "Skip"])
+        combo.blockSignals(True)
+        combo.setCurrentText(cls_text)
+        combo.blockSignals(False)
+        combo.setProperty("track_filename", fname)
+        self._style_classification_combo(combo, cls_text)
+        combo.textActivated.connect(
+            lambda text, c=combo: self._on_classification_changed(text, c))
+        self._track_table.setCellWidget(row, 3, combo)
+        return combo
 
     def _on_classification_changed(self, text: str, combo=None):
         """Handle user changing the classification dropdown."""
@@ -335,7 +387,9 @@ class TrackColumnsMixin:
             track.classification_override = text
             # Single-track sync path
             self._recalculate_processor(track)
-            self._style_classification_combo(combo, text)
+            row = self._find_table_row(fname)
+            if row >= 0:
+                self._replace_classification_combo(row, text, fname)
             self._update_track_row(fname)
             self._refresh_file_tab(track)
         self._mark_prepare_stale()
@@ -734,7 +788,9 @@ class TrackColumnsMixin:
         pr = next(iter(track.processor_results.values()), None)
         new_gain = pr.gain_db if pr else 0.0
         base_cls = None
-        if pr:
+        if track.classification_override:
+            base_cls = track.classification_override
+        elif pr:
             cls_text = pr.classification or "Unknown"
             if "Transient" in cls_text:
                 base_cls = "Transient"
@@ -756,12 +812,7 @@ class TrackColumnsMixin:
             gain_sort._sort_key = new_gain
 
         if base_cls is not None:
-            cls_combo = self._track_table.cellWidget(row, 3)
-            if isinstance(cls_combo, QComboBox):
-                cls_combo.blockSignals(True)
-                cls_combo.setCurrentText(base_cls)
-                cls_combo.blockSignals(False)
-                self._style_classification_combo(cls_combo, base_cls)
+            self._replace_classification_combo(row, base_cls, track.filename)
             sort_item = self._track_table.item(row, 3)
             if sort_item:
                 sort_item.setText(base_cls)
