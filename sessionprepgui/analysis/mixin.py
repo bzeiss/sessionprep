@@ -218,6 +218,8 @@ class AnalysisMixin:
         self._session_config = None  # reset session overrides for new directory
         self._session_groups = []
         self._groups_tab_table.setRowCount(0)
+        self._folder_tree.clear()
+        self._setup_right_stack.setCurrentIndex(0)  # placeholder page
 
         wav_files = sorted(
             (f for f in os.listdir(path)
