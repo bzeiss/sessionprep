@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 from sessionpreplib.audio import AUDIO_EXTENSIONS, discover_track
 from sessionpreplib.config import default_config, flatten_structured_config
 from sessionpreplib.detectors import default_detectors
-from sessionpreplib.models import SessionContext
+from sessionpreplib.models import SessionContext, TrackContext
 from sessionpreplib.processors import default_processors
 from sessionpreplib.topology import build_default_topology
 from sessionpreplib.utils import protools_sort_key
@@ -453,6 +453,49 @@ class AnalysisMixin:
             topo_dir = os.path.join(source_dir, output_folder)
             if os.path.isdir(topo_dir):
                 self._topology_dir = topo_dir
+
+        # ── Reconstruct output_tracks from topology + disk ───────────────
+        # output_tracks are not persisted in the session file, but the DAW
+        # transfer needs them for file paths.  Rebuild from topology entries
+        # and the files that exist on disk.
+        if self._topology_dir and self._topo_topology:
+            import soundfile as sf
+            prep_folder = self._config.get("app", {}).get(
+                "phase2_output_folder", "sp_02_processed")
+            prep_dir = os.path.join(source_dir, prep_folder)
+            # Build group lookup from transfer manifest so output_tracks
+            # carry the group for folder-tree coloring and DAW transfer.
+            manifest_group: dict[str, str | None] = {
+                e.output_filename: e.group
+                for e in session.transfer_manifest
+            }
+            rebuilt: list[TrackContext] = []
+            for entry in self._topo_topology.entries:
+                topo_path = os.path.join(self._topology_dir,
+                                         entry.output_filename)
+                if not os.path.isfile(topo_path):
+                    continue
+                try:
+                    info = sf.info(topo_path)
+                except Exception:
+                    continue
+                proc_path = os.path.join(prep_dir, entry.output_filename)
+                out_tc = TrackContext(
+                    filename=entry.output_filename,
+                    filepath=topo_path,
+                    audio_data=None,
+                    samplerate=info.samplerate,
+                    channels=info.channels,
+                    total_samples=info.frames,
+                    bitdepth=str(info.subtype_info) if hasattr(info, 'subtype_info') else "",
+                    subtype=info.subtype,
+                    duration_sec=info.duration,
+                    processed_filepath=(
+                        proc_path if os.path.isfile(proc_path) else None),
+                )
+                out_tc.group = manifest_group.get(entry.output_filename)
+                rebuilt.append(out_tc)
+            session.output_tracks = rebuilt
 
         # ── Enable post-analysis UI ───────────────────────────────────────────
         self._right_stack.setCurrentIndex(_PAGE_TABS)
