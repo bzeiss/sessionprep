@@ -18,6 +18,9 @@ ICON_DIR = os.path.join(BASE_DIR, "sessionprepgui", "res")
 DIST_PYINSTALLER = "dist_pyinstaller"
 DIST_NUITKA = "dist_nuitka"
 
+# macOS app bundle display name (CFBundleName / .app directory name)
+MACOS_APP_NAME = "SessionPrep"
+
 # Platform Logic
 _PLATFORM_SUFFIXES = {
     "Windows": "win",

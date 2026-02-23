@@ -79,16 +79,25 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew install create-dmg
+          SUFFIX=$(python3 -c "from build_conf import get_platform_suffix; print(get_platform_suffix())")
           for app in dist_pyinstaller/*.app; do
             [ -d "$app" ] || continue
             name=$(basename "$app" .app)
+            dmg_name="${name}-${SUFFIX}"
+            # create-dmg uses source folder contents as DMG root,
+            # so stage the .app inside a temporary directory
+            STAGING=$(mktemp -d)
+            cp -R "$app" "$STAGING/"
             create-dmg \
               --volname "$name" \
               --app-drop-link 600 185 \
               --sandbox-safe \
-              "dist_pyinstaller/${name}.dmg" \
-              "$app"
+              "dist_pyinstaller/${dmg_name}.dmg" \
+              "$STAGING"
+            rm -rf "$STAGING"
           done
+          # Clean up temporary read-write DMG files left by create-dmg
+          rm -f dist_pyinstaller/rw.*.dmg
 
       - name: Upload Artifacts (Windows)
         if: runner.os == 'Windows'
