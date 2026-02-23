@@ -10,7 +10,7 @@ import os
 import shutil
 import subprocess
 import argparse
-from build_conf import TARGETS, BASE_DIR, DIST_NUITKA
+from build_conf import TARGETS, BASE_DIR, DIST_NUITKA, MACOS_APP_NAME
 
 def _check_dependencies(target_key):
     """Ensure required packages for the target are installed."""
@@ -61,6 +61,7 @@ def run_nuitka(target_key, clean=False):
             # GUI on macOS: produce a proper .app bundle instead of a bare onefile binary
             cmd.remove("--onefile")
             cmd.append("--macos-create-app-bundle")
+            cmd.append(f"--macos-app-name={MACOS_APP_NAME}")
             icon_path = target.get("icon")
             if icon_path and os.path.isfile(icon_path):
                 cmd.append(f"--macos-app-icon={icon_path}")
@@ -103,9 +104,16 @@ def run_nuitka(target_key, clean=False):
             print(f"        Renaming {bin_path} -> {output_exe}")
             os.rename(bin_path, output_exe)
     
-    # On macOS GUI, output is a .app bundle (directory), not a single file
-    app_bundle = os.path.join(dist_dir, f"{os.path.splitext(target['name'])[0]}.app")
-    if sys.platform == "darwin" and not target["console"] and os.path.isdir(app_bundle):
+    # On macOS GUI, output is a .app bundle (directory), not a single file.
+    # Nuitka names the bundle from the script name, not --output-filename.
+    # Rename it to MACOS_APP_NAME for a clean user-facing name.
+    script_stem = os.path.splitext(os.path.basename(target["script"]))[0]
+    nuitka_bundle = os.path.join(dist_dir, f"{script_stem}.app")
+    app_bundle = os.path.join(dist_dir, f"{MACOS_APP_NAME}.app")
+    if sys.platform == "darwin" and not target["console"] and os.path.isdir(nuitka_bundle):
+        if os.path.exists(app_bundle):
+            shutil.rmtree(app_bundle)
+        os.rename(nuitka_bundle, app_bundle)
         print(f"[SUCCESS] Built {app_bundle}")
     elif os.path.isfile(output_exe):
         print(f"[SUCCESS] Built {output_exe}")

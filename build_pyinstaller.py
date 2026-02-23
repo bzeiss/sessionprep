@@ -13,7 +13,7 @@ import subprocess
 import sys
 import platform
 
-from build_conf import TARGETS, BASE_DIR, DIST_PYINSTALLER
+from build_conf import TARGETS, BASE_DIR, DIST_PYINSTALLER, MACOS_APP_NAME
 
 DIST_DIR = os.path.join(BASE_DIR, DIST_PYINSTALLER)
 
@@ -91,6 +91,13 @@ def build(target_key: str, onefile: bool = False):
 
     is_macos = platform.system() == "Darwin"
     windowed = target.get("pyinstaller_windowed", False)
+    macos_app = is_macos and windowed
+
+    # On macOS GUI, override --name so the .app bundle and CFBundleName
+    # use the display name (e.g. "SessionPrep") instead of the platform-
+    # suffixed executable name.
+    if macos_app:
+        cmd[cmd.index(app_name)] = MACOS_APP_NAME
 
     if windowed:
         cmd.append("--windowed")
@@ -98,10 +105,10 @@ def build(target_key: str, onefile: bool = False):
         cmd.append("--console")
 
     # macOS: --onefile + --windowed is deprecated.
-    if onefile and not (is_macos and windowed):
+    if onefile and not macos_app:
         cmd.append("--onefile")
     else:
-        if onefile and is_macos and windowed:
+        if onefile and macos_app:
             print("Note: macOS GUI always builds as onedir (.app bundle — DMG created by workflow)")
         cmd.append("--onedir")
 
@@ -116,18 +123,30 @@ def build(target_key: str, onefile: bool = False):
         return False
 
     # Check for output
-    if onefile:
+    if macos_app:
+        # PyInstaller creates MACOS_APP_NAME.app inside DIST_DIR
+        bundle_path = os.path.join(DIST_DIR, f"{MACOS_APP_NAME}.app")
+        if os.path.isdir(bundle_path):
+            print(f"\nBuild successful: {bundle_path}")
+        else:
+            print(f"\nBuild completed but .app bundle not found at: {bundle_path}")
+    elif onefile:
         exe_path = os.path.join(DIST_DIR, app_name_ext)
+        if os.path.isfile(exe_path):
+            size_mb = os.path.getsize(exe_path) / (1024 * 1024)
+            print(f"\nBuild successful: {exe_path}")
+            print(f"Size: {size_mb:.1f} MB")
+        else:
+            print(f"\nBuild completed but executable not found at expected path: {exe_path}")
     else:
         # Onedir puts it in dist/APP_NAME/APP_NAME_EXT
         exe_path = os.path.join(DIST_DIR, app_name, app_name_ext)
-
-    if os.path.isfile(exe_path):
-        size_mb = os.path.getsize(exe_path) / (1024 * 1024)
-        print(f"\nBuild successful: {exe_path}")
-        print(f"Size: {size_mb:.1f} MB")
-    else:
-        print(f"\nBuild completed but executable not found at expected path: {exe_path}")
+        if os.path.isfile(exe_path):
+            size_mb = os.path.getsize(exe_path) / (1024 * 1024)
+            print(f"\nBuild successful: {exe_path}")
+            print(f"Size: {size_mb:.1f} MB")
+        else:
+            print(f"\nBuild completed but executable not found at expected path: {exe_path}")
 
     return True
 
