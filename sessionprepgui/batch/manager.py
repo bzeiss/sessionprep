@@ -185,6 +185,20 @@ class BatchManager(QObject):
         if state_dict.get("session_config"):
             from sessionpreplib.config import flatten_structured_config
             flat_config.update(flatten_structured_config(state_dict["session_config"]))
+            
+        # Re-inject the saved groups and colors for the DAW processor to use
+        # (This matches what _do_daw_transfer does before calling the worker)
+        flat_config.setdefault("gui", {})["groups"] = state_dict.get("session_groups", [])
+        
+        # Colors must come from the global config. The manager receives the main window reference,
+        # so we can fetch the active global colors from it.
+        from sessionprepgui.theme import PT_DEFAULT_COLORS
+        if self._main_window and hasattr(self._main_window, "_config"):
+            colors = self._main_window._config.get("colors", PT_DEFAULT_COLORS)
+        else:
+            colors = PT_DEFAULT_COLORS
+        flat_config["gui"]["colors"] = colors
+        
         flat_config["_source_dir"] = source_dir
 
         all_detectors = default_detectors()
