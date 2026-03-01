@@ -203,16 +203,29 @@ class DawProjectDawProcessor(DawProcessor):
         Returns the chosen path, or ``None`` if the user cancelled.
         """
         from PySide6.QtWidgets import QFileDialog
+        import os
 
         source_dir = session.config.get("_source_dir", "")
         output_folder = session.config.get("_output_folder", "sp_02_prepared")
         output_dir = os.path.join(source_dir, output_folder) if source_dir else ""
 
-        safe_name = self._template_name or self.name or "dawproject"
+        # Use project name if set, otherwise fallback to template name
+        safe_name = session.project_name if getattr(session, "project_name", "") else (self._template_name or self.name or "dawproject")
         safe_name = "".join(
             c if c.isalnum() or c in " _-" else "_" for c in safe_name)
         default_path = os.path.join(output_dir, f"{safe_name}.dawproject") \
             if output_dir else f"{safe_name}.dawproject"
+
+        # If in batch mode, we do NOT want a blocking dialog
+        batch_mode = False
+        if parent_widget:
+            batch_action = getattr(parent_widget, "_batch_mode_action", None)
+            if batch_action and batch_action.isChecked():
+                batch_mode = True
+
+        if batch_mode:
+            # Just return the computed path directly, do not block with a dialog.
+            return default_path
 
         path, _ = QFileDialog.getSaveFileName(
             parent_widget, "Save DAWproject", default_path,
