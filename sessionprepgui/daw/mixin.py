@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from PySide6.QtCore import Qt, Slot, QSize, QTimer
@@ -391,8 +392,17 @@ class DawMixin:
         self._update_daw_lifecycle_buttons()
 
     def _on_project_name_changed(self, text: str):
+        # Basic sanitization: remove characters invalid for Windows filenames
+        sanitized = "".join(c for c in text if c not in '<>:"/\\|?*').strip()
+        if sanitized != text:
+            self._project_name_edit.blockSignals(True)
+            cursor_pos = self._project_name_edit.cursorPosition()
+            self._project_name_edit.setText(sanitized)
+            self._project_name_edit.setCursorPosition(max(0, cursor_pos - 1))
+            self._project_name_edit.blockSignals(False)
+            
         if self._session:
-            self._session.project_name = text.strip()
+            self._session.project_name = sanitized
 
     # ── Use Processed checkbox ──────────────────────────────────────────
 
@@ -422,16 +432,48 @@ class DawMixin:
 
     @Slot()
     def _on_daw_transfer(self):
+        import os
         if not self._active_daw_processor or not self._session:
             return
             
-        # Validate Project Name
-        if not self._project_name_edit.text().strip():
+        # 1. Project Name Validation
+        project_name = self._project_name_edit.text().strip()
+        if not project_name:
             QMessageBox.warning(
                 self, "Project Name Required",
                 "Please enter a Project Name before clicking Create."
             )
             return
+
+        # 2. Target Directory Validation (Pro Tools specific)
+        if self._active_daw_processor.id.startswith("protools"):
+            flat_config = self._flat_config()
+            project_dir = flat_config.get("protools_project_dir", "").strip()
+            
+            if not project_dir:
+                QMessageBox.critical(
+                    self, "Project Directory Not Set",
+                    "A 'Project directory' must be configured in Pro Tools preferences before creating a project."
+                )
+                return
+                
+            if not os.path.isdir(project_dir):
+                QMessageBox.critical(
+                    self, "Project Directory Not Found",
+                    f"The configured project directory does not exist:\n\n{project_dir}\n\n"
+                    "Please create it or specify a different directory in Preferences."
+                )
+                return
+
+            # 3. Collision Check
+            target_path = os.path.join(project_dir, project_name)
+            if os.path.exists(target_path):
+                QMessageBox.warning(
+                    self, "Project Already Exists",
+                    f"A folder named '{project_name}' already exists in the project directory.\n\n"
+                    "Please choose a different project name."
+                )
+                return
 
         self._transfer_action.setEnabled(False)
         self._fetch_action.setEnabled(False)

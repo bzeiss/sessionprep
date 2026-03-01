@@ -167,6 +167,8 @@ def get_session_audio_dir(engine) -> str:
 def create_session_from_template(
     engine, session_name: str, session_location: str,
     template_group: str, template_name: str,
+    sample_rate: str = "SR_48000",
+    bit_depth: str = "Bit24",
 ) -> None:
     """Create a new Pro Tools session from a template.
     
@@ -184,8 +186,8 @@ def create_session_from_template(
         "template_group": template_group,
         "template_name": template_name,
         "file_type": "FT_WAVE",
-        "sample_rate": "SR_48000",
-        "bit_depth": "Bit24",
+        "sample_rate": sample_rate,
+        "bit_depth": bit_depth,
         "input_output_settings": "IO_Last",
         "is_interleaved": True,
         "is_cloud_project": False,

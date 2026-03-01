@@ -5,6 +5,9 @@ from __future__ import annotations
 import math
 import os
 import time
+import uuid
+import shutil
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -403,31 +406,56 @@ class ProToolsDawProcessor(DawProcessor):
             address=address,
         )
 
+    def _get_optimal_session_specs(self, session: SessionContext) -> tuple[str, str]:
+        """Determine most common sample rate and bit depth from output tracks.
+        
+        Returns (sample_rate_enum, bit_depth_enum).
+        """
+        from collections import Counter
+        
+        rates = [t.samplerate for t in session.output_tracks if t.samplerate > 0]
+        # bitdepth is string, e.g. "PCM_24". Try to extract numeric part.
+        depths = []
+        for t in session.output_tracks:
+            bd = str(t.bitdepth).upper()
+            if "32" in bd: depths.append(32)
+            elif "24" in bd: depths.append(24)
+            elif "16" in bd: depths.append(16)
+
+        # Default fallback
+        common_rate = Counter(rates).most_common(1)[0][0] if rates else 48000
+        common_depth = Counter(depths).most_common(1)[0][0] if depths else 24
+
+        rate_map = {
+            44100: "SR_44100", 48000: "SR_48000", 88200: "SR_88200", 
+            96000: "SR_96000", 176400: "SR_176400", 192000: "SR_192000"
+        }
+        depth_map = {16: "Bit16", 24: "Bit24", 32: "Bit32Float"}
+
+        return (rate_map.get(common_rate, "SR_48000"), 
+                depth_map.get(common_depth, "Bit24"))
+
     def transfer(
         self,
         session: SessionContext,
         output_path: str,
         progress_cb=None,
     ) -> list[DawCommandResult]:
-        """Import assigned tracks into Pro Tools folders and colorize.
-
-        Uses a PTSL batch job to wrap all operations, providing a
-        modal progress dialog in Pro Tools and preventing user
-        interaction during the transfer.
+        """Create a new Pro Tools session from a template and import audio.
 
         The transfer is structured in phases:
-          0. Setup (palette, session path) — before batch job
-          1. Create batch job
+          0. Connect and verify empty workspace
+          1. Determine optimal specs and create new session
           2. Batch import all audio files in one call
           3. Per-track: create track + spot clip  (parallel, 6 workers)
           4. Batch colorize by group
-          4.5. Set fader offsets (when using processed files)
-          5. Complete batch job
+          5. Set fader offsets
+          6. Complete and save session
 
         Args:
             session: The current session context.
-            progress_cb: Optional callable(current, total, message) for
-                progress reporting.
+            output_path: Not used for Pro Tools (it uses internal prefs).
+            progress_cb: Optional callable(current, total, message).
 
         Returns:
             List of DawCommandResult for each operation attempted.
@@ -446,8 +474,7 @@ class ProToolsDawProcessor(DawProcessor):
         assignments: dict[str, str] = pt_state.get("assignments", {})
         folders = pt_state.get("folders", [])
         track_order = pt_state.get("track_order", {})
-        dbg(f"assignments={len(assignments)}, "
-            f"folders={len(folders)}, track_order={len(track_order)}")
+        
         if not assignments:
             dbg("No assignments, returning early")
             return []
@@ -471,23 +498,58 @@ class ProToolsDawProcessor(DawProcessor):
             if eid not in seen:
                 work.append((eid, fid))
 
-        total = len(work)
-        dbg(f"work list: {total} items")
         results: list[DawCommandResult] = []
         engine = None
         delay = self._command_delay
         batch_job_id: str | None = None
 
         try:
-            dbg("Opening engine...")
+            if progress_cb:
+                progress_cb(0, 100, "Connecting to Pro Tools...")
             engine = self._open_engine()
-            dbg("Engine opened")
 
-            # ── Setup (before batch job) ─────────────────────────
+            # ── 0. Setup & Safety Checks ─────────────────────────
 
+            if not self._project_dir:
+                raise RuntimeError("Pro Tools 'Project directory' is not configured.")
+            if not os.path.isdir(self._project_dir):
+                raise RuntimeError(f"Pro Tools 'Project directory' does not exist: {self._project_dir}")
+            if not session.project_name:
+                raise RuntimeError("Project name is empty.")
+
+            if ptslh.is_session_open(engine):
+                raise RuntimeError("PRO_TOOLS_SESSION_OPEN")
+
+            if progress_cb:
+                progress_cb(5, 100, "Calculating audio specifications...")
+            
+            rate_enum, depth_enum = self._get_optimal_session_specs(session)
+
+            # ── 1. Create New Session ────────────────────────────
+
+            if progress_cb:
+                progress_cb(10, 100, f"Creating session '{session.project_name}'...")
+
+            try:
+                ptslh.create_session_from_template(
+                    engine,
+                    session.project_name,
+                    self._project_dir,
+                    self._instance_group,
+                    self._instance_name,
+                    sample_rate=rate_enum,
+                    bit_depth=depth_enum
+                )
+                results.append(DawCommandResult(
+                    command=DawCommand("create_session", session.project_name, {}),
+                    success=True))
+            except Exception as e:
+                return [DawCommandResult(
+                    command=DawCommand("create_session", session.project_name, {}),
+                    success=False, error=str(e))]
+
+            # Re-fetch color palette from the new session
             pt_palette = ptslh.get_color_palette(engine)
-
-            # Pre-compute group → palette index
             group_palette_idx: dict[str, int] = {}
             if pt_palette:
                 for entry in session.transfer_manifest:
@@ -500,84 +562,44 @@ class ProToolsDawProcessor(DawProcessor):
                                 group_palette_idx[entry.group] = idx
 
             audio_files_dir = ptslh.get_session_audio_dir(engine)
-            dbg(f"Setup done: palette={len(pt_palette)}, "
-                f"audio_dir={audio_files_dir}")
 
-            # Validate work items and collect filepaths for batch import
-            # valid_work: [(entry_id, fid, filepath, track_stem, track_format, out_tc)]
+            # Validate work items and collect filepaths
             valid_work: list[tuple[str, str, str, str, str, Any]] = []
             for eid, fid in work:
                 folder = folder_map.get(fid)
-                if not folder:
-                    results.append(DawCommandResult(
-                        command=DawCommand("import_to_clip_list", eid,
-                                           {"folder_id": fid}),
-                        success=False, error=f"Folder {fid} not found"))
-                    continue
+                if not folder: continue
                 entry = manifest_map.get(eid)
-                if not entry:
-                    results.append(DawCommandResult(
-                        command=DawCommand("import_to_clip_list", eid,
-                                           {"folder_name": folder["name"]}),
-                        success=False,
-                        error=f"Manifest entry {eid} not found"))
-                    continue
+                if not entry: continue
                 out_tc = out_track_map.get(entry.output_filename)
-                audio_path = (
-                    out_tc.processed_filepath or out_tc.filepath
-                ) if out_tc else None
-                if not out_tc or not audio_path:
-                    results.append(DawCommandResult(
-                        command=DawCommand("import_to_clip_list", eid,
-                                           {"folder_name": folder["name"]}),
-                        success=False,
-                        error=f"Output track not found for {entry.output_filename}"))
-                    continue
+                audio_path = (out_tc.processed_filepath or out_tc.filepath) if out_tc else None
+                if not out_tc or not audio_path: continue
+                
                 filepath = os.path.abspath(audio_path)
                 track_stem = os.path.splitext(entry.daw_track_name)[0]
-                track_format = (
-                    "TF_Mono" if out_tc.channels == 1 else "TF_Stereo")
-                valid_work.append(
-                    (eid, fid, filepath, track_stem, track_format, out_tc))
+                track_format = ("TF_Mono" if out_tc.channels == 1 else "TF_Stereo")
+                valid_work.append((eid, fid, filepath, track_stem, track_format, out_tc))
 
             if not valid_work:
-                dbg("No valid work items, returning early")
+                dbg("No valid work items")
                 return results
 
-            total = len(valid_work)
-            dbg(f"{total} valid work items")
-
-            # ── Create batch job ───────────────────────────────
+            # ── 2. Batch Import ──────────────────────────────────
 
             batch_job_id = ptslh.create_batch_job(
-                engine, "SessionPrep Transfer",
-                f"Importing {total} tracks")
-
-            # ── Batch import all files ─────────────────────────
+                engine, "SessionPrep Create", f"Importing {len(valid_work)} tracks")
 
             if progress_cb:
-                progress_cb(0, total, "Importing audio to clip list…")
+                progress_cb(20, 100, "Importing audio to clip list...")
 
-            # Deduplicate: multiple manifest entries may share the same file
-            all_filepaths = list(dict.fromkeys(
-                fp for _, _, fp, _, _, _ in valid_work))
-            clip_cmd = DawCommand(
-                "batch_import_to_clip_list", "",
-                {"file_count": len(all_filepaths),
-                 "destination": audio_files_dir})
-
-            # filepath → list[clip_id]
+            all_filepaths = list(dict.fromkeys(fp for _, _, fp, _, _, _ in valid_work))
             clip_id_map: dict[str, list[str]] = {}
             import_failures: set[str] = set()
-            dbg(f"Batch importing {len(all_filepaths)} files...")
+            
             try:
                 import_resp = ptslh.batch_import_audio(
-                    engine, all_filepaths,
-                    batch_job_id=batch_job_id, progress=5)
-                dbg(f"Import response: {import_resp}")
+                    engine, all_filepaths, batch_job_id=batch_job_id, progress=25)
                 time.sleep(delay)
 
-                # Map response entries back by original_input_path
                 if import_resp:
                     for entry in import_resp.get("file_list", []):
                         orig = entry.get("original_input_path", "")
@@ -585,220 +607,99 @@ class ProToolsDawProcessor(DawProcessor):
                         if dest_list:
                             ids = dest_list[0].get("clip_id_list", [])
                             if ids:
-                                # Normalize path case — PT returns
-                                # lowercase drive letters on Windows
-                                clip_id_map[os.path.normcase(orig)] = \
-                                    list(ids)
-
+                                clip_id_map[os.path.normcase(orig)] = list(ids)
                     for fail in import_resp.get("failure_list", []):
                         fail_path = fail.get("original_input_path", "")
                         import_failures.add(os.path.normcase(fail_path))
-
-                dbg(f"clip_id_map: {len(clip_id_map)} entries, "
-                    f"failures: {len(import_failures)}")
+                
                 results.append(DawCommandResult(
-                    command=clip_cmd, success=True))
+                    command=DawCommand("batch_import", "", {}), success=True))
             except Exception as e:
-                dbg(f"Batch import FAILED: {e}")
-                results.append(DawCommandResult(
-                    command=clip_cmd, success=False, error=str(e)))
-                # Cannot continue without clip IDs
-                if batch_job_id:
-                    ptslh.cancel_batch_job(engine, batch_job_id)
-                    batch_job_id = None
-                session.daw_command_log.extend(results)
-                return results
+                if batch_job_id: ptslh.cancel_batch_job(engine, batch_job_id)
+                return [DawCommandResult(command=DawCommand("batch_import", "", {}), 
+                                         success=False, error=str(e))]
 
-            # ── Per-track create + spot (parallel) ──────────────────
+            # ── 3. Parallel Track Creation + Spot ────────────────
 
-            # Collect created track stems by color_index for batch colorize
             color_groups: dict[int, list[str]] = {}
-            # Collect (track_stem, track_id, tc) for fader setting
             created_tracks: list[tuple[str, str, Any]] = []
-
-            # Filter out tracks whose import failed before submitting
-            spot_work: list[tuple[int, str, str, str, str, str, Any, list[str]]] = []
-            for step, (fname, fid, filepath, track_stem, track_format,
-                       tc) in enumerate(valid_work):
+            spot_work = []
+            for step, (fname, fid, filepath, track_stem, track_format, tc) in enumerate(valid_work):
                 clip_ids = clip_id_map.get(os.path.normcase(filepath))
                 if not clip_ids or os.path.normcase(filepath) in import_failures:
-                    results.append(DawCommandResult(
-                        command=DawCommand("create_track", fname,
-                                           {"track_name": track_stem}),
-                        success=False,
-                        error=f"Import failed for {fname}"))
                     continue
-                spot_work.append(
-                    (step, fname, fid, filepath, track_stem,
-                     track_format, tc, clip_ids))
+                spot_work.append((step, fname, fid, filepath, track_stem, track_format, tc, clip_ids))
 
-            def _create_and_spot(
-                item: tuple[int, str, str, str, str, str, Any, list[str]],
-            ) -> tuple[
-                list[DawCommandResult],
-                tuple[str, str, Any] | None,
-                tuple[int, str] | None,
-            ]:
-                """Create one track and spot its clip.  Thread-safe."""
-                (step, fname, fid, filepath, track_stem,
-                 track_format, tc, clip_ids) = item
+            def _create_and_spot(item):
+                (step, fname, fid, filepath, track_stem, track_format, tc, clip_ids) = item
                 folder_name = folder_map[fid]["name"]
-                pct = 10 + int(80 * step / max(total, 1))
-                step_results: list[DawCommandResult] = []
-
-                dbg(f"[{step+1}/{total}] create+spot "
-                    f"{track_stem} -> {folder_name}")
-
-                # --- Create new track inside target folder ---
-                create_cmd = DawCommand(
-                    "create_track", fname,
-                    {"track_name": track_stem,
-                     "folder_name": folder_name,
-                     "format": track_format})
+                pct = 30 + int(50 * step / max(len(valid_work), 1))
+                
                 try:
-                    new_track_id = ptslh.create_track(
-                        engine, track_stem, track_format,
-                        folder_name=folder_name,
-                        batch_job_id=batch_job_id, progress=pct)
-                    dbg(f"  Created track: {new_track_id}")
-                    step_results.append(DawCommandResult(
-                        command=create_cmd, success=True))
+                    tid = ptslh.create_track(engine, track_stem, track_format, 
+                                            folder_name=folder_name, batch_job_id=batch_job_id, progress=pct)
+                    ptslh.spot_clips(engine, clip_ids, tid, batch_job_id=batch_job_id, progress=pct)
+                    
+                    cinfo = (group_palette_idx[tc.group], track_stem) if tc.group in group_palette_idx else None
+                    return True, (track_stem, tid, tc), cinfo, None
                 except Exception as e:
-                    dbg(f"  Create FAILED: {e}")
-                    step_results.append(DawCommandResult(
-                        command=create_cmd, success=False,
-                        error=str(e)))
-                    return step_results, None, None
+                    return False, None, None, str(e)
 
-                # --- Spot clip on the new track at session start ---
-                spot_cmd = DawCommand(
-                    "spot_clip", fname,
-                    {"clip_ids": clip_ids, "track_id": new_track_id})
-                try:
-                    ptslh.spot_clips(
-                        engine, clip_ids, new_track_id,
-                        batch_job_id=batch_job_id, progress=pct)
-                    dbg("  Spotted clip OK")
-                    step_results.append(DawCommandResult(
-                        command=spot_cmd, success=True))
-                except Exception as e:
-                    dbg(f"  Spot FAILED: {e}")
-                    step_results.append(DawCommandResult(
-                        command=spot_cmd, success=False, error=str(e)))
-                    return step_results, None, None
-
-                track_info = (track_stem, new_track_id, tc)
-                color_info: tuple[int, str] | None = None
-                if tc.group in group_palette_idx:
-                    color_info = (group_palette_idx[tc.group], track_stem)
-                return step_results, track_info, color_info
-
-            dbg(f"Submitting {len(spot_work)} create+spot tasks "
-                f"to pool (max_workers=6)")
-            completed = 0
             with ThreadPoolExecutor(max_workers=6) as pool:
-                futures = {
-                    pool.submit(_create_and_spot, item): item
-                    for item in spot_work
-                }
-                for fut in as_completed(futures):
-                    step_results, track_info, color_info = fut.result()
-                    results.extend(step_results)
-                    if track_info:
-                        created_tracks.append(track_info)
-                    if color_info:
-                        cidx, t_stem = color_info
-                        color_groups.setdefault(cidx, []).append(t_stem)
-                    completed += 1
+                futures = [pool.submit(_create_and_spot, item) for item in spot_work]
+                for i, fut in enumerate(as_completed(futures)):
+                    ok, tinfo, cinfo, err = fut.result()
+                    if ok:
+                        created_tracks.append(tinfo)
+                        if cinfo: color_groups.setdefault(cinfo[0], []).append(cinfo[1])
                     if progress_cb:
-                        progress_cb(
-                            completed, len(spot_work),
-                            f"Created {completed}/{len(spot_work)} tracks")
+                        progress_cb(30 + int(50 * i / len(spot_work)), 100, f"Created {i+1}/{len(spot_work)} tracks")
 
-            # ── Batch colorize by group ────────────────────────
+            # ── 4. Colorize ──────────────────────────────────────
 
-            dbg(f"Colorizing {len(color_groups)} groups")
-            for color_idx, track_names in color_groups.items():
-                color_cmd = DawCommand(
-                    "set_track_color", "",
-                    {"color_index": color_idx,
-                     "track_names": track_names})
+            for cidx, names in color_groups.items():
                 try:
-                    ptslh.colorize_tracks(
-                        engine, track_names, color_idx,
-                        batch_job_id=batch_job_id, progress=95)
-                    results.append(DawCommandResult(
-                        command=color_cmd, success=True))
-                except Exception as e:
-                    results.append(DawCommandResult(
-                        command=color_cmd, success=False, error=str(e)))
+                    ptslh.colorize_tracks(engine, names, cidx, batch_job_id=batch_job_id, progress=90)
+                except: pass
 
-            # ── Set fader offsets ──────────────────────────────────
+            # ── 5. Faders ────────────────────────────────────────
 
             proc_id = "bimodal_normalize"
             bn_enabled = session.config.get(f"{proc_id}_enabled", True)
             if bn_enabled:
-                fader_count = 0
                 for t_stem, t_id, tc in created_tracks:
-                    if proc_id in tc.processor_skip:
-                        continue
+                    if proc_id in tc.processor_skip: continue
                     pr = tc.processor_results.get(proc_id)
-                    if not pr or pr.classification in ("Silent", "Skip"):
-                        continue
+                    if not pr or pr.classification in ("Silent", "Skip"): continue
                     fader_db = pr.data.get("fader_offset", 0.0)
-                    if fader_db == 0.0:
-                        continue
-                    fader_cmd = DawCommand(
-                        "set_fader", t_stem,
-                        {"track_id": t_id, "value": fader_db})
+                    if fader_db == 0.0: continue
                     try:
-                        ptslh.set_track_volume(
-                            engine, t_id, fader_db,
-                            batch_job_id=batch_job_id, progress=97)
-                        dbg(f"  Fader {t_stem}: {fader_db:+.1f} dB")
-                        results.append(DawCommandResult(
-                            command=fader_cmd, success=True))
-                        fader_count += 1
-                    except Exception as e:
-                        dbg(f"  Fader {t_stem} FAILED: {e}")
-                        results.append(DawCommandResult(
-                            command=fader_cmd, success=False,
-                            error=str(e)))
-                dbg(f"Fader offsets set on {fader_count} tracks")
+                        ptslh.set_track_volume(engine, t_id, fader_db, batch_job_id=batch_job_id, progress=95)
+                    except: pass
 
-            # ── Complete batch job ──────────────────────────────
+            # ── 6. Save & Close ──────────────────────────────────
 
+            if progress_cb:
+                progress_cb(98, 100, "Saving and closing session...")
+            
             if batch_job_id:
                 ptslh.complete_batch_job(engine, batch_job_id)
                 batch_job_id = None
 
-            # Store transfer snapshot for future sync()
-            pt_state["last_transfer"] = {
-                "assignments": dict(assignments),
-                "track_order": {k: list(v)
-                                for k, v in track_order.items()},
-            }
-            session.daw_command_log.extend(results)
+            try:
+                ptslh.close_session(engine, save_on_close=True)
+                results.append(DawCommandResult(command=DawCommand("close_session", "", {}), success=True))
+            except Exception as e:
+                results.append(DawCommandResult(command=DawCommand("close_session", "", {}), success=False, error=str(e)))
 
         except Exception as e:
-            dbg(f"UNCAUGHT EXCEPTION: {e}")
-            import traceback
-            traceback.print_exc()
-            results.append(DawCommandResult(
-                command=DawCommand("transfer", "", {}),
-                success=False, error=str(e),
-            ))
+            results.append(DawCommandResult(command=DawCommand("create_project", "", {}), success=False, error=str(e)))
         finally:
-            # Cancel batch job if still open (e.g. due to exception)
-            if batch_job_id and engine is not None:
-                ptslh.cancel_batch_job(engine, batch_job_id)
-            if engine is not None:
-                try:
-                    engine.close()
-                except Exception:
-                    pass
+            if batch_job_id and engine: ptslh.cancel_batch_job(engine, batch_job_id)
+            if engine: engine.close()
 
-        dbg(f"transfer() done, {len(results)} results")
+        if progress_cb:
+            progress_cb(100, 100, "Project creation complete")
         return results
 
     def sync(self, session: SessionContext) -> list[DawCommandResult]:
