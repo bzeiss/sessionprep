@@ -478,6 +478,81 @@ class DawProjectTemplatesWidget(QWidget):
 
 
 # ---------------------------------------------------------------------------
+# ProToolsTemplatesWidget
+# ---------------------------------------------------------------------------
+
+class ProToolsTemplatesWidget(QWidget):
+    """Editable table of Pro Tools mix templates."""
+
+    templates_changed = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        layout.addWidget(QLabel("<b>Pro Tools Templates</b>"))
+
+        self._table = QTableWidget()
+        self._table.setColumnCount(1)
+        self._table.setHorizontalHeaderLabels(["Name"])
+        gh = self._table.horizontalHeader()
+        gh.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        gh.setSectionResizeMode(0, QHeaderView.Stretch)
+        self._table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._table.setSelectionMode(QTableWidget.SingleSelection)
+        self._table.cellChanged.connect(lambda r, c: self.templates_changed.emit())
+        layout.addWidget(self._table, 1)
+
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.setSpacing(6)
+        add_btn = QPushButton("Add")
+        add_btn.clicked.connect(self._on_add)
+        btn_row.addWidget(add_btn)
+        remove_btn = QPushButton("Remove")
+        remove_btn.clicked.connect(self._on_remove)
+        btn_row.addWidget(remove_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+    def set_templates(self, templates: list[dict]):
+        self._table.blockSignals(True)
+        self._table.setRowCount(0)
+        self._table.setRowCount(len(templates))
+        for row, tpl in enumerate(templates):
+            self._table.setItem(row, 0, QTableWidgetItem(tpl.get("name", "")))
+        self._table.blockSignals(False)
+
+    def get_templates(self) -> list[dict]:
+        templates: list[dict] = []
+        for row in range(self._table.rowCount()):
+            name_item = self._table.item(row, 0)
+            name = name_item.text().strip() if name_item else ""
+            if name:
+                templates.append({"name": name})
+        return templates
+
+    def _on_add(self):
+        row = self._table.rowCount()
+        self._table.setRowCount(row + 1)
+        self._table.setItem(row, 0, QTableWidgetItem(""))
+        self._table.editItem(self._table.item(row, 0))
+        self.templates_changed.emit()
+
+    def _on_remove(self):
+        row = self._table.currentRow()
+        if row < 0:
+            return
+        self._table.removeRow(row)
+        self.templates_changed.emit()
+
+
+# ---------------------------------------------------------------------------
 # Shared config page builder / loader / reader
 # ---------------------------------------------------------------------------
 
@@ -489,17 +564,17 @@ def build_config_pages(
     *,
     on_processor_enabled: Callable | None = None,
     on_daw_config_changed: Callable | None = None,
-) -> DawProjectTemplatesWidget | None:
+) -> dict[str, QWidget]:
     """Build the common config tree pages (Analysis, Detectors, Processors, DAW Processors).
 
-    Returns the DawProjectTemplatesWidget if created, otherwise None.
+    Returns a dict mapping processor IDs to their custom widgets (e.g. dawproject, protools).
     """
     from sessionpreplib.config import ANALYSIS_PARAMS, PRESENTATION_PARAMS
     from sessionpreplib.detectors import default_detectors
     from sessionpreplib.processors import default_processors
     from sessionpreplib.daw_processors import default_daw_processors
 
-    dawproject_tpl_widget: DawProjectTemplatesWidget | None = None
+    daw_custom_widgets: dict[str, QWidget] = {}
 
     item = QTreeWidgetItem(tree, ["Analysis"])
     item.setFont(0, QFont("", -1, QFont.Bold))
@@ -571,27 +646,39 @@ def build_config_pages(
                 if key == enabled_key and isinstance(widget, QCheckBox):
                     widget.toggled.connect(on_daw_config_changed)
                     break
+        
         if dp.id == "dawproject":
             tpl_widget = DawProjectTemplatesWidget()
             tpl_widget.set_templates(dp_sections.get(dp.id, {}).get("dawproject_templates", []))
-            dawproject_tpl_widget = tpl_widget
+            daw_custom_widgets["dawproject"] = tpl_widget
             if on_daw_config_changed is not None:
                 tpl_widget.templates_changed.connect(on_daw_config_changed)
             pg.layout().insertWidget(pg.layout().count() - 1, tpl_widget)
+        elif dp.id == "protools":
+            pt_widget = ProToolsTemplatesWidget()
+            pt_widget.set_templates(dp_sections.get(dp.id, {}).get("protools_templates", []))
+            daw_custom_widgets["protools"] = pt_widget
+            if on_daw_config_changed is not None:
+                pt_widget.templates_changed.connect(on_daw_config_changed)
+            pg.layout().insertWidget(2, pt_widget)
+
         register_page(child, pg)
 
-    return dawproject_tpl_widget
+    return daw_custom_widgets
 
 
 def load_config_widgets(
     widgets_dict: dict,
     preset: dict[str, Any],
-    dawproject_tpl_widget: DawProjectTemplatesWidget | None = None,
+    daw_custom_widgets: dict[str, QWidget] | None = None,
 ) -> None:
     """Load values from *preset* into widgets stored in *widgets_dict*."""
     from sessionpreplib.detectors import default_detectors
     from sessionpreplib.processors import default_processors
     from sessionpreplib.daw_processors import default_daw_processors
+
+    if daw_custom_widgets is None:
+        daw_custom_widgets = {}
 
     for key, widget in widgets_dict.get("analysis", []):
         if key in preset.get("analysis", {}):
@@ -630,19 +717,25 @@ def load_config_widgets(
         for key, widget in widgets_dict[wkey]:
             if key in vals:
                 _set_widget_value(widget, vals[key])
-        if dp.id == "dawproject" and dawproject_tpl_widget is not None:
-            dawproject_tpl_widget.set_templates(vals.get("dawproject_templates", []))
+        
+        if dp.id == "dawproject" and "dawproject" in daw_custom_widgets:
+            daw_custom_widgets["dawproject"].set_templates(vals.get("dawproject_templates", []))
+        elif dp.id == "protools" and "protools" in daw_custom_widgets:
+            daw_custom_widgets["protools"].set_templates(vals.get("protools_templates", []))
 
 
 def read_config_widgets(
     widgets_dict: dict,
-    dawproject_tpl_widget: DawProjectTemplatesWidget | None = None,
+    daw_custom_widgets: dict[str, QWidget] | None = None,
     fallback_daw_sections: dict[str, dict] | None = None,
 ) -> dict[str, Any]:
     """Read current widget values into a structured config dict."""
     from sessionpreplib.detectors import default_detectors
     from sessionpreplib.processors import default_processors
     from sessionpreplib.daw_processors import default_daw_processors
+
+    if daw_custom_widgets is None:
+        daw_custom_widgets = {}
 
     cfg: dict[str, Any] = {}
 
@@ -686,8 +779,12 @@ def read_config_widgets(
         section = {}
         for key, widget in widgets_dict[wkey]:
             section[key] = _read_widget(widget)
-        if dp.id == "dawproject" and dawproject_tpl_widget is not None:
-            section["dawproject_templates"] = dawproject_tpl_widget.get_templates()
+        
+        if dp.id == "dawproject" and "dawproject" in daw_custom_widgets:
+            section["dawproject_templates"] = daw_custom_widgets["dawproject"].get_templates()
+        elif dp.id == "protools" and "protools" in daw_custom_widgets:
+            section["protools_templates"] = daw_custom_widgets["protools"].get_templates()
+
         if fallback_daw_sections:
             for gk, gv in fallback_daw_sections.get(dp.id, {}).items():
                 if gk not in section:

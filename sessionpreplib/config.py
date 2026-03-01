@@ -450,6 +450,11 @@ def build_structured_defaults() -> dict[str, Any]:
             structured["daw_processors"].setdefault(dp.id, {})
             structured["daw_processors"][dp.id].setdefault(
                 "dawproject_templates", [])
+        # Pro Tools: include templates list default
+        elif dp.id == "protools":
+            structured["daw_processors"].setdefault(dp.id, {})
+            structured["daw_processors"][dp.id].setdefault(
+                "protools_templates", [])
 
     return structured
 

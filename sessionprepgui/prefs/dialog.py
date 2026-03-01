@@ -52,7 +52,7 @@ class PreferencesDialog(QDialog):
 
         # Pipeline widget registry (built by build_config_pages)
         self._cfg_widgets: dict = {}
-        self._cfg_dawproject_widget = None
+        self._cfg_daw_custom_widgets: dict[str, QWidget] = {}
 
         # Pages
         self._general_page = GeneralPage()
@@ -173,7 +173,7 @@ class PreferencesDialog(QDialog):
         layout.addWidget(splitter, 1)
 
         self._preset_page_index: dict[int, int] = {}
-        self._cfg_dawproject_widget = build_config_pages(
+        self._cfg_daw_custom_widgets = build_config_pages(
             self._preset_tree,
             self._active_preset(),
             self._cfg_widgets,
@@ -226,11 +226,11 @@ class PreferencesDialog(QDialog):
             return
         preset = self._config_presets_data.setdefault(name, {})
         preset.update(read_config_widgets(
-            self._cfg_widgets, self._cfg_dawproject_widget))
+            self._cfg_widgets, self._cfg_daw_custom_widgets))
 
     def _load_cfg_preset_widgets(self, name: str) -> None:
         preset = self._config_presets_data.get(name, {})
-        load_config_widgets(self._cfg_widgets, preset, self._cfg_dawproject_widget)
+        load_config_widgets(self._cfg_widgets, preset, self._cfg_daw_custom_widgets)
 
     # ── Config preset signal handlers ────────────────────────────────
 

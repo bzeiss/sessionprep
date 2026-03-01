@@ -112,7 +112,7 @@ class AnalysisMixin:
             idx = self._session_stack.addWidget(page)
             self._session_page_index[id(tree_item)] = idx
 
-        self._session_dawproject_templates_widget = build_config_pages(
+        self._session_daw_custom_widgets = build_config_pages(
             self._session_tree,
             self._active_preset(),
             self._session_widgets,
@@ -152,13 +152,13 @@ class AnalysisMixin:
         """Inner loader — sets widget values without triggering column refresh."""
         load_config_widgets(
             self._session_widgets, preset,
-            self._session_dawproject_templates_widget)
+            self._session_daw_custom_widgets)
 
     def _read_session_config(self) -> dict[str, Any]:
         """Read current session widget values into a structured config dict."""
         return read_config_widgets(
             self._session_widgets,
-            self._session_dawproject_templates_widget,
+            self._session_daw_custom_widgets,
             fallback_daw_sections=self._active_preset().get(
                 "daw_processors", {}),
         )

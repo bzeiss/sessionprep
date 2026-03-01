@@ -93,9 +93,58 @@ class ProToolsDawProcessor(DawProcessor):
     id = "protools"
     name = "Pro Tools"
 
+    def __init__(
+        self,
+        *,
+        instance_index: int | None = None,
+        instance_name: str = "",
+    ):
+        self._instance_index = instance_index
+        self._instance_name = instance_name
+        if instance_index is not None:
+            self.id = f"protools_{instance_index}"
+            self.name = f"Pro Tools \u2013 {instance_name}"
+
+    @classmethod
+    def create_instances(
+        cls, flat_config: dict[str, Any],
+    ) -> list[ProToolsDawProcessor]:
+        """Create one processor instance per configured template.
+
+        Reads ``protools_templates`` from *flat_config*.  Each entry
+        is a dict with key ``name``. Returns an empty list when no templates
+        are configured.
+        """
+        templates = flat_config.get("protools_templates", [])
+        if not isinstance(templates, list):
+            return []
+        instances: list[ProToolsDawProcessor] = []
+        for idx, tpl in enumerate(templates):
+            if not isinstance(tpl, dict):
+                continue
+            name = tpl.get("name", "").strip()
+            if not name:
+                continue
+            instances.append(cls(
+                instance_index=idx,
+                instance_name=name,
+            ))
+        return instances
+
     @classmethod
     def config_params(cls) -> list[ParamSpec]:
         return super().config_params() + [
+            ParamSpec(
+                key="protools_temp_dir",
+                type=str,
+                default="",
+                label="Temporary project directory",
+                description=(
+                    "Directory where temporary Pro Tools projects are created "
+                    "from the referenced templates. Leave empty to use the system temp directory."
+                ),
+                widget_hint="path_picker_folder",
+            ),
             ParamSpec(
                 key="protools_company_name",
                 type=str,
@@ -141,7 +190,11 @@ class ProToolsDawProcessor(DawProcessor):
         ]
 
     def configure(self, config: dict[str, Any]) -> None:
+        saved = config.get(f"{self.id}_enabled")
+        if saved is None:
+            config[f"{self.id}_enabled"] = config.get("protools_enabled", True)
         super().configure(config)
+        self._temp_dir: str = config.get("protools_temp_dir", "")
         self._company_name: str = config.get("protools_company_name", "github.com")
         self._application_name: str = config.get("protools_application_name", "sessionprep")
         self._host: str = config.get("protools_host", "localhost")
