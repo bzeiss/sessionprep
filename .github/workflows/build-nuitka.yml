@@ -27,16 +27,23 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y gcc patchelf ccache
 
-      - name: Cache Nuitka Build
+      - name: Install CCache (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ccache
+
+      - name: Cache Nuitka & CCache
         uses: actions/cache@v4
         with:
           path: |
-            dist_nuitka/*.build
             ~/.cache/Nuitka
             ~/AppData/Local/Nuitka/Nuitka/Cache
             ~/Library/Caches/Nuitka
-          key: ${{ runner.os }}-nuitka-${{ hashFiles('**/pyproject.toml', '**/uv.lock') }}
+            ~/.cache/ccache
+            ~/Library/Caches/ccache
+            ~/AppData/Local/ccache
+          key: ${{ runner.os }}-nuitka-${{ hashFiles('**/uv.lock') }}-${{ github.run_id }}
           restore-keys: |
+            ${{ runner.os }}-nuitka-${{ hashFiles('**/uv.lock') }}-
             ${{ runner.os }}-nuitka-
 
       - name: Install Dependencies
@@ -119,10 +126,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sessionprep-${{ matrix.os }}
-          path: |
-            dist_nuitka/sessionprep-win-x64.exe
-            dist_nuitka/sessionprep-gui-win-x64.exe
-            dist_nuitka/SessionPrep-*-setup.exe
+          path: dist_nuitka/SessionPrep-*-setup.exe
           if-no-files-found: error
 
       - name: Upload Artifacts (macOS)

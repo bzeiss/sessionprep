@@ -15,7 +15,7 @@ from build_conf import TARGETS, BASE_DIR, DIST_NUITKA, MACOS_APP_NAME
 def _check_dependencies(target_key):
     """Ensure required packages for the target are installed."""
     from importlib.util import find_spec
-    
+
     # Check explicitly for PySide6 if it's the GUI target
     if target_key == "gui":
         if find_spec("PySide6") is None:
@@ -27,7 +27,7 @@ def run_nuitka(target_key, clean=False):
     target = TARGETS[target_key]
     script_path = os.path.join(BASE_DIR, target["script"])
     dist_dir = os.path.join(BASE_DIR, DIST_NUITKA)
-    
+
     # Clean previous output or build artifacts if requested
     if clean:
         if os.path.exists(dist_dir):
@@ -37,19 +37,23 @@ def run_nuitka(target_key, clean=False):
     print(f"\n[BUILD] Building target: {target_key.upper()}")
     print(f"        Script: {script_path}")
     print(f"        Output: {target['name']}")
-    
+
     # Base Nuitka command
     cmd = [
         sys.executable, "-m", "nuitka",
         "--standalone",
-        "--onefile",
         f"--output-filename={target['name']}",
         f"--output-dir={dist_dir}",
         "--assume-yes-for-downloads",
         # Optimizations
         "--lto=no",
     ]
-    
+
+    # We use onefile on Linux and macOS (for CLI).
+    # On Windows, we use directory mode (standalone) for faster startup.
+    if sys.platform != "win32":
+        cmd.append("--onefile")
+
     # Platform specific flags
     if not target["console"]:
         if sys.platform == "win32":
@@ -95,7 +99,7 @@ def run_nuitka(target_key, clean=False):
     # Run
     print(f"        Command: {' '.join(cmd)}")
     subprocess.check_call(cmd)
-    
+
     # Nuitka on Linux adds .bin suffix to avoid name collisions with source files.
     # We rename it back to the target name to match PyInstaller behavior.
     if sys.platform == "linux":
@@ -103,7 +107,7 @@ def run_nuitka(target_key, clean=False):
         if os.path.exists(bin_path) and not os.path.exists(output_exe):
             print(f"        Renaming {bin_path} -> {output_exe}")
             os.rename(bin_path, output_exe)
-    
+
     # On macOS GUI, output is a .app bundle (directory), not a single file.
     # Nuitka names the bundle from the script name, not --output-filename.
     # Rename it to MACOS_APP_NAME for a clean user-facing name.

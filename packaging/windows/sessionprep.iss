@@ -79,15 +79,11 @@ Name: "addtopath"; \
 ; ---------------------------------------------------------------------------
 
 [Files]
-; GUI executable
-Source: "..\..\{#DIST_DIR}\{#AppExe}"; \
-  DestDir: "{app}"; \
-  Flags: ignoreversion
+; GUI standalone directory
+Source: "..\..\{#DIST_DIR}\sessionprep-gui.dist\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 
-; CLI executable
-Source: "..\..\{#DIST_DIR}\{#AppCli}"; \
-  DestDir: "{app}"; \
-  Flags: ignoreversion
+; CLI standalone directory
+Source: "..\..\{#DIST_DIR}\sessionprep.dist\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 
 ; Icon (used by the uninstaller entry and shortcuts)
 Source: "{#AppIconSrc}"; \
