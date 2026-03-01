@@ -35,6 +35,8 @@ class DawCheckWorker(QThread):
 class DawFetchWorker(QThread):
     """Runs DawProcessor.fetch() off the main thread."""
 
+    progress = Signal(str)              # status text
+    progress_value = Signal(int, int)   # (current, total)
     result = Signal(bool, str, object)  # (ok, message, session_or_none)
 
     def __init__(self, processor: DawProcessor, session):
@@ -42,9 +44,18 @@ class DawFetchWorker(QThread):
         self._processor = processor
         self._session = session
 
+    def _on_progress(self, current: int, total: int, message: str):
+        self.progress.emit(message)
+        self.progress_value.emit(current, total)
+
     def run(self):
         try:
-            session = self._processor.fetch(self._session)
+            # Provide the progress callback if the processor supports it
+            try:
+                session = self._processor.fetch(self._session, progress_cb=self._on_progress)
+            except TypeError:
+                # Fallback for processors that don't support progress_cb yet
+                session = self._processor.fetch(self._session)
             self.result.emit(True, "Fetch complete", session)
         except Exception as e:
             self.result.emit(False, str(e), None)

@@ -103,7 +103,7 @@ class DawMixin:
         self._auto_assign_action.triggered.connect(self._on_auto_assign)
         self._setup_toolbar.addAction(self._auto_assign_action)
 
-        self._transfer_action = QAction("Transfer", self)
+        self._transfer_action = QAction("Create", self)
         self._transfer_action.setEnabled(False)
         self._transfer_action.triggered.connect(self._on_daw_transfer)
         self._setup_toolbar.addAction(self._transfer_action)
@@ -241,6 +241,18 @@ class DawMixin:
 
     def _update_daw_lifecycle_buttons(self):
         """Enable/disable Fetch/Transfer/Sync based on active processor state."""
+        # Check if any async operation is currently running
+        is_working = getattr(self, "_daw_check_worker", None) is not None or \
+                     getattr(self, "_daw_fetch_worker", None) is not None or \
+                     getattr(self, "_daw_transfer_worker", None) is not None
+                     
+        if is_working:
+            self._fetch_action.setEnabled(False)
+            self._auto_assign_action.setEnabled(False)
+            self._transfer_action.setEnabled(False)
+            self._reset_manifest_action.setEnabled(False)
+            return
+
         has_processor = self._active_daw_processor is not None
         self._fetch_action.setEnabled(has_processor)
         dp_id = self._active_daw_processor.id if has_processor else None
@@ -273,6 +285,7 @@ class DawMixin:
         self._pending_after_check = on_success
         self._daw_check_label.setText("Connecting\u2026")
         self._daw_check_label.setStyleSheet(f"color: {COLORS['dim']};")
+        self._update_daw_lifecycle_buttons()
         self._daw_check_worker = DawCheckWorker(self._active_daw_processor)
         self._daw_check_worker.result.connect(self._on_daw_check_result)
         self._daw_check_worker.start()
@@ -309,10 +322,18 @@ class DawMixin:
     def _do_daw_fetch(self):
         """Actually start the fetch (called after successful connectivity check)."""
         self._status_bar.showMessage("Fetching folder structure\u2026")
+        # Ensure the progress panel is visible by switching the stack and clearing the tree
+        self._setup_right_stack.setCurrentIndex(_SETUP_RIGHT_TREE)
+        self._folder_tree.clear()
+        self._transfer_progress.start("Fetching folder structure\u2026")
+        
         self._daw_fetch_worker = DawFetchWorker(
             self._active_daw_processor, self._session)
+        self._daw_fetch_worker.progress.connect(self._on_transfer_progress)
+        self._daw_fetch_worker.progress_value.connect(self._on_transfer_progress_value)
         self._daw_fetch_worker.result.connect(self._on_daw_fetch_result)
         self._daw_fetch_worker.start()
+        self._update_daw_lifecycle_buttons()
 
     @Slot(bool, str, object)
     def _on_daw_fetch_result(self, ok: bool, message: str, session):
@@ -320,6 +341,7 @@ class DawMixin:
         self._fetch_action.setEnabled(True)
         
         if "PRO_TOOLS_SESSION_OPEN" in message:
+            self._transfer_progress.fail("Fetch aborted: Pro Tools session is open.")
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(
                 self, 
@@ -336,8 +358,17 @@ class DawMixin:
             self._populate_folder_tree()
             self._setup_right_stack.setCurrentIndex(_SETUP_RIGHT_TREE)
             self._populate_setup_table()
+            self._transfer_progress.finish(message)
             self._status_bar.showMessage(message)
         else:
+            self._transfer_progress.fail(message)
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(
+                self,
+                "Fetch Failed",
+                f"Could not fetch folder structure from {self._active_daw_processor.name}.\n\n"
+                f"{message}"
+            )
             self._status_bar.showMessage(f"Fetch failed: {message}")
         self._update_daw_lifecycle_buttons()
 

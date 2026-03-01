@@ -97,13 +97,18 @@ class ProToolsDawProcessor(DawProcessor):
         self,
         *,
         instance_index: int | None = None,
+        instance_group: str = "",
         instance_name: str = "",
     ):
         self._instance_index = instance_index
+        self._instance_group = instance_group
         self._instance_name = instance_name
         if instance_index is not None:
             self.id = f"protools_{instance_index}"
-            self.name = f"Pro Tools \u2013 {instance_name}"
+            if instance_group:
+                self.name = f"Pro Tools \u2013 {instance_group} / {instance_name}"
+            else:
+                self.name = f"Pro Tools \u2013 {instance_name}"
 
     @classmethod
     def create_instances(
@@ -112,7 +117,7 @@ class ProToolsDawProcessor(DawProcessor):
         """Create one processor instance per configured template.
 
         Reads ``protools_templates`` from *flat_config*.  Each entry
-        is a dict with key ``name``. Returns an empty list when no templates
+        is a dict with key ``name`` and ``group``. Returns an empty list when no templates
         are configured.
         """
         templates = flat_config.get("protools_templates", [])
@@ -122,11 +127,13 @@ class ProToolsDawProcessor(DawProcessor):
         for idx, tpl in enumerate(templates):
             if not isinstance(tpl, dict):
                 continue
+            group = tpl.get("group", "").strip()
             name = tpl.get("name", "").strip()
-            if not name:
+            if not name or not group:
                 continue
             instances.append(cls(
                 instance_index=idx,
+                instance_group=group,
                 instance_name=name,
             ))
         return instances
@@ -134,6 +141,17 @@ class ProToolsDawProcessor(DawProcessor):
     @classmethod
     def config_params(cls) -> list[ParamSpec]:
         return super().config_params() + [
+            ParamSpec(
+                key="protools_project_dir",
+                type=str,
+                default="",
+                label="Project directory",
+                description=(
+                    "Directory where newly created Pro Tools projects are saved. "
+                    "Leave empty to prompt for a location each time."
+                ),
+                widget_hint="path_picker_folder",
+            ),
             ParamSpec(
                 key="protools_temp_dir",
                 type=str,
@@ -194,6 +212,7 @@ class ProToolsDawProcessor(DawProcessor):
         if saved is None:
             config[f"{self.id}_enabled"] = config.get("protools_enabled", True)
         super().configure(config)
+        self._project_dir: str = config.get("protools_project_dir", "")
         self._temp_dir: str = config.get("protools_temp_dir", "")
         self._company_name: str = config.get("protools_company_name", "github.com")
         self._application_name: str = config.get("protools_application_name", "sessionprep")
@@ -232,7 +251,12 @@ class ProToolsDawProcessor(DawProcessor):
                 except Exception:
                     pass
 
-    def fetch(self, session: SessionContext) -> SessionContext:
+    def fetch(self, session: SessionContext, progress_cb=None) -> SessionContext:
+        if not self._temp_dir:
+            raise RuntimeError("The 'Temporary project directory' is not configured in Preferences.")
+        if not os.path.isdir(self._temp_dir):
+            raise RuntimeError(f"The configured temporary project directory does not exist: {self._temp_dir}")
+
         try:
             from ptsl import Engine
             from ptsl import PTSL_pb2 as pt
@@ -240,7 +264,11 @@ class ProToolsDawProcessor(DawProcessor):
             return session
 
         engine = None
+        temp_session_name = None
         try:
+            if progress_cb:
+                progress_cb(10, 100, "Connecting to Pro Tools...")
+                
             address = f"{self._host}:{self._port}"
             engine = Engine(
                 company_name=self._company_name,
@@ -250,6 +278,24 @@ class ProToolsDawProcessor(DawProcessor):
 
             if ptslh.is_session_open(engine):
                 raise RuntimeError("PRO_TOOLS_SESSION_OPEN")
+
+            import uuid
+            temp_session_name = f"SessionPrep_Temp_{uuid.uuid4().hex[:8]}"
+            
+            if progress_cb:
+                progress_cb(30, 100, f"Creating temporary session from template '{self._instance_group} / {self._instance_name}'...")
+                
+            # Create the temporary session from the template
+            ptslh.create_session_from_template(
+                engine, 
+                temp_session_name, 
+                self._temp_dir, 
+                self._instance_group, 
+                self._instance_name
+            )
+
+            if progress_cb:
+                progress_cb(70, 100, "Reading track folder structure...")
 
             all_tracks = engine.track_list()
             folders: list[dict[str, Any]] = []
@@ -266,6 +312,9 @@ class ProToolsDawProcessor(DawProcessor):
                         "index": track.index,
                         "parent_id": track.parent_folder_id or None,
                     })
+
+            if progress_cb:
+                progress_cb(90, 100, "Cleaning up temporary session...")
 
             # Preserve existing assignments where folder IDs still match
             pt_state = session.daw_state.get(self.id, {})
@@ -284,10 +333,44 @@ class ProToolsDawProcessor(DawProcessor):
             raise
         finally:
             if engine is not None:
+                if temp_session_name:
+                    try:
+                        ptslh.close_session(engine)
+                    except Exception as e:
+                        dbg(f"Failed to close temp session: {e}")
                 try:
                     engine.close()
                 except Exception:
                     pass
+
+            if temp_session_name:
+                # Defensive deletion of the temporary session folder
+                target_dir = os.path.join(self._temp_dir, temp_session_name)
+                ptx_file = os.path.join(target_dir, f"{temp_session_name}.ptx")
+                
+                # Extreme safety checks to ensure we only delete what we created:
+                # 1. Ensure target_dir actually exists
+                # 2. Ensure target_dir is exactly a direct child of the configured temp dir
+                # 3. Ensure target_dir contains our specific UUID .ptx file 
+                if (os.path.isdir(target_dir) and 
+                    os.path.dirname(os.path.abspath(target_dir)) == os.path.abspath(self._temp_dir) and
+                    os.path.isfile(ptx_file)):
+                    
+                    import shutil
+                    import time
+                    # Retry loop to handle delayed file locks on Windows from Pro Tools closing
+                    for _ in range(10):  # Try for up to 5 seconds
+                        try:
+                            shutil.rmtree(target_dir, ignore_errors=True)
+                            if not os.path.exists(target_dir):
+                                break
+                        except Exception:
+                            pass
+                        time.sleep(0.5)
+                        
+            if progress_cb:
+                progress_cb(100, 100, "Fetch complete")
+
         return session
 
     def _resolve_group_color(

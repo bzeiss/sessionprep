@@ -162,6 +162,63 @@ def get_session_audio_dir(engine) -> str:
     return os.path.join(os.path.dirname(session_ptx), "Audio Files")
 
 
+# ── Session lifecycle ────────────────────────────────────────────────
+
+def create_session_from_template(
+    engine, session_name: str, session_location: str,
+    template_group: str, template_name: str,
+) -> None:
+    """Create a new Pro Tools session from a template.
+    
+    Paths use native OS separators. CId_CreateSession automatically opens the session.
+    """
+    from ptsl import PTSL_pb2 as pt
+    
+    location = os.path.abspath(session_location)
+    os.makedirs(location, exist_ok=True)
+
+    body = {
+        "session_name": session_name,
+        "session_location": location,
+        "create_from_template": True,
+        "template_group": template_group,
+        "template_name": template_name,
+        "file_type": "FT_WAVE",
+        "sample_rate": "SR_48000",
+        "bit_depth": "Bit24",
+        "input_output_settings": "IO_Last",
+        "is_interleaved": True,
+        "is_cloud_project": False,
+    }
+    
+    # 1. Create the session (Pro Tools automatically opens it as well)
+    run_command(engine, pt.CommandId.CId_CreateSession, body)
+    
+    # Wait until Pro Tools actually loads the template and writes the PTX file.
+    # It can take a few seconds for the background creation to finish.
+    import time
+    session_dir = os.path.join(location, session_name)
+    session_path = os.path.join(session_dir, f"{session_name}.ptx")
+    
+    success = False
+    for _ in range(15):  # Wait up to 7.5 seconds
+        if os.path.isfile(session_path):
+            success = True
+            break
+        time.sleep(0.5)
+
+    if not success:
+        raise RuntimeError(
+            f"Pro Tools failed to create the session. Please check if the "
+            f"template '{template_group} / {template_name}' actually exists."
+        )
+
+def close_session(engine, save_on_close: bool = False) -> None:
+    """Close the current Pro Tools session."""
+    from ptsl import PTSL_pb2 as pt
+    run_command(engine, pt.CommandId.CId_CloseSession, {"save_on_close": save_on_close})
+
+
 # ── Batch job lifecycle ──────────────────────────────────────────────
 
 def create_batch_job(engine, name: str, description: str,

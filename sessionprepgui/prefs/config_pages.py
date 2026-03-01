@@ -498,14 +498,20 @@ class ProToolsTemplatesWidget(QWidget):
         layout.addWidget(QLabel("<b>Pro Tools Templates</b>"))
 
         self._table = QTableWidget()
-        self._table.setColumnCount(1)
-        self._table.setHorizontalHeaderLabels(["Name"])
+        self._table.setColumnCount(2)
+        self._table.setHorizontalHeaderLabels(["Template Group", "Template Name"])
         gh = self._table.horizontalHeader()
         gh.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        gh.setSectionResizeMode(0, QHeaderView.Stretch)
+        gh.setSectionResizeMode(0, QHeaderView.Interactive)
+        gh.resizeSection(0, 150)
+        gh.setSectionResizeMode(1, QHeaderView.Stretch)
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setSelectionMode(QTableWidget.SingleSelection)
         self._table.cellChanged.connect(lambda r, c: self.templates_changed.emit())
+        
+        # Ensure the table is tall enough to show ~3 rows comfortably
+        self._table.setMinimumHeight(130)
+        
         layout.addWidget(self._table, 1)
 
         btn_row = QHBoxLayout()
@@ -525,22 +531,26 @@ class ProToolsTemplatesWidget(QWidget):
         self._table.setRowCount(0)
         self._table.setRowCount(len(templates))
         for row, tpl in enumerate(templates):
-            self._table.setItem(row, 0, QTableWidgetItem(tpl.get("name", "")))
+            self._table.setItem(row, 0, QTableWidgetItem(tpl.get("group", "")))
+            self._table.setItem(row, 1, QTableWidgetItem(tpl.get("name", "")))
         self._table.blockSignals(False)
 
     def get_templates(self) -> list[dict]:
         templates: list[dict] = []
         for row in range(self._table.rowCount()):
-            name_item = self._table.item(row, 0)
+            group_item = self._table.item(row, 0)
+            group = group_item.text().strip() if group_item else ""
+            name_item = self._table.item(row, 1)
             name = name_item.text().strip() if name_item else ""
-            if name:
-                templates.append({"name": name})
+            if name or group:
+                templates.append({"group": group, "name": name})
         return templates
 
     def _on_add(self):
         row = self._table.rowCount()
         self._table.setRowCount(row + 1)
         self._table.setItem(row, 0, QTableWidgetItem(""))
+        self._table.setItem(row, 1, QTableWidgetItem(""))
         self._table.editItem(self._table.item(row, 0))
         self.templates_changed.emit()
 
@@ -660,7 +670,7 @@ def build_config_pages(
             daw_custom_widgets["protools"] = pt_widget
             if on_daw_config_changed is not None:
                 pt_widget.templates_changed.connect(on_daw_config_changed)
-            pg.layout().insertWidget(2, pt_widget)
+            pg.layout().insertWidget(3, pt_widget)
 
         register_page(child, pg)
 

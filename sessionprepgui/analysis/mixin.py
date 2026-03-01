@@ -282,6 +282,11 @@ class AnalysisMixin:
         )
         if not path:
             return
+            
+        # Ensure we capture all active edits from the session settings widgets
+        if not self._loading_session_widgets:
+            self._session_config = self._read_session_config()
+            
         try:
             _save_session_file(path, {
                 "source_dir": self._source_dir,
@@ -390,6 +395,9 @@ class AnalysisMixin:
         self._active_config_preset_name = preset_name
         self._session_config = data.get("session_config")
         self._session_groups = data.get("session_groups", [])
+        
+        if self._session_config:
+            self._load_session_widgets(self._session_config)
 
         # ── Reconstruct SessionContext from saved tracks ──────────────────────
         from sessionpreplib.models import SessionContext
