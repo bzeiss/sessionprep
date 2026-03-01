@@ -36,7 +36,7 @@ from sessionpreplib.topology import (
 # Version & migration table
 # ---------------------------------------------------------------------------
 
-CURRENT_VERSION: int = 4
+CURRENT_VERSION: int = 5
 
 # Each entry upgrades from key-version to key+1.
 _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
@@ -55,6 +55,11 @@ _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
         **d,
         "recursive_scan": False,
         "version": 4,
+    },
+    4: lambda d: {
+        **d,
+        "project_name": "",
+        "version": 5,
     },
 }
 
@@ -356,6 +361,7 @@ def save_session(path: str, data: dict) -> None:
         ],
         "use_processed": data.get("use_processed", False),
         "recursive_scan": data.get("recursive_scan", False),
+        "project_name": data.get("project_name", ""),
     }
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2, ensure_ascii=False)
@@ -371,6 +377,7 @@ def load_session(path: str) -> dict:
     - ``session_groups`` (list)
     - ``daw_state`` (dict)
     - ``tracks`` (list[TrackContext]) — audio_data is None; filepath validated
+    - ``project_name`` (str)
 
     Raises ``ValueError`` on version mismatch or missing required fields.
     Raises ``json.JSONDecodeError`` / ``OSError`` on file errors.
@@ -412,4 +419,5 @@ def load_session(path: str) -> dict:
         ],
         "use_processed": raw.get("use_processed", False),
         "recursive_scan": raw.get("recursive_scan", False),
+        "project_name": raw.get("project_name", ""),
     }

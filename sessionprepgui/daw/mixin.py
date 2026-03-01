@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QMenu,
     QMessageBox,
     QSizePolicy,
@@ -182,6 +183,19 @@ class DawMixin:
         tree_page_layout = QVBoxLayout(tree_page)
         tree_page_layout.setContentsMargins(0, 0, 0, 0)
         tree_page_layout.setSpacing(0)
+
+        # Project Name input
+        proj_name_container = QWidget()
+        proj_name_layout = QHBoxLayout(proj_name_container)
+        proj_name_layout.setContentsMargins(8, 8, 8, 4)
+        proj_name_layout.setSpacing(8)
+        proj_name_label = QLabel("<b>Project Name:</b>")
+        self._project_name_edit = QLineEdit()
+        self._project_name_edit.setPlaceholderText("Enter project name...")
+        self._project_name_edit.textChanged.connect(self._on_project_name_changed)
+        proj_name_layout.addWidget(proj_name_label)
+        proj_name_layout.addWidget(self._project_name_edit, 1)
+        tree_page_layout.addWidget(proj_name_container)
 
         self._folder_tree = _FolderDropTree()
         self._folder_tree.setHeaderLabels(["Folder / Track"])
@@ -355,6 +369,10 @@ class DawMixin:
 
         if ok and session is not None:
             self._session = session
+            # Restore project name from session context if it was loaded
+            self._project_name_edit.blockSignals(True)
+            self._project_name_edit.setText(session.project_name)
+            self._project_name_edit.blockSignals(False)
             self._populate_folder_tree()
             self._setup_right_stack.setCurrentIndex(_SETUP_RIGHT_TREE)
             self._populate_setup_table()
@@ -371,6 +389,10 @@ class DawMixin:
             )
             self._status_bar.showMessage(f"Fetch failed: {message}")
         self._update_daw_lifecycle_buttons()
+
+    def _on_project_name_changed(self, text: str):
+        if self._session:
+            self._session.project_name = text.strip()
 
     # ── Use Processed checkbox ──────────────────────────────────────────
 
@@ -402,6 +424,15 @@ class DawMixin:
     def _on_daw_transfer(self):
         if not self._active_daw_processor or not self._session:
             return
+            
+        # Validate Project Name
+        if not self._project_name_edit.text().strip():
+            QMessageBox.warning(
+                self, "Project Name Required",
+                "Please enter a Project Name before clicking Create."
+            )
+            return
+
         self._transfer_action.setEnabled(False)
         self._fetch_action.setEnabled(False)
         self._run_daw_check_then(self._do_daw_transfer)

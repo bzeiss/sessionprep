@@ -220,6 +220,7 @@ class AnalysisMixin:
         self._groups_tab_table.setRowCount(0)
         self._folder_tree.clear()
         self._setup_right_stack.setCurrentIndex(0)  # placeholder page
+        self._project_name_edit.clear()
 
         app_cfg = self._config.get("app", {})
         skip_folders = {
@@ -287,6 +288,10 @@ class AnalysisMixin:
         if not self._loading_session_widgets:
             self._session_config = self._read_session_config()
             
+        # Ensure project name is synced from widget
+        if self._session:
+            self._session.project_name = self._project_name_edit.text().strip()
+            
         try:
             _save_session_file(path, {
                 "source_dir": self._source_dir,
@@ -302,6 +307,7 @@ class AnalysisMixin:
                 "base_transfer_manifest": self._session.base_transfer_manifest,
                 "use_processed": self._use_processed_cb.isChecked(),
                 "recursive_scan": self._recursive_scan,
+                "project_name": self._session.project_name,
             })
             self._status_bar.showMessage(f"Session saved to {path}")
         except Exception as exc:
@@ -446,9 +452,16 @@ class AnalysisMixin:
             prepare_state=data.get("prepare_state", "none"),
             transfer_manifest=data.get("transfer_manifest", []),
             base_transfer_manifest=data.get("base_transfer_manifest", []),
+            project_name=data.get("project_name", ""),
         )
 
         self._session = session
+        
+        # Restore project name widget
+        self._project_name_edit.blockSignals(True)
+        self._project_name_edit.setText(session.project_name)
+        self._project_name_edit.blockSignals(False)
+        
         self._summary = build_diagnostic_summary(session)
 
         # ── Populate file list in track table ─────────────────────────────────
@@ -757,6 +770,10 @@ class AnalysisMixin:
         # Phase 1 output files that are now session.tracks.
         if self._session and self._session.topology and not self._topo_topology:
             self._topo_topology = self._session.topology
+
+        # Preserve project name across analysis runs
+        current_project_name = self._project_name_edit.text().strip()
+        session.project_name = current_project_name
 
         self._session = session
         self._summary = summary

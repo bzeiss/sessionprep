@@ -146,6 +146,7 @@ class SessionContext:
     output_tracks: list[TrackContext] = field(default_factory=list)
     transfer_manifest: list[TransferEntry] = field(default_factory=list)
     base_transfer_manifest: list[TransferEntry] = field(default_factory=list)
+    project_name: str = ""
 
 
 @dataclass
