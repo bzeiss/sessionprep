@@ -149,7 +149,7 @@ SessionPrep operates in three phases:
 |-------|------|-------------|------|
 | **1** | Track Layout | Define how source tracks map to output files: channel routing, reordering, splitting, merging. Drag-and-drop between input/output trees with visual insert-position indicator. Optional recursive subfolder scanning. Output written to `sp_01_tracklayout/`. | GUI Phase 1 (always available) |
 | **2** | Analysis & Preparation | Format checks, clipping, DC offset, stereo compatibility, silence, subsonic, peak/RMS measurement, classification, tail exceedance. Bimodal normalization (clip gain adjustment) via Prepare. Output written to `sp_02_prepared/`. | GUI Phase 2 / CLI |
-| **3** | DAW Transfer | Transfer tracks into DAW session with per-track naming and folder assignment. Duplicate entries for multi-track scenarios (same clip on different tracks). Fader offsets applied automatically (Pro Tools via PTSL, DAWproject via file generation). | GUI Phase 3 |
+| **3** | DAW Transfer | Transfer tracks into DAW session with per-track naming and folder assignment. Duplicate entries for multi-track scenarios (same clip on different tracks). Fader offsets applied automatically (Pro Tools via PTSL, DAWproject via file generation). Support for unattended batch processing of multiple songs. | GUI Phase 3 |
 
 
 ### Diagnostic categories
