@@ -62,6 +62,7 @@ from .tracks import (
 )
 from .daw import DawMixin
 from .topology import TopologyMixin
+from .batch import BatchQueueDock, BatchManager
 
 
 class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
@@ -114,6 +115,10 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         self._daw_fetch_worker: DawFetchWorker | None = None
         self._daw_transfer_worker: DawTransferWorker | None = None
         self._prepare_worker: PrepareWorker | None = None
+        
+        self._batch_manager = BatchManager(self)
+        self._batch_manager.finished.connect(self._on_batch_finished)
+        self._batch_manager.item_finished.connect(self._on_batch_item_finished)
 
         # Load persistent GUI configuration (four-section structure)
         t0 = time.perf_counter()
@@ -143,6 +148,13 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         t0 = time.perf_counter()
         self._init_ui()
         dbg(f"_init_ui: {(time.perf_counter() - t0) * 1000:.1f} ms")
+        
+        self._batch_dock = BatchQueueDock(self)
+        self._batch_dock.load_requested.connect(self._on_load_batch_item)
+        self._batch_dock.run_batch_requested.connect(self._batch_manager.start_batch)
+        self._batch_dock.run_single_requested.connect(self._batch_manager.start_single)
+        self.addDockWidget(Qt.RightDockWidgetArea, self._batch_dock)
+        self._batch_dock.hide()  # hidden by default
 
         t0 = time.perf_counter()
         apply_dark_theme(self)
@@ -250,6 +262,13 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         file_menu.addAction(self._save_session_action)
 
         file_menu.addSeparator()
+        
+        self._batch_mode_action = QAction("Batch Processing Mode", self)
+        self._batch_mode_action.setCheckable(True)
+        self._batch_mode_action.toggled.connect(self._on_batch_mode_toggled)
+        file_menu.addAction(self._batch_mode_action)
+
+        file_menu.addSeparator()
 
         prefs_action = QAction("&Preferences...", self)
         prefs_action.setShortcut("Ctrl+,")
@@ -268,6 +287,32 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         quit_action.setShortcut("Ctrl+Q")
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
+
+    @Slot(bool)
+    def _on_batch_mode_toggled(self, checked: bool):
+        self._batch_dock.setVisible(checked)
+        self._update_daw_lifecycle_buttons()
+        
+    @Slot(object)
+    def _on_load_batch_item(self, item):
+        if self._session:
+            reply = QMessageBox.question(
+                self, "Load Session",
+                "You have an active session in the workspace. Discard current workspace and load from queue?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+        self._restore_session_state(item.session_state)
+        self._batch_dock.remove_item(item.id)
+
+    @Slot()
+    def _on_batch_finished(self):
+        self._status_bar.showMessage("Batch processing complete.")
+        
+    @Slot(str, str, str)
+    def _on_batch_item_finished(self, item_id: str, status: str, result_text: str):
+        self._batch_dock.update_item(item_id, status, result_text)
 
     def _init_analysis_toolbar(self):
         self._analysis_toolbar = QToolBar("Analysis")
@@ -677,6 +722,15 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         )
 
     def closeEvent(self, event):
+        if self._batch_dock.has_items:
+            reply = QMessageBox.warning(
+                self, "Pending Batch Items",
+                f"You have pending sessions in the batch queue. Are you sure you want to quit?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                event.ignore()
+                return
         self._playback.stop()
         super().closeEvent(event)
 

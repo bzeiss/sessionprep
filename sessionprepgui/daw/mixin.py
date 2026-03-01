@@ -279,6 +279,13 @@ class DawMixin:
         has_assignments = bool(dp_state.get("assignments"))
         self._auto_assign_action.setEnabled(has_folders)
         self._transfer_action.setEnabled(has_processor and has_assignments)
+        
+        batch_mode = getattr(self, "_batch_mode_action", None)
+        if batch_mode and batch_mode.isChecked():
+            self._transfer_action.setText("Enqueue >>")
+        else:
+            self._transfer_action.setText("Create")
+            
         has_manifest = bool(
             self._session and self._session.transfer_manifest)
         self._reset_manifest_action.setEnabled(has_manifest)
@@ -474,6 +481,44 @@ class DawMixin:
                     "Please choose a different project name."
                 )
                 return
+
+        # 4. Enqueue or Transfer
+        batch_mode = getattr(self, "_batch_mode_action", None)
+        if batch_mode and batch_mode.isChecked():
+            import uuid
+            from ..batch import BatchItem
+            from ..theme import PT_DEFAULT_COLORS
+            
+            output_folder = self._config.get("app", {}).get(
+                "phase2_output_folder", "sp_02_prepared")
+
+            # Update config like we do in _do_daw_transfer
+            self._session.config.update(self._flat_config())
+            self._session.config.setdefault("gui", {})["groups"] = list(self._session_groups)
+            colors = self._config.get("colors", PT_DEFAULT_COLORS)
+            self._session.config["gui"]["colors"] = colors
+            self._session.config["_source_dir"] = self._source_dir
+            self._session.config["_output_folder"] = output_folder
+            
+            # Resolve output path here so it doesn't prompt during batch execution
+            output_path = self._active_daw_processor.resolve_output_path(
+                self._session, self)
+            if output_path is None:
+                return
+
+            # Capture state and enqueue
+            state = self._capture_session_state()
+            item = BatchItem(
+                id=uuid.uuid4().hex,
+                project_name=project_name,
+                daw_processor_id=self._active_daw_processor.id,
+                output_path=output_path,
+                session_state=state,
+            )
+            if self._batch_dock.add_item(item):
+                self._clear_workspace()
+                self._status_bar.showMessage("Session added to batch queue.")
+            return
 
         self._transfer_action.setEnabled(False)
         self._fetch_action.setEnabled(False)

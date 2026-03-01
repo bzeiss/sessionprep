@@ -181,25 +181,31 @@ class AnalysisMixin:
 
     # ── Slots: file / analysis ────────────────────────────────────────────
 
-    @Slot()
-    def _on_open_path(self):
-        start_dir = self._config.get("app", {}).get("default_project_dir", "") or ""
-        path = QFileDialog.getExistingDirectory(
-            self, "Select Session Directory", start_dir,
-            QFileDialog.ShowDirsOnly,
-        )
-        if not path:
-            return
-
+    def _clear_workspace(self):
+        """Clear the UI and reset session state."""
         self._on_stop()
-        self._source_dir = path
-        self._topology_dir = None
-        self._track_table.set_source_dir(path)
         self._session = None
         self._summary = None
         self._current_track = None
+        self._topology_dir = None
+        self._source_dir = None
+        self._topo_source_tracks = []
+        self._topo_topology = None
 
-        # Reset UI
+        if getattr(self, "_topo_input_tree", None) is not None:
+            self._topo_input_tree.clear()
+        if getattr(self, "_topo_output_tree", None) is not None:
+            self._topo_output_tree.clear()
+        if getattr(self, "_topo_status_label", None) is not None:
+            self._topo_status_label.clear()
+        if getattr(self, "_topo_apply_action", None) is not None:
+            self._topo_apply_action.setEnabled(False)
+
+        if getattr(self, "_analyze_action", None) is not None:
+            self._analyze_action.setEnabled(False)
+        if getattr(self, "_save_session_action", None) is not None:
+            self._save_session_action.setEnabled(False)
+
         self._phase_tabs.setCurrentIndex(_PHASE_TOPOLOGY)
         self._phase_tabs.setTabEnabled(_PHASE_ANALYSIS, False)
         self._phase_tabs.setTabEnabled(_PHASE_SETUP, False)
@@ -215,12 +221,27 @@ class AnalysisMixin:
         self._detail_tabs.setTabEnabled(_TAB_SESSION, False)
         self._detail_tabs.setCurrentIndex(_TAB_SUMMARY)
         self._right_stack.setCurrentIndex(_PAGE_TABS)
-        self._session_config = None  # reset session overrides for new directory
+        self._session_config = None
         self._session_groups = []
         self._groups_tab_table.setRowCount(0)
         self._folder_tree.clear()
-        self._setup_right_stack.setCurrentIndex(0)  # placeholder page
+        self._setup_right_stack.setCurrentIndex(0)
         self._project_name_edit.clear()
+        self.setWindowTitle("SessionPrep")
+
+    @Slot()
+    def _on_open_path(self):
+        start_dir = self._config.get("app", {}).get("default_project_dir", "") or ""
+        path = QFileDialog.getExistingDirectory(
+            self, "Select Session Directory", start_dir,
+            QFileDialog.ShowDirsOnly,
+        )
+        if not path:
+            return
+
+        self._clear_workspace()
+        self._source_dir = path
+        self._track_table.set_source_dir(path)
 
         app_cfg = self._config.get("app", {})
         skip_folders = {
@@ -284,37 +305,42 @@ class AnalysisMixin:
         if not path:
             return
             
-        # Ensure we capture all active edits from the session settings widgets
-        if not self._loading_session_widgets:
-            self._session_config = self._read_session_config()
-            
-        # Ensure project name is synced from widget
-        if self._session:
-            self._session.project_name = self._project_name_edit.text().strip()
-            
         try:
-            _save_session_file(path, {
-                "source_dir": self._source_dir,
-                "active_config_preset": self._active_config_preset_name,
-                "session_config": self._session_config,
-                "session_groups": self._session_groups,
-                "daw_state": self._session.daw_state,
-                "tracks": self._session.tracks,
-                "topology": self._topo_topology,
-                "transfer_manifest": self._session.transfer_manifest,
-                "topology_applied": self._topology_dir is not None,
-                "prepare_state": self._session.prepare_state,
-                "base_transfer_manifest": self._session.base_transfer_manifest,
-                "use_processed": self._use_processed_cb.isChecked(),
-                "recursive_scan": self._recursive_scan,
-                "project_name": self._session.project_name,
-            })
+            state = self._capture_session_state()
+            _save_session_file(path, state)
             self._status_bar.showMessage(f"Session saved to {path}")
         except Exception as exc:
             QMessageBox.critical(
                 self, "Save Session Failed",
                 f"Could not save session:\n\n{exc}",
             )
+
+    def _capture_session_state(self) -> dict:
+        """Capture the current session state into a dictionary."""
+        # Ensure we capture all active edits from the session settings widgets
+        if not getattr(self, "_loading_session_widgets", False):
+            self._session_config = self._read_session_config()
+            
+        # Ensure project name is synced from widget
+        if self._session:
+            self._session.project_name = self._project_name_edit.text().strip()
+            
+        return {
+            "source_dir": self._source_dir,
+            "active_config_preset": self._active_config_preset_name,
+            "session_config": self._session_config,
+            "session_groups": self._session_groups,
+            "daw_state": self._session.daw_state if self._session else {},
+            "tracks": self._session.tracks if self._session else [],
+            "topology": self._topo_topology,
+            "transfer_manifest": self._session.transfer_manifest if self._session else [],
+            "topology_applied": self._topology_dir is not None,
+            "prepare_state": self._session.prepare_state if self._session else "none",
+            "base_transfer_manifest": self._session.base_transfer_manifest if self._session else [],
+            "use_processed": self._use_processed_cb.isChecked(),
+            "recursive_scan": self._recursive_scan,
+            "project_name": self._session.project_name if self._session else "",
+        }
 
     @Slot()
     def _on_load_session(self):
@@ -337,6 +363,10 @@ class AnalysisMixin:
             )
             return
 
+        self._restore_session_state(data)
+
+    def _restore_session_state(self, data: dict):
+        """Restore session state from a dictionary."""
         source_dir = data["source_dir"]
         if not os.path.isdir(source_dir):
             QMessageBox.warning(
@@ -347,9 +377,8 @@ class AnalysisMixin:
             return
 
         # ── Reset UI (same as _on_open_path but without auto-analyze) ────────
-        self._on_stop()
+        self._clear_workspace()
         self._source_dir = source_dir
-        self._topology_dir = None
         self._track_table.set_source_dir(source_dir)
 
         # Re-discover original source tracks for Phase 1 topology input table
@@ -374,27 +403,6 @@ class AnalysisMixin:
                 pass
         self._topo_source_tracks = source_tracks
         self._topo_topology = data.get("topology")
-
-        self._session = None
-        self._summary = None
-        self._current_track = None
-
-        self._phase_tabs.setCurrentIndex(_PHASE_TOPOLOGY)
-        self._phase_tabs.setTabEnabled(_PHASE_ANALYSIS, False)
-        self._phase_tabs.setTabEnabled(_PHASE_SETUP, False)
-        self._track_table.setRowCount(0)
-        self._setup_table.setRowCount(0)
-        self._summary_view.clear()
-        self._file_report.clear()
-        self._wf_container.setVisible(False)
-        self._play_btn.setEnabled(False)
-        self._stop_btn.setEnabled(False)
-        self._detail_tabs.setTabEnabled(_TAB_FILE, False)
-        self._detail_tabs.setTabEnabled(_TAB_GROUPS, False)
-        self._detail_tabs.setTabEnabled(_TAB_SESSION, False)
-        self._detail_tabs.setCurrentIndex(_TAB_SUMMARY)
-        self._right_stack.setCurrentIndex(_PAGE_TABS)
-        self._groups_tab_table.setRowCount(0)
 
         # ── Restore session-level state ───────────────────────────────────────
         preset_name = data.get("active_config_preset", "Default")
