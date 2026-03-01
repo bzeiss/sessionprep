@@ -247,6 +247,10 @@ class ProToolsDawProcessor(DawProcessor):
                 application_name=self._application_name,
                 address=address,
             )
+
+            if ptslh.is_session_open(engine):
+                raise RuntimeError("PRO_TOOLS_SESSION_OPEN")
+
             all_tracks = engine.track_list()
             folders: list[dict[str, Any]] = []
             for track in all_tracks:

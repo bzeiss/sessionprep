@@ -131,6 +131,19 @@ def extract_track_id(resp: dict) -> str:
 
 # ── Session queries ──────────────────────────────────────────────────
 
+def is_session_open(engine) -> bool:
+    """Check if a session is currently open in Pro Tools.
+    
+    Returns True if a session is open, False otherwise.
+    """
+    try:
+        # If a session is open, session_name() will return a non-empty string.
+        name = engine.session_name()
+        return bool(name)
+    except Exception:
+        # PTSL commands typically fail if no session is open.
+        return False
+
 def get_color_palette(engine, target: str = "CPTarget_Tracks") -> list[str]:
     """Fetch the Pro Tools color palette.  Returns ``[]`` on failure."""
     from ptsl import PTSL_pb2 as pt

@@ -318,6 +318,19 @@ class DawMixin:
     def _on_daw_fetch_result(self, ok: bool, message: str, session):
         self._daw_fetch_worker = None
         self._fetch_action.setEnabled(True)
+        
+        if "PRO_TOOLS_SESSION_OPEN" in message:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self, 
+                "Pro Tools Session Open", 
+                "A Pro Tools session is currently open.\n\n"
+                "Please save and close the open session in Pro Tools, then try again."
+            )
+            self._status_bar.showMessage("Fetch aborted: Pro Tools session is open.")
+            self._update_daw_lifecycle_buttons()
+            return
+
         if ok and session is not None:
             self._session = session
             self._populate_folder_tree()
