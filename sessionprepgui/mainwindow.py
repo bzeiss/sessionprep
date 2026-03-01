@@ -155,6 +155,10 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         self._batch_dock.run_single_requested.connect(self._batch_manager.start_single)
         self.addDockWidget(Qt.RightDockWidgetArea, self._batch_dock)
         self._batch_dock.hide()  # hidden by default
+        
+        self._batch_manager.started.connect(self._on_batch_started)
+        self._batch_manager.batch_progress_value.connect(self._batch_dock.update_progress)
+        self._batch_manager.batch_progress_message.connect(self._status_bar.showMessage)
 
         t0 = time.perf_counter()
         apply_dark_theme(self)
@@ -307,7 +311,12 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         self._batch_dock.remove_item(item.id)
 
     @Slot()
+    def _on_batch_started(self):
+        self._batch_dock.set_running_state(True)
+
+    @Slot()
     def _on_batch_finished(self):
+        self._batch_dock.set_running_state(False)
         self._status_bar.showMessage("Batch processing complete.")
         
     @Slot(str, str, str)

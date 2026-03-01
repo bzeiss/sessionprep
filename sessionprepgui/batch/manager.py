@@ -17,6 +17,12 @@ class BatchManager(QObject):
     finished = Signal()
     # Emitted when a single item finishes (item_id, status, result_text)
     item_finished = Signal(str, str, str)
+    # Emitted when a batch (or single item) starts
+    started = Signal()
+    # Emitted to update overall progress (current, total)
+    batch_progress_value = Signal(int, int)
+    # Emitted to update status bar message
+    batch_progress_message = Signal(str)
 
     def __init__(self, main_window: Any):
         super().__init__()
@@ -41,6 +47,7 @@ class BatchManager(QObject):
         self._running = True
         self._is_single_job = False
 
+        self.started.emit()
         self._process_next()
 
     def start_single(self, item: BatchItem):
@@ -52,6 +59,7 @@ class BatchManager(QObject):
         self._running = True
         self._is_single_job = True
 
+        self.started.emit()
         self._process_next()
 
     def _process_next(self):
@@ -59,10 +67,14 @@ class BatchManager(QObject):
             self._finish_batch()
             return
 
+        # Emit baseline progress for this job
+        self._on_transfer_progress_value(0, 1)
+
         item = self._queue[self._current_index]
         item.status = "Running"
         item.result_text = "Checking DAW..."
         self.item_finished.emit(item.id, item.status, item.result_text)
+        self.batch_progress_message.emit(f"[{item.project_name}] Checking DAW...")
 
         # 1. Rehydrate Session and Processor
         try:
@@ -99,11 +111,32 @@ class BatchManager(QObject):
         # 3. Start Transfer
         item.result_text = "Transferring..."
         self.item_finished.emit(item.id, item.status, item.result_text)
+        self.batch_progress_message.emit(f"[{item.project_name}] Transferring...")
         
         self._transfer_worker = DawTransferWorker(
             self._current_dp, self._current_session, item.output_path)
+        self._transfer_worker.progress.connect(self._on_transfer_progress)
+        self._transfer_worker.progress_value.connect(self._on_transfer_progress_value)
         self._transfer_worker.result.connect(lambda ok, msg, results: self._on_transfer_result(item, ok, msg))
         self._transfer_worker.start()
+
+    @Slot(str)
+    def _on_transfer_progress(self, message: str):
+        if self._current_index < len(self._queue):
+            item = self._queue[self._current_index]
+            self.batch_progress_message.emit(f"[{item.project_name}] {message}")
+
+    @Slot(int, int)
+    def _on_transfer_progress_value(self, current: int, total: int):
+        fraction = current / total if total > 0 else 0
+        if not self._is_single_job:
+            overall_total = len(self._queue) * 100
+            overall_current = int((self._current_index * 100) + (fraction * 100))
+        else:
+            overall_total = 100
+            overall_current = int(fraction * 100)
+            
+        self.batch_progress_value.emit(overall_current, overall_total)
 
     @Slot(object, bool, str)
     def _on_transfer_result(self, item: BatchItem, ok: bool, message: str):

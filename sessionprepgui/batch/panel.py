@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMenu,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -47,11 +48,13 @@ class BatchQueueDock(QDockWidget):
         self.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
 
         self._items: list[BatchItem] = []
+        self._is_running = False
 
         self._build_ui()
 
     def _build_ui(self):
         container = QWidget()
+        container.setMinimumWidth(450)
         layout = QVBoxLayout(container)
         layout.setContentsMargins(4, 4, 4, 4)
 
@@ -75,6 +78,13 @@ class BatchQueueDock(QDockWidget):
         header.setSectionResizeMode(3, QHeaderView.Stretch)
 
         layout.addWidget(self._table)
+
+        # Progress bar
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setRange(0, 100)
+        self._progress_bar.setValue(0)
+        self._progress_bar.setVisible(False)
+        layout.addWidget(self._progress_bar)
 
         # Bottom bar
         bottom_layout = QHBoxLayout()
@@ -126,6 +136,18 @@ class BatchQueueDock(QDockWidget):
     def get_pending_items(self) -> list[BatchItem]:
         return [i for i in self._items if i.status == "Pending" or i.status == "Failed"]
 
+    def set_running_state(self, is_running: bool):
+        self._is_running = is_running
+        self._progress_bar.setVisible(is_running)
+        if not is_running:
+            self._progress_bar.setValue(0)
+        self._clear_btn.setEnabled(not is_running)
+        self._run_btn.setEnabled(not is_running and len(self.get_pending_items()) > 0)
+        
+    def update_progress(self, current: int, total: int):
+        self._progress_bar.setRange(0, total)
+        self._progress_bar.setValue(current)
+
     def _refresh_table(self):
         self._table.setRowCount(0)
         for i, item in enumerate(self._items):
@@ -153,7 +175,9 @@ class BatchQueueDock(QDockWidget):
 
         pending_count = len(self.get_pending_items())
         self._status_label.setText(f"{len(self._items)} queued ({pending_count} pending)")
-        self._run_btn.setEnabled(pending_count > 0)
+        
+        if not self._is_running:
+            self._run_btn.setEnabled(pending_count > 0)
 
     @Slot()
     def _on_run_batch(self):
@@ -163,6 +187,9 @@ class BatchQueueDock(QDockWidget):
 
     @Slot(object)
     def _on_context_menu(self, pos):
+        if self._is_running:
+            return
+            
         row = self._table.rowAt(pos.y())
         if row < 0:
             return
