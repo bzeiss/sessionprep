@@ -176,12 +176,25 @@ class BatchManager(QObject):
         from sessionpreplib.models import SessionContext
         from sessionpreplib.detectors import default_detectors
         from sessionpreplib.processors import default_processors
+        from sessionpreplib.daw_processors import default_daw_processors
         from sessionpreplib.config import default_config
 
         tracks = state_dict.get("tracks", [])
         source_dir = state_dict.get("source_dir", "")
         
         flat_config = dict(default_config())
+        
+        # Inject defaults for all components so that toggles like protools_enabled exist
+        for det in default_detectors():
+            for param in getattr(det.__class__, "config_params", lambda: [])():
+                flat_config[param.key] = param.default
+        for proc in default_processors():
+            for param in getattr(proc.__class__, "config_params", lambda: [])():
+                flat_config[param.key] = param.default
+        for dp in default_daw_processors():
+            for param in getattr(dp.__class__, "config_params", lambda: [])():
+                flat_config[param.key] = param.default
+
         if state_dict.get("session_config"):
             from sessionpreplib.config import flatten_structured_config
             flat_config.update(flatten_structured_config(state_dict["session_config"]))

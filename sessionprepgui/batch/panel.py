@@ -4,8 +4,10 @@ from dataclasses import dataclass
 from typing import Any
 import uuid
 
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import Qt, Signal, Slot, QPoint
+from PySide6.QtGui import QPainter, QPen, QColor, QDropEvent, QDrag, QPixmap
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QDockWidget,
     QHBoxLayout,
     QLabel,
@@ -28,10 +30,158 @@ class BatchItem:
     id: str
     project_name: str
     daw_processor_id: str
+    daw_processor_name: str
     output_path: str
     session_state: dict[str, Any]
     status: str = "Pending"
     result_text: str = ""
+
+
+class _BatchTable(QTableWidget):
+    """Table widget with internal drag-and-drop row reordering."""
+
+    reordered = Signal(int, int)  # source_row, target_row
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setSelectionBehavior(QTableWidget.SelectRows)
+        self.setSelectionMode(QTableWidget.SingleSelection)
+        self.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)
+        self.setDragDropMode(QAbstractItemView.DragDrop)
+        self.setDefaultDropAction(Qt.MoveAction)
+        self.setDropIndicatorShown(False)
+        
+        self._insert_line_y: int | None = None
+
+    def startDrag(self, supportedActions):
+        selected = self.selectedItems()
+        if not selected:
+            return
+            
+        row = selected[0].row()
+        
+        # Calculate the bounding rect of the entire row
+        rect = self.visualRect(self.model().index(row, 0))
+        for col in range(1, self.columnCount()):
+            rect = rect.united(self.visualRect(self.model().index(row, col)))
+            
+        # Render the row into a pixmap
+        pixmap = QPixmap(rect.size())
+        pixmap.fill(Qt.transparent)
+        self.viewport().render(pixmap, QPoint(0, 0), rect)
+        
+        # Create a new pixmap with 50% opacity
+        transparent_pixmap = QPixmap(pixmap.size())
+        transparent_pixmap.fill(Qt.transparent)
+        
+        painter = QPainter(transparent_pixmap)
+        painter.setOpacity(0.5)
+        painter.drawPixmap(0, 0, pixmap)
+        painter.end()
+        
+        # Start the drag operation
+        drag = QDrag(self)
+        mime = self.model().mimeData(self.selectedIndexes())
+        drag.setMimeData(mime)
+        drag.setPixmap(transparent_pixmap)
+        
+        # Get mouse position relative to the row's top-left so the drag image aligns correctly
+        mouse_pos = self.viewport().mapFromGlobal(self.cursor().pos())
+        hotspot = mouse_pos - rect.topLeft()
+        drag.setHotSpot(hotspot)
+        
+        drag.exec_(supportedActions)
+
+    def dragMoveEvent(self, event):
+        if event.source() != self:
+            event.ignore()
+            return
+            
+        event.setDropAction(Qt.MoveAction)
+        event.accept()
+        
+        pos = event.position().toPoint()
+        row = self.rowAt(pos.y())
+        
+        if row == -1:
+            # Hovering below the last row
+            last_row = self.rowCount() - 1
+            if last_row >= 0:
+                rect = self.visualRect(self.model().index(last_row, 0))
+                self._insert_line_y = rect.bottom()
+            else:
+                self._insert_line_y = None
+        else:
+            rect = self.visualRect(self.model().index(row, 0))
+            mid = rect.top() + rect.height() // 2
+            if pos.y() < mid:
+                self._insert_line_y = rect.top()
+            else:
+                self._insert_line_y = rect.bottom()
+                
+        self.viewport().update()
+        
+    def dragEnterEvent(self, event):
+        if event.source() == self:
+            event.setDropAction(Qt.MoveAction)
+            event.accept()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self._insert_line_y = None
+        self.viewport().update()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event: QDropEvent):
+        self._insert_line_y = None
+        self.viewport().update()
+        
+        if event.source() != self:
+            event.ignore()
+            return
+
+        selected = self.selectedItems()
+        if not selected:
+            event.ignore()
+            return
+            
+        source_row = selected[0].row()
+        pos = event.position().toPoint()
+        target_row = self.rowAt(pos.y())
+        
+        if target_row == -1:
+            target_row = self.rowCount()
+        else:
+            rect = self.visualRect(self.model().index(target_row, 0))
+            mid = rect.top() + rect.height() // 2
+            if pos.y() >= mid:
+                target_row += 1
+
+        # Adjust target if moving downwards because removing the source shifts everything up
+        if target_row > source_row:
+            target_row -= 1
+
+        # Ignore at the Qt level to prevent the default QTableWidget item deletion,
+        # but accept the event to stop propagation.
+        event.setDropAction(Qt.IgnoreAction)
+        event.accept()
+
+        if source_row != target_row:
+            self.reordered.emit(source_row, target_row)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._insert_line_y is not None:
+            painter = QPainter(self.viewport())
+            pen = QPen(QColor(255, 255, 255, 200), 2)
+            painter.setPen(pen)
+            w = self.viewport().width()
+            painter.drawLine(0, self._insert_line_y, w, self._insert_line_y)
+            painter.end()
 
 
 class BatchQueueDock(QDockWidget):
@@ -59,14 +209,12 @@ class BatchQueueDock(QDockWidget):
         layout.setContentsMargins(4, 4, 4, 4)
 
         # Table
-        self._table = QTableWidget()
+        self._table = _BatchTable()
         self._table.setColumnCount(4)
         self._table.setHorizontalHeaderLabels(["Project Name", "DAW", "Status", "Details"])
-        self._table.setSelectionBehavior(QTableWidget.SelectRows)
-        self._table.setSelectionMode(QTableWidget.SingleSelection)
-        self._table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._table.setContextMenuPolicy(Qt.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._on_context_menu)
+        self._table.reordered.connect(self._on_table_reordered)
         self._table.setAlternatingRowColors(True)
         self._table.setShowGrid(True)
         self._table.verticalHeader().setVisible(False)
@@ -157,7 +305,7 @@ class BatchQueueDock(QDockWidget):
             name_item.setData(Qt.UserRole, item.id)
             self._table.setItem(i, 0, name_item)
             
-            self._table.setItem(i, 1, QTableWidgetItem(item.daw_processor_id))
+            self._table.setItem(i, 1, QTableWidgetItem(item.daw_processor_name))
             
             status_item = QTableWidgetItem(item.status)
             if item.status == "Success":
@@ -178,6 +326,18 @@ class BatchQueueDock(QDockWidget):
         
         if not self._is_running:
             self._run_btn.setEnabled(pending_count > 0)
+
+    @Slot(int, int)
+    def _on_table_reordered(self, source_row: int, target_row: int):
+        if self._is_running:
+            return  # Prevent reordering while batch is executing
+
+        item = self._items.pop(source_row)
+        self._items.insert(target_row, item)
+        self._refresh_table()
+        
+        # Reselect the moved item
+        self._table.selectRow(target_row)
 
     @Slot()
     def _on_run_batch(self):

@@ -206,6 +206,9 @@ class AnalysisMixin:
         if getattr(self, "_save_session_action", None) is not None:
             self._save_session_action.setEnabled(False)
 
+        if getattr(self, "_waveform", None) is not None:
+            self._waveform.set_audio(None, 44100)
+            
         self._phase_tabs.setCurrentIndex(_PHASE_TOPOLOGY)
         self._phase_tabs.setTabEnabled(_PHASE_ANALYSIS, False)
         self._phase_tabs.setTabEnabled(_PHASE_SETUP, False)
@@ -325,12 +328,16 @@ class AnalysisMixin:
         if self._session:
             self._session.project_name = self._project_name_edit.text().strip()
             
+        active_dp_id = getattr(self, "_active_daw_processor", None)
+        active_dp_id = active_dp_id.id if active_dp_id else None
+            
         return {
             "source_dir": self._source_dir,
             "active_config_preset": self._active_config_preset_name,
             "session_config": self._session_config,
             "session_groups": self._session_groups,
             "daw_state": self._session.daw_state if self._session else {},
+            "active_daw_processor_id": active_dp_id,
             "tracks": self._session.tracks if self._session else [],
             "topology": self._topo_topology,
             "transfer_manifest": self._session.transfer_manifest if self._session else [],
@@ -412,6 +419,10 @@ class AnalysisMixin:
         
         if self._session_config:
             self._load_session_widgets(self._session_config)
+            
+        # Ensure the DAW processors and combo reflect the newly loaded session config
+        self._configure_daw_processors()
+        self._populate_daw_combo()
 
         # ── Reconstruct SessionContext from saved tracks ──────────────────────
         from sessionpreplib.models import SessionContext
@@ -563,6 +574,17 @@ class AnalysisMixin:
             session.config["_use_processed"] = True
             self._use_processed_cb.setChecked(True)
         self._update_use_processed_action()
+        
+        # ── Restore active DAW processor ──────────────────────────────────────
+        active_daw_id = data.get("active_daw_processor_id")
+        if active_daw_id:
+            for i in range(self._daw_combo.count()):
+                idx = self._daw_combo.itemData(i)
+                if idx is not None and idx < len(self._daw_processors):
+                    if self._daw_processors[idx].id == active_daw_id:
+                        self._daw_combo.setCurrentIndex(i)
+                        break
+
         self._update_daw_lifecycle_buttons()
         # Show folder tree if daw_state already has assignments
         if has_manifest and self._active_daw_processor:

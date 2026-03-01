@@ -512,6 +512,7 @@ class DawMixin:
                 id=uuid.uuid4().hex,
                 project_name=project_name,
                 daw_processor_id=self._active_daw_processor.id,
+                daw_processor_name=self._active_daw_processor.name,
                 output_path=output_path,
                 session_state=state,
             )

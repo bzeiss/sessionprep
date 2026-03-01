@@ -362,6 +362,7 @@ def save_session(path: str, data: dict) -> None:
         "use_processed": data.get("use_processed", False),
         "recursive_scan": data.get("recursive_scan", False),
         "project_name": data.get("project_name", ""),
+        "active_daw_processor_id": data.get("active_daw_processor_id"),
     }
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2, ensure_ascii=False)
@@ -420,4 +421,5 @@ def load_session(path: str) -> dict:
         "use_processed": raw.get("use_processed", False),
         "recursive_scan": raw.get("recursive_scan", False),
         "project_name": raw.get("project_name", ""),
+        "active_daw_processor_id": raw.get("active_daw_processor_id"),
     }

@@ -772,7 +772,7 @@ def main():
     try:
         with open(_cfg_path(), "r", encoding="utf-8") as _f:
             _raw = _json.load(_f)
-        scale = _raw.get("gui", {}).get("scale_factor")
+        scale = _raw.get("app", {}).get("scale_factor")
         if scale is not None and float(scale) != 1.0:
             os.environ["QT_SCALE_FACTOR"] = str(float(scale))
     except Exception:
