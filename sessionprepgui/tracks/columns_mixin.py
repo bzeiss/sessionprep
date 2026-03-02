@@ -33,7 +33,7 @@ from ..widgets import BatchComboBox, BatchToolButton
 from ..analysis.worker import BatchReanalyzeWorker
 
 
-class TrackColumnsMixin:
+class TrackColumnsMixin:  # pylint: disable=too-few-public-methods
     """Track table population, column widgets, batch operations, row helpers.
 
     Mixed into ``SessionPrepWindow`` — not meant to be used standalone.
@@ -621,6 +621,7 @@ class TrackColumnsMixin:
 
     def _batch_apply_combo(self, source_combo, column: int, value: str,
                            prepare_fn, run_detectors: bool = True):
+        # pylint: disable=too-many-positional-arguments
         """Apply *value* to the combo in *column* for every selected row.
 
         1. **Sync** — set overrides via *prepare_fn(track)* and update

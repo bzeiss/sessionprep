@@ -31,7 +31,7 @@ from ..theme import COLORS, PT_DEFAULT_COLORS
 from ..widgets import BatchComboBox
 
 
-class GroupsMixin:
+class GroupsMixin:  # pylint: disable=too-few-public-methods
     """Group management: groups tab, colors, group column, auto-group, linked levels.
 
     Mixed into ``SessionPrepWindow`` — not meant to be used standalone.
@@ -170,6 +170,7 @@ class GroupsMixin:
                             gain_linked: bool, daw_target: str = "",
                             match_method: str = "contains",
                             match_pattern: str = ""):
+        # pylint: disable=too-many-positional-arguments
         """Populate one row in the session-local groups table."""
         name_item = QTableWidgetItem(name)
         self._groups_tab_table.setItem(row, 0, name_item)
@@ -369,7 +370,7 @@ class GroupsMixin:
         vh = table.verticalHeader()
         n = table.rowCount()
         # Build visual order → logical index mapping
-        visual_to_logical = sorted(range(n), key=lambda i: vh.visualIndex(i))
+        visual_to_logical = sorted(range(n), key=vh.visualIndex)
         ordered: list[dict] = []
         for log_idx in visual_to_logical:
             name_item = table.item(log_idx, 0)

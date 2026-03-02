@@ -138,6 +138,7 @@ class GroupsTableWidget(QWidget):
                  gain_linked: bool, daw_target: str = "",
                  match_method: str = "contains",
                  match_pattern: str = ""):
+        # pylint: disable=too-many-positional-arguments
         name_item = QTableWidgetItem(name)
         self._table.setItem(row, 0, name_item)
 
@@ -210,7 +211,7 @@ class GroupsTableWidget(QWidget):
     def _read_groups_visual_order(self) -> list[dict]:
         vh = self._table.verticalHeader()
         n = self._table.rowCount()
-        visual_to_logical = sorted(range(n), key=lambda i: vh.visualIndex(i))
+        visual_to_logical = sorted(range(n), key=vh.visualIndex)
         groups: list[dict] = []
         for logical in visual_to_logical:
             name_item = self._table.item(logical, 0)

@@ -333,7 +333,7 @@ class BatchQueueDock(QDockWidget):
         self._refresh_table()
 
     def get_pending_items(self) -> list[BatchItem]:
-        return [i for i in self._items if i.status == "Pending" or i.status == "Failed"]
+        return [i for i in self._items if i.status in ("Pending", "Failed")]
 
     def set_running_state(self, is_running: bool):
         self._is_running = is_running

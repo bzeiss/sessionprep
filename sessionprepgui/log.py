@@ -20,7 +20,7 @@ import os
 import sys
 import time
 
-class _LogConfig:
+class _LogConfig:  # pylint: disable=too-few-public-methods
     """Encapsulates the global debug logging configuration state."""
     enabled: bool | None = None
 

@@ -22,11 +22,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..widgets import ProgressPanel
-
 from sessionpreplib.topology import build_default_topology
 from sessionpreplib.utils import protools_sort_key
 
+from ..widgets import ProgressPanel
 from ..theme import COLORS
 from ..tracks.table_widgets import _PHASE_TOPOLOGY, _PHASE_ANALYSIS, _PHASE_SETUP
 from ..waveform import WaveformPanel
@@ -36,7 +35,7 @@ from .output_tree import OutputTree
 from . import operations as ops
 
 
-class TopologyMixin:
+class TopologyMixin:  # pylint: disable=too-few-public-methods
     """Mixin that adds the Track Layout tab to the main window.
 
     Expects the host class to provide:
@@ -113,13 +112,13 @@ class TopologyMixin:
         collapse_action = QAction("Collapse All", self)
         collapse_action.setToolTip("Collapse all output tree nodes")
         collapse_action.triggered.connect(
-            lambda: self._topo_output_tree.collapseAll())
+            lambda *_: self._topo_output_tree.collapseAll())
         toolbar.addAction(collapse_action)
 
         expand_action = QAction("Expand All", self)
         expand_action.setToolTip("Expand all output tree nodes")
         expand_action.triggered.connect(
-            lambda: self._topo_output_tree.expandAll())
+            lambda *_: self._topo_output_tree.expandAll())
         toolbar.addAction(expand_action)
 
         toolbar.addSeparator()
@@ -487,9 +486,9 @@ class TopologyMixin:
                     names += f", \u2026 ({n} total)"
                 preview.setText(f"\u2192 {names}  ({ch} ch each)")
 
-        name_edit.textChanged.connect(lambda: _update_preview())
-        count_spin.valueChanged.connect(lambda: _update_preview())
-        ch_spin.valueChanged.connect(lambda: _update_preview())
+        name_edit.textChanged.connect(lambda *_: _update_preview())
+        count_spin.valueChanged.connect(lambda *_: _update_preview())
+        ch_spin.valueChanged.connect(lambda *_: _update_preview())
         _update_preview()
 
         # Buttons

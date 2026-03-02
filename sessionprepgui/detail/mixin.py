@@ -18,7 +18,7 @@ from ..analysis.worker import AudioLoadWorker
 from ..waveform.compute import WaveformLoadWorker
 
 
-class DetailMixin:
+class DetailMixin:  # pylint: disable=too-few-public-methods
     """File detail view, waveform display, overlays, and playback.
 
     Mixed into ``SessionPrepWindow`` — not meant to be used standalone.

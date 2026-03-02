@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from sessionpreplib.chunks import read_chunks, STANDARD_CHUNKS, detect_origin
 from ..theme import COLORS, FILE_COLOR_TRANSIENT, FILE_COLOR_SUSTAINED
 from ..helpers import esc
-from sessionpreplib.chunks import read_chunks, STANDARD_CHUNKS, detect_origin
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +197,7 @@ def render_track_detail_html(track, session=None, *, show_clean: bool = True,
             def _fmt_size(n: int) -> str:
                 if n < 1024:
                     return f"{n} B"
-                elif n < 1024 * 1024:
+                if n < 1024 * 1024:
                     return f"{n / 1024:.1f} KB"
                 return f"{n / (1024 * 1024):.1f} MB"
             chunk_parts = [

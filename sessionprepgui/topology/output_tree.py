@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 """Output-tracks tree widget for Phase 1 topology.
 
 Editable QTreeWidget that displays topology output entries with channel
@@ -28,6 +29,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from sessionpreplib.topology import ChannelRoute, TopologySource
+
 from ..theme import COLORS, FILE_COLOR_OK
 from .input_tree import MIME_CHANNEL, COL_NAME, COL_CH, COL_SR, COL_BIT, COL_DUR
 from .operations import (
@@ -48,8 +51,6 @@ from .operations import (
     wire_channel,
     wire_file,
 )
-
-from sessionpreplib.topology import ChannelRoute, TopologySource
 
 if TYPE_CHECKING:
     from sessionpreplib.models import TrackContext
@@ -701,7 +702,7 @@ class OutputTree(QTreeWidget):
             if int(event.position().y()) > mid:
                 to_ch += 1
             return to_fn, to_ch
-        elif target_data[0] == "file":
+        if target_data[0] == "file":
             to_fn = target_data[1]
             entry = next((e for e in self._topo.entries
                           if e.output_filename == to_fn), None)
@@ -738,7 +739,7 @@ class OutputTree(QTreeWidget):
 
         if from_fn == to_fn:
             # Same file — simple reorder
-            if from_ch == to_ch or from_ch + 1 == to_ch:
+            if to_ch in (from_ch, from_ch + 1):
                 event.ignore()
                 return
             # Adjust for the "insert before" semantic: if inserting after

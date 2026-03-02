@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 """DAW integration mixin: processors, fetch, transfer, folder tree, assignments."""
 
 from __future__ import annotations
@@ -40,7 +41,7 @@ from ..widgets import ProgressPanel
 from ..analysis.worker import DawCheckWorker, DawFetchWorker, DawTransferWorker
 
 
-class DawMixin:
+class DawMixin:  # pylint: disable=too-few-public-methods
     """DAW integration: processors, fetch, transfer, folder tree, assignments.
 
     Mixed into ``SessionPrepWindow`` — not meant to be used standalone.
@@ -610,8 +611,8 @@ class DawMixin:
             children_map.setdefault(parent, []).append(f)
 
         # Sort children by index
-        for k in children_map:
-            children_map[k].sort(key=lambda f: f["index"])
+        for children in children_map.values():
+            children.sort(key=lambda f: f["index"])
 
         # Build inverse assignments: folder_id -> [filenames]
         # Use track_order for stable ordering, fall back to sorted
@@ -622,7 +623,7 @@ class DawMixin:
         for fid, fnames in folder_tracks.items():
             order = track_order.get(fid, [])
             order_map = {n: i for i, n in enumerate(order)}
-            fnames.sort(key=lambda n: (order_map.get(n, len(order)), n))
+            fnames.sort(key=lambda n, om=order_map, length=len(order): (om.get(n, length), n))
 
         # Group color map for track items
         gcm = self._group_color_map()

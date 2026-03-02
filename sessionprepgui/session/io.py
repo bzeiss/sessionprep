@@ -170,7 +170,7 @@ def _make_json_safe(obj: Any) -> Any:
         return [_make_json_safe(v) for v in obj]
     if isinstance(obj, float):
         # Handle inf / nan
-        if obj != obj or obj == float("inf") or obj == float("-inf"):
+        if obj != obj or obj == float("inf") or obj == float("-inf"):  # pylint: disable=comparison-with-itself
             return None
         return obj
     if hasattr(obj, "value"):  # Enum
