@@ -110,7 +110,7 @@ class SubsonicDetector(TrackDetector):
             "<br/><br/>"
             "<b>Results</b><br/>"
             "<b>OK</b> \u2013 Subsonic energy is below the sensitivity threshold.<br/>"
-            "<b>ATTENTION</b> \u2013 Significant subsonic energy detected."
+            "<b>INFO</b> \u2013 Significant subsonic energy detected."
             "<br/><br/>"
             "<b>Interpretation</b><br/>"
             "Consider applying a high-pass filter at or near the cutoff "
@@ -233,14 +233,14 @@ class SubsonicDetector(TrackDetector):
             result_data["windowed_regions"] = windowed_regions
 
         # If windowed produced no regions (or windowed is off), fall back to
-        # a whole-file issue span so ATTENTION always has at least one overlay.
+        # a whole-file issue span so INFO always has at least one overlay.
         if not issues:
             if all_channels_warn or nch == 1:
                 issues.append(IssueLocation(
                     sample_start=0,
                     sample_end=track.total_samples - 1,
                     channel=None,
-                    severity=Severity.ATTENTION,
+                    severity=Severity.INFO,
                     label="subsonic",
                     description=summary,
                     freq_min_hz=0.0,
@@ -256,7 +256,7 @@ class SubsonicDetector(TrackDetector):
                         sample_start=0,
                         sample_end=track.total_samples - 1,
                         channel=ch,
-                        severity=Severity.ATTENTION,
+                        severity=Severity.INFO,
                         label="subsonic",
                         description=desc,
                         freq_min_hz=0.0,
@@ -265,7 +265,7 @@ class SubsonicDetector(TrackDetector):
 
         return DetectorResult(
             detector_id=self.id,
-            severity=Severity.ATTENTION,
+            severity=Severity.INFO,
             summary=summary,
             data=result_data,
             detail_lines=detail_lines if detail_lines else [],
@@ -345,7 +345,7 @@ class SubsonicDetector(TrackDetector):
                 sample_start=reg["sample_start"],
                 sample_end=reg["sample_end"],
                 channel=ch,
-                severity=Severity.ATTENTION,
+                severity=Severity.INFO,
                 label="subsonic",
                 description=desc,
                 freq_min_hz=0.0,
