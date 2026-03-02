@@ -130,10 +130,11 @@ class DawProjectDawProcessor(DawProcessor):
             from dawproject import (  # noqa: F401
                 ContentType, DawProject, Referenceable,
             )
-        except ImportError:
+        except ImportError as exc:
             raise RuntimeError(
                 "dawproject package not installed. "
-                "Install with: pip install dawproject")
+                "Install with: pip install dawproject"
+            ) from exc
 
         Referenceable.reset_id()
         project = DawProject.load_project(self._template_path)

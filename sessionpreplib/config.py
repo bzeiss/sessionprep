@@ -16,7 +16,6 @@ _INTERNAL_KEYS = {
 
 class ConfigError(Exception):
     """Raised when configuration validation fails."""
-    pass
 
 
 @dataclass
@@ -122,9 +121,9 @@ def load_preset(path: str) -> dict[str, Any]:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except json.JSONDecodeError as e:
-        raise ConfigError(f"Invalid JSON in preset file {path}: {e}")
+        raise ConfigError(f"Invalid JSON in preset file {path}: {e}") from e
     except OSError as e:
-        raise ConfigError(f"Cannot read preset file {path}: {e}")
+        raise ConfigError(f"Cannot read preset file {path}: {e}") from e
 
     if not isinstance(data, dict):
         raise ConfigError(f"Preset file must contain a JSON object, got {type(data).__name__}")

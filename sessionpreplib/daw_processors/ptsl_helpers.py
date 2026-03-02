@@ -199,7 +199,7 @@ def create_session_from_template(
     Paths use native OS separators. CId_CreateSession automatically opens the session.
     """
     from ptsl import PTSL_pb2 as pt
-    
+
     location = os.path.abspath(session_location)
     os.makedirs(location, exist_ok=True)
 
@@ -216,16 +216,16 @@ def create_session_from_template(
         "is_interleaved": True,
         "is_cloud_project": False,
     }
-    
+
     # 1. Create the session (Pro Tools automatically opens it as well)
     run_command(engine, pt.CommandId.CId_CreateSession, body)
-    
+
     # Wait until Pro Tools actually loads the template and writes the PTX file.
     # It can take a few seconds for the background creation to finish.
     import time
     session_dir = os.path.join(location, session_name)
     session_path = os.path.join(session_dir, f"{session_name}.ptx")
-    
+
     success = False
     for _ in range(15):  # Wait up to 7.5 seconds
         if os.path.isfile(session_path):

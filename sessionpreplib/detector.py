@@ -49,7 +49,7 @@ class TrackDetector(ABC):
     def html_help(cls) -> str:
         """Return HTML help text with Description, Results, and
         Interpretation sections.  Displayed as tooltip in the GUI."""
-        ...
+
 
     def configure(self, config: dict[str, Any]) -> None:
         """
@@ -61,7 +61,6 @@ class TrackDetector(ABC):
     @abstractmethod
     def analyze(self, track: TrackContext) -> DetectorResult:
         """Analyze one track. Return a DetectorResult."""
-        ...
 
     def effective_severity(self, result: DetectorResult) -> Severity | None:
         """Return the display severity for *result*, applying ``report_as``.
@@ -163,7 +162,7 @@ class SessionDetector(ABC):
     def html_help(cls) -> str:
         """Return HTML help text with Description, Results, and
         Interpretation sections.  Displayed as tooltip in the GUI."""
-        ...
+
 
     def configure(self, config: dict[str, Any]) -> None:
         self._report_as: str = config.get(f"{self.id}_report_as", "default")
@@ -178,7 +177,6 @@ class SessionDetector(ABC):
         if report_as == "default":
             return result.severity
         return _REPORT_AS_MAP.get(report_as, result.severity)
-
     @abstractmethod
     def analyze(self, session: SessionContext) -> list[DetectorResult]:
         """
@@ -186,7 +184,6 @@ class SessionDetector(ABC):
         (typically one per affected track, plus optionally a session-level
         summary result).
         """
-        ...
 
     def render_html(self, result: DetectorResult, track: TrackContext | None = None) -> str:
         """Return an HTML table row for this detector's result."""

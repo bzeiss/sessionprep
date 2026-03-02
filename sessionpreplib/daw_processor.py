@@ -93,7 +93,6 @@ class DawProcessor(ABC):
         this checks the connection.  For file-based DAWs (DAWProject)
         this might validate the output path.
         """
-        ...
 
     @abstractmethod
     def fetch(self, session: SessionContext) -> SessionContext:
@@ -103,7 +102,6 @@ class DawProcessor(ABC):
         (routing folders, track list, colors, etc.).  The GUI can
         then display this data in the Session Setup panel.
         """
-        ...
 
     def resolve_output_path(
         self,
@@ -152,7 +150,6 @@ class DawProcessor(ABC):
 
         Returns the list of DawCommandResult for this batch.
         """
-        ...
 
     @abstractmethod
     def sync(self, session: SessionContext) -> list[DawCommandResult]:
@@ -162,7 +159,6 @@ class DawProcessor(ABC):
         transfer() (in session.daw_state[self.id]) and sends only the
         deltas.  Same internal dispatch as transfer().
         """
-        ...
 
     @abstractmethod
     def execute_commands(
@@ -177,4 +173,3 @@ class DawProcessor(ABC):
 
         Results are appended to session.daw_command_log.
         """
-        ...
