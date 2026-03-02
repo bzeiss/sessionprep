@@ -685,12 +685,13 @@ class ProToolsDawProcessor(DawProcessor):
                     if not pr or pr.classification in ("Silent", "Skip"):
                         continue
                     fader_db = pr.data.get("fader_offset", 0.0)
+                    dbg(f"Fader logic for {t_id}: classification={pr.classification}, fader_db={fader_db}")
                     if fader_db == 0.0:
                         continue
                     try:
                         ptslh.set_track_volume(engine, t_id, fader_db, batch_job_id=batch_job_id, progress=95)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        dbg(f"Fader set failed for {t_id}: {e}")
 
             # ── 6. Save & Close ──────────────────────────────────
 

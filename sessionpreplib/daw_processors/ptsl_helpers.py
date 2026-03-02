@@ -212,7 +212,7 @@ def create_session_from_template(  # pylint: disable=too-many-positional-argumen
         "file_type": "FT_WAVE",
         "sample_rate": sample_rate,
         "bit_depth": bit_depth,
-        "input_output_settings": "IO_Last",
+        "input_output_settings": "IO_StereoMix",
         "is_interleaved": True,
         "is_cloud_project": False,
     }
@@ -246,6 +246,12 @@ def close_session(engine, save_on_close: bool = False, delay: float = 0.5) -> No
     run_command(engine, pt.CommandId.CId_CloseSession, {"save_on_close": save_on_close})
     # Give the host a breather to physically close the document
     time.sleep(delay)
+
+
+def save_session(engine) -> None:
+    """Save the current Pro Tools session without closing it."""
+    from ptsl import PTSL_pb2 as pt
+    run_command(engine, pt.CommandId.CId_SaveSession, {})
 
 
 # ── Batch job lifecycle ──────────────────────────────────────────────
@@ -388,20 +394,25 @@ def set_track_volume(
     to dBFS (e.g. ``-12.0`` sets the fader to −12 dB).
     """
     from ptsl import PTSL_pb2 as pt
-    run_command(
-        engine, pt.CommandId.CId_SetTrackControlBreakpoints,
-        {
-            "track_id": track_id,
-            "control_id": {
-                "section": "TSId_MainOut",
-                "control_type": "TCType_Volume",
-            },
-            "breakpoints": [{
-                "time": {
-                    "location": "0",
-                    "time_type": "TLType_Samples",
+    dbg(f"set_track_volume: id={track_id}, db={volume_db}")
+    try:
+        run_command(
+            engine, pt.CommandId.CId_SetTrackControlBreakpoints,
+            {
+                "track_id": track_id,
+                "control_id": {
+                    "section": "TSId_MainOut",
+                    "control_type": "TCType_Volume",
                 },
-                "value": volume_db,
-            }],
-        },
-        batch_job_id=batch_job_id, progress=progress)
+                "breakpoints": [{
+                    "time": {
+                        "location": "0",
+                        "time_type": "TLType_Samples",
+                    },
+                    "value": volume_db,
+                }],
+            },
+            batch_job_id=batch_job_id, progress=progress)
+    except Exception as e:
+        dbg(f"Error in set_track_volume ({track_id}, {volume_db} dB): {e}")
+        raise

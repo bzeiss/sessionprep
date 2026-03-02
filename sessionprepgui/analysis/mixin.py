@@ -340,6 +340,7 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
             "daw_state": self._session.daw_state if self._session else {},
             "active_daw_processor_id": active_dp_id,
             "tracks": self._session.tracks if self._session else [],
+            "output_tracks": getattr(self._session, "output_tracks", []) if self._session else [],
             "topology": self._topo_topology,
             "transfer_manifest": self._session.transfer_manifest if self._session else [],
             "topology_applied": self._topology_dir is not None,
@@ -511,17 +512,15 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
             if os.path.isdir(topo_dir):
                 self._topology_dir = topo_dir
 
-        # ── Reconstruct output_tracks from topology + disk ───────────────
-        # output_tracks are not persisted in the session file, but the DAW
-        # transfer needs them for file paths.  Rebuild from topology entries
-        # and the files that exist on disk.
-        if self._topology_dir and self._topo_topology:
+        # ── Restore or reconstruct output_tracks ───────────────
+        if data.get("output_tracks"):
+            session.output_tracks = data["output_tracks"]
+        elif self._topology_dir and self._topo_topology:
             import soundfile as sf
             prep_folder = self._config.get("app", {}).get(
                 "phase2_output_folder", "sp_02_prepared")
             prep_dir = os.path.join(source_dir, prep_folder)
-            # Build group lookup from transfer manifest so output_tracks
-            # carry the group for folder-tree coloring and DAW transfer.
+            # Build group lookup from transfer manifest
             manifest_group: dict[str, str | None] = {
                 e.output_filename: e.group
                 for e in session.transfer_manifest

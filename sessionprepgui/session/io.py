@@ -36,7 +36,7 @@ from sessionpreplib.topology import (
 # Version & migration table
 # ---------------------------------------------------------------------------
 
-CURRENT_VERSION: int = 5
+CURRENT_VERSION: int = 6
 
 # Each entry upgrades from key-version to key+1.
 _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
@@ -60,6 +60,11 @@ _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
         **d,
         "project_name": "",
         "version": 5,
+    },
+    5: lambda d: {
+        **d,
+        "output_tracks": {},
+        "version": 6,
     },
 }
 
@@ -239,6 +244,45 @@ def _deserialize_track(filename: str, source_dir: str, d: dict) -> TrackContext:
     return track
 
 
+def _serialize_output_track(track: TrackContext) -> dict:
+    d = _serialize_track(track)
+    d["filepath"] = track.filepath
+    d["processed_filepath"] = track.processed_filepath
+    return d
+
+
+def _deserialize_output_track(filename: str, d: dict) -> TrackContext:
+    filepath = d.get("filepath", filename)
+    status = d.get("status", "OK")
+
+    track = TrackContext(
+        filename=filename,
+        filepath=filepath,
+        audio_data=None,
+        samplerate=d.get("samplerate", 0),
+        channels=d.get("channels", 0),
+        total_samples=d.get("total_samples", 0),
+        bitdepth=d.get("bitdepth", ""),
+        subtype=d.get("subtype", ""),
+        duration_sec=d.get("duration_sec", 0.0),
+        status=status,
+    )
+    track.processed_filepath = d.get("processed_filepath")
+    track.group = d.get("group")
+    track.classification_override = d.get("classification_override")
+    track.rms_anchor_override = d.get("rms_anchor_override")
+    track.processor_skip = set(d.get("processor_skip", []))
+    track.detector_results = {
+        k: _deser_detector_result(v)
+        for k, v in d.get("detector_results", {}).items()
+    }
+    track.processor_results = {
+        k: _deser_processor_result(v)
+        for k, v in d.get("processor_results", {}).items()
+    }
+    return track
+
+
 # ---------------------------------------------------------------------------
 # Topology serialisation helpers
 # ---------------------------------------------------------------------------
@@ -344,6 +388,10 @@ def serialize_session_state(data: dict) -> dict:
             track.filename: _serialize_track(track)
             for track in data.get("tracks", [])
         },
+        "output_tracks": {
+            track.filename: _serialize_output_track(track)
+            for track in data.get("output_tracks", [])
+        },
         "topology": _ser_topology(data.get("topology")),
         "transfer_manifest": [
             _ser_transfer_entry(e)
@@ -372,6 +420,11 @@ def deserialize_session_state(raw: dict) -> dict:
         for fname, tdata in raw.get("tracks", {}).items()
     ]
 
+    output_tracks = [
+        _deserialize_output_track(fname, tdata)
+        for fname, tdata in raw.get("output_tracks", {}).items()
+    ]
+
     topology = _deser_topology(raw.get("topology"))
     transfer_manifest = [
         _deser_transfer_entry(e)
@@ -385,6 +438,7 @@ def deserialize_session_state(raw: dict) -> dict:
         "session_groups": raw.get("session_groups", []),
         "daw_state": raw.get("daw_state", {}),
         "tracks": tracks,
+        "output_tracks": output_tracks,
         "topology": topology,
         "transfer_manifest": transfer_manifest,
         "topology_applied": raw.get("topology_applied", False),
