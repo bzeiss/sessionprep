@@ -5,9 +5,7 @@ from __future__ import annotations
 import math
 import os
 import time
-import uuid
 import shutil
-from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -231,12 +229,12 @@ class ProToolsDawProcessor(DawProcessor):
             if version < 2025:
                 self._connected = False
                 return False, "Protocol 2025 or newer required"
-                
+
             from . import ptsl_helpers as ptslh
             if not ptslh.wait_for_host_ready(engine, timeout=25.0, sleep_time=self._command_delay):
                 self._connected = False
                 return False, "Connected, but Pro Tools is busy or not ready. Please bring its window to the front."
-                
+
             self._connected = True
             return True, f"Protocol: {version}"
         except Exception as e:
@@ -266,7 +264,7 @@ class ProToolsDawProcessor(DawProcessor):
         try:
             if progress_cb:
                 progress_cb(10, 100, "Connecting to Pro Tools...")
-                
+
             address = f"{self._host}:{self._port}"
             engine = Engine(
                 company_name=self._company_name,
@@ -285,16 +283,16 @@ class ProToolsDawProcessor(DawProcessor):
 
             import uuid
             temp_session_name = f"SessionPrep_Temp_{uuid.uuid4().hex[:8]}"
-            
+
             if progress_cb:
                 progress_cb(30, 100, f"Creating temporary session from template '{self._instance_group} / {self._instance_name}'...")
-                
+
             # Create the temporary session from the template
             ptslh.create_session_from_template(
-                engine, 
-                temp_session_name, 
-                self._temp_dir, 
-                self._instance_group, 
+                engine,
+                temp_session_name,
+                self._temp_dir,
+                self._instance_group,
                 self._instance_name
             )
 
@@ -351,15 +349,15 @@ class ProToolsDawProcessor(DawProcessor):
                 # Defensive deletion of the temporary session folder
                 target_dir = os.path.join(self._temp_dir, temp_session_name)
                 ptx_file = os.path.join(target_dir, f"{temp_session_name}.ptx")
-                
+
                 # Extreme safety checks to ensure we only delete what we created:
                 # 1. Ensure target_dir actually exists
                 # 2. Ensure target_dir is exactly a direct child of the configured temp dir
-                # 3. Ensure target_dir contains our specific UUID .ptx file 
-                if (os.path.isdir(target_dir) and 
+                # 3. Ensure target_dir contains our specific UUID .ptx file
+                if (os.path.isdir(target_dir) and
                     os.path.dirname(os.path.abspath(target_dir)) == os.path.abspath(self._temp_dir) and
                     os.path.isfile(ptx_file)):
-                    
+
                     import shutil
                     import time
                     # Retry loop to handle delayed file locks on Windows from Pro Tools closing
@@ -371,7 +369,7 @@ class ProToolsDawProcessor(DawProcessor):
                         except Exception:
                             pass
                         time.sleep(0.5)
-                        
+
             if progress_cb:
                 progress_cb(100, 100, "Fetch complete")
 
@@ -409,11 +407,11 @@ class ProToolsDawProcessor(DawProcessor):
 
     def _get_optimal_session_specs(self, session: SessionContext) -> tuple[str, str]:
         """Determine most common sample rate and bit depth from output tracks.
-        
+
         Returns (sample_rate_enum, bit_depth_enum).
         """
         from collections import Counter
-        
+
         rates = [t.samplerate for t in session.output_tracks if t.samplerate > 0]
         # bitdepth is string, e.g. "PCM_24". Try to extract numeric part.
         depths = []
@@ -428,12 +426,12 @@ class ProToolsDawProcessor(DawProcessor):
         common_depth = Counter(depths).most_common(1)[0][0] if depths else 24
 
         rate_map = {
-            44100: "SR_44100", 48000: "SR_48000", 88200: "SR_88200", 
+            44100: "SR_44100", 48000: "SR_48000", 88200: "SR_88200",
             96000: "SR_96000", 176400: "SR_176400", 192000: "SR_192000"
         }
         depth_map = {16: "Bit16", 24: "Bit24", 32: "Bit32Float"}
 
-        return (rate_map.get(common_rate, "SR_48000"), 
+        return (rate_map.get(common_rate, "SR_48000"),
                 depth_map.get(common_depth, "Bit24"))
 
     def transfer(
@@ -475,7 +473,7 @@ class ProToolsDawProcessor(DawProcessor):
         assignments: dict[str, str] = pt_state.get("assignments", {})
         folders = pt_state.get("folders", [])
         track_order = pt_state.get("track_order", {})
-        
+
         if not assignments:
             dbg("No assignments, returning early")
             return []
@@ -529,7 +527,7 @@ class ProToolsDawProcessor(DawProcessor):
 
             if progress_cb:
                 progress_cb(5, 100, "Calculating audio specifications...")
-            
+
             rate_enum, depth_enum = self._get_optimal_session_specs(session)
 
             # ── 1. Create New Session ────────────────────────────
@@ -574,13 +572,16 @@ class ProToolsDawProcessor(DawProcessor):
             valid_work: list[tuple[str, str, str, str, str, Any]] = []
             for eid, fid in work:
                 folder = folder_map.get(fid)
-                if not folder: continue
+                if not folder:
+                    continue
                 entry = manifest_map.get(eid)
-                if not entry: continue
+                if not entry:
+                    continue
                 out_tc = out_track_map.get(entry.output_filename)
                 audio_path = (out_tc.processed_filepath or out_tc.filepath) if out_tc else None
-                if not out_tc or not audio_path: continue
-                
+                if not out_tc or not audio_path:
+                    continue
+
                 filepath = os.path.abspath(audio_path)
                 track_stem = os.path.splitext(entry.daw_track_name)[0]
                 track_format = ("TF_Mono" if out_tc.channels == 1 else "TF_Stereo")
@@ -601,7 +602,7 @@ class ProToolsDawProcessor(DawProcessor):
             all_filepaths = list(dict.fromkeys(fp for _, _, fp, _, _, _ in valid_work))
             clip_id_map: dict[str, list[str]] = {}
             import_failures: set[str] = set()
-            
+
             try:
                 import_resp = ptslh.batch_import_audio(
                     engine, all_filepaths, batch_job_id=batch_job_id, progress=25)
@@ -618,12 +619,13 @@ class ProToolsDawProcessor(DawProcessor):
                     for fail in import_resp.get("failure_list", []):
                         fail_path = fail.get("original_input_path", "")
                         import_failures.add(os.path.normcase(fail_path))
-                
+
                 results.append(DawCommandResult(
                     command=DawCommand("batch_import", "", {}), success=True))
             except Exception as e:
-                if batch_job_id: ptslh.cancel_batch_job(engine, batch_job_id)
-                return [DawCommandResult(command=DawCommand("batch_import", "", {}), 
+                if batch_job_id:
+                    ptslh.cancel_batch_job(engine, batch_job_id)
+                return [DawCommandResult(command=DawCommand("batch_import", "", {}),
                                          success=False, error=str(e))]
 
             # ── 3. Parallel Track Creation + Spot ────────────────
@@ -631,34 +633,35 @@ class ProToolsDawProcessor(DawProcessor):
             color_groups: dict[int, list[str]] = {}
             created_tracks: list[tuple[str, str, Any]] = []
             spot_work = []
-            for step, (fname, fid, filepath, track_stem, track_format, tc) in enumerate(valid_work):
-                clip_ids = clip_id_map.get(os.path.normcase(filepath))
-                if not clip_ids or os.path.normcase(filepath) in import_failures:
+            for step, (_, fid, filepath_val, track_stem, track_format, tc) in enumerate(valid_work):
+                clip_ids = clip_id_map.get(os.path.normcase(filepath_val))
+                if not clip_ids or os.path.normcase(filepath_val) in import_failures:
                     continue
-                spot_work.append((step, fname, fid, filepath, track_stem, track_format, tc, clip_ids))
+                spot_work.append((step, fid, filepath_val, track_stem, track_format, tc, clip_ids))
 
             def _create_and_spot(item):
-                (step, fname, fid, filepath, track_stem, track_format, tc, clip_ids) = item
-                folder_name = folder_map[fid]["name"]
-                pct = 30 + int(50 * step / max(len(valid_work), 1))
-                
+                (step_val, fid_val, _, track_stem_val, track_format_val, tc_val, clip_ids_val) = item
+                folder_name = folder_map[fid_val]["name"]
+                pct = 30 + int(50 * step_val / max(len(valid_work), 1))
+
                 try:
-                    tid = ptslh.create_track(engine, track_stem, track_format, 
+                    tid = ptslh.create_track(engine, track_stem_val, track_format_val,
                                             folder_name=folder_name, batch_job_id=batch_job_id, progress=pct)
-                    ptslh.spot_clips(engine, clip_ids, tid, batch_job_id=batch_job_id, progress=pct)
-                    
-                    cinfo = (group_palette_idx[tc.group], track_stem) if tc.group in group_palette_idx else None
-                    return True, (track_stem, tid, tc), cinfo, None
-                except Exception as e:
-                    return False, None, None, str(e)
+                    ptslh.spot_clips(engine, clip_ids_val, tid, batch_job_id=batch_job_id, progress=pct)
+
+                    cinfo = (group_palette_idx[tc_val.group], track_stem_val) if tc_val.group in group_palette_idx else None
+                    return True, (track_stem_val, tid, tc_val), cinfo, None
+                except Exception as ex:
+                    return False, None, None, str(ex)
 
             with ThreadPoolExecutor(max_workers=6) as pool:
                 futures = [pool.submit(_create_and_spot, item) for item in spot_work]
                 for i, fut in enumerate(as_completed(futures)):
-                    ok, tinfo, cinfo, err = fut.result()
+                    ok, tinfo, cinfo, _ = fut.result()
                     if ok:
                         created_tracks.append(tinfo)
-                        if cinfo: color_groups.setdefault(cinfo[0], []).append(cinfo[1])
+                        if cinfo:
+                            color_groups.setdefault(cinfo[0], []).append(cinfo[1])
                     if progress_cb:
                         progress_cb(30 + int(50 * i / len(spot_work)), 100, f"Created {i+1}/{len(spot_work)} tracks")
 
@@ -667,28 +670,33 @@ class ProToolsDawProcessor(DawProcessor):
             for cidx, names in color_groups.items():
                 try:
                     ptslh.colorize_tracks(engine, names, cidx, batch_job_id=batch_job_id, progress=90)
-                except: pass
+                except Exception:
+                    pass
 
             # ── 5. Faders ────────────────────────────────────────
 
             proc_id = "bimodal_normalize"
             bn_enabled = session.config.get(f"{proc_id}_enabled", True)
             if bn_enabled:
-                for t_stem, t_id, tc in created_tracks:
-                    if proc_id in tc.processor_skip: continue
+                for _, t_id, tc in created_tracks:
+                    if proc_id in tc.processor_skip:
+                        continue
                     pr = tc.processor_results.get(proc_id)
-                    if not pr or pr.classification in ("Silent", "Skip"): continue
+                    if not pr or pr.classification in ("Silent", "Skip"):
+                        continue
                     fader_db = pr.data.get("fader_offset", 0.0)
-                    if fader_db == 0.0: continue
+                    if fader_db == 0.0:
+                        continue
                     try:
                         ptslh.set_track_volume(engine, t_id, fader_db, batch_job_id=batch_job_id, progress=95)
-                    except: pass
+                    except Exception:
+                        pass
 
             # ── 6. Save & Close ──────────────────────────────────
 
             if progress_cb:
                 progress_cb(98, 100, "Saving and closing session...")
-            
+
             if batch_job_id:
                 ptslh.complete_batch_job(engine, batch_job_id)
                 batch_job_id = None
