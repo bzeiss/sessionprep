@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..theme import COLORS
+from ..session.io import serialize_session_state, deserialize_session_state
 
 
 @dataclass
@@ -35,6 +36,31 @@ class BatchItem:
     session_state: dict[str, Any]
     status: str = "Pending"
     result_text: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "project_name": self.project_name,
+            "daw_processor_id": self.daw_processor_id,
+            "daw_processor_name": self.daw_processor_name,
+            "output_path": self.output_path,
+            "session_state": serialize_session_state(self.session_state),
+            "status": self.status,
+            "result_text": self.result_text,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> BatchItem:
+        return cls(
+            id=data.get("id", str(uuid.uuid4())),
+            project_name=data.get("project_name", ""),
+            daw_processor_id=data.get("daw_processor_id", ""),
+            daw_processor_name=data.get("daw_processor_name", ""),
+            output_path=data.get("output_path", ""),
+            session_state=deserialize_session_state(data.get("session_state", {})),
+            status=data.get("status", "Pending"),
+            result_text=data.get("result_text", ""),
+        )
 
 
 class _BatchTable(QTableWidget):
@@ -377,3 +403,16 @@ class BatchQueueDock(QDockWidget):
     @property
     def has_items(self) -> bool:
         return len(self._items) > 0
+
+    def get_state(self) -> list[dict]:
+        return [item.to_dict() for item in self._items]
+
+    def load_state(self, state: list[dict], append: bool = False):
+        if not append:
+            self._items.clear()
+            self._refresh_table()
+
+        for item_data in state:
+            new_item = BatchItem.from_dict(item_data)
+            # add_item handles duplicates and refreshing the table
+            self.add_item(new_item)

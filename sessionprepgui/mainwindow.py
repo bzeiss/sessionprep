@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 import sys
 import time
@@ -15,6 +16,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -257,6 +259,10 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         load_session_action.triggered.connect(self._on_load_session)
         file_menu.addAction(load_session_action)
 
+        load_batch_action = QAction("Load Batch Queue...", self)
+        load_batch_action.triggered.connect(self._on_load_batch_queue)
+        file_menu.addAction(load_batch_action)
+
         file_menu.addSeparator()
 
         self._save_session_action = QAction("&Save Session...", self)
@@ -264,6 +270,10 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         self._save_session_action.setEnabled(False)
         self._save_session_action.triggered.connect(self._on_save_session)
         file_menu.addAction(self._save_session_action)
+
+        self._save_batch_action = QAction("Save Batch Queue...", self)
+        self._save_batch_action.triggered.connect(self._on_save_batch_queue)
+        file_menu.addAction(self._save_batch_action)
 
         file_menu.addSeparator()
         
@@ -291,6 +301,72 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         quit_action.setShortcut("Ctrl+Q")
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
+
+    @Slot()
+    def _on_save_batch_queue(self):
+        if not self._batch_dock.has_items:
+            QMessageBox.information(self, "Save Batch Queue", "The batch queue is empty.")
+            return
+            
+        start_dir = self._config.get("app", {}).get("default_project_dir", "") or ""
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Batch Queue", start_dir,
+            "Batch Queue Files (*.spbatch);;All Files (*)"
+        )
+        if not path:
+            return
+
+        try:
+            state = self._batch_dock.get_state()
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2)
+            self._status_bar.showMessage(f"Batch queue saved to {path}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Save Batch Queue Failed", f"Could not save batch queue:\n\n{exc}")
+
+    @Slot()
+    def _on_load_batch_queue(self):
+        start_dir = self._config.get("app", {}).get("default_project_dir", "") or ""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Batch Queue", start_dir,
+            "Batch Queue Files (*.spbatch);;All Files (*)"
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                state = json.load(f)
+        except Exception as exc:
+            QMessageBox.critical(self, "Load Batch Queue Failed", f"Could not load batch queue:\n\n{exc}")
+            return
+            
+        if not isinstance(state, list):
+            QMessageBox.critical(self, "Invalid File", "The selected file is not a valid batch queue format.")
+            return
+
+        append = False
+        if self._batch_dock.has_items:
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Load Batch Queue")
+            msg.setText("How would you like to load the batch queue?")
+            
+            replace_btn = msg.addButton("Replace", QMessageBox.AcceptRole)
+            append_btn = msg.addButton("Append", QMessageBox.AcceptRole)
+            cancel_btn = msg.addButton("Cancel", QMessageBox.RejectRole)
+            
+            msg.exec()
+            
+            if msg.clickedButton() == cancel_btn:
+                return
+            elif msg.clickedButton() == append_btn:
+                append = True
+
+        self._batch_dock.load_state(state, append=append)
+        
+        self._batch_mode_action.setChecked(True)
+        self._clear_workspace()
+        self._status_bar.showMessage(f"Batch queue loaded from {path}")
 
     @Slot(bool)
     def _on_batch_mode_toggled(self, checked: bool):

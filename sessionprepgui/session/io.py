@@ -331,15 +331,11 @@ def _deser_transfer_entry(d: dict) -> TransferEntry:
 # Public API
 # ---------------------------------------------------------------------------
 
-def save_session(path: str, data: dict) -> None:
-    """Serialise *data* to a ``.spsession`` JSON file at *path*.
-
-    *data* is the raw dict assembled by the mainwindow (already plain-Python
-    types except for ``TrackContext`` objects under ``"tracks"``).
-    """
-    payload: dict[str, Any] = {
+def serialize_session_state(data: dict) -> dict:
+    """Serialise a raw session state dict to a JSON-safe dict."""
+    return {
         "version": CURRENT_VERSION,
-        "source_dir": data["source_dir"],
+        "source_dir": data.get("source_dir", ""),
         "active_config_preset": data.get("active_config_preset", "Default"),
         "session_config": data.get("session_config"),
         "session_groups": data.get("session_groups", []),
@@ -364,34 +360,13 @@ def save_session(path: str, data: dict) -> None:
         "project_name": data.get("project_name", ""),
         "active_daw_processor_id": data.get("active_daw_processor_id"),
     }
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh, indent=2, ensure_ascii=False)
 
-
-def load_session(path: str) -> dict:
-    """Load and migrate a ``.spsession`` file.
-
-    Returns a plain dict with keys:
-    - ``source_dir`` (str)
-    - ``active_config_preset`` (str)
-    - ``session_config`` (dict | None)
-    - ``session_groups`` (list)
-    - ``daw_state`` (dict)
-    - ``tracks`` (list[TrackContext]) — audio_data is None; filepath validated
-    - ``project_name`` (str)
-
-    Raises ``ValueError`` on version mismatch or missing required fields.
-    Raises ``json.JSONDecodeError`` / ``OSError`` on file errors.
-    """
-    with open(path, "r", encoding="utf-8") as fh:
-        raw = json.load(fh)
-
+def deserialize_session_state(raw: dict) -> dict:
+    """Deserialize a JSON-safe dict back into a session state dict."""
     raw = _migrate(raw)
 
     source_dir = raw.get("source_dir", "")
-    if not source_dir:
-        raise ValueError("Session file is missing 'source_dir'.")
-
+    
     tracks = [
         _deserialize_track(fname, source_dir, tdata)
         for fname, tdata in raw.get("tracks", {}).items()
@@ -423,3 +398,37 @@ def load_session(path: str) -> dict:
         "project_name": raw.get("project_name", ""),
         "active_daw_processor_id": raw.get("active_daw_processor_id"),
     }
+
+def save_session(path: str, data: dict) -> None:
+    """Serialise *data* to a ``.spsession`` JSON file at *path*.
+
+    *data* is the raw dict assembled by the mainwindow (already plain-Python
+    types except for ``TrackContext`` objects under ``"tracks"``).
+    """
+    payload = serialize_session_state(data)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2, ensure_ascii=False)
+
+
+def load_session(path: str) -> dict:
+    """Load and migrate a ``.spsession`` file.
+
+    Returns a plain dict with keys:
+    - ``source_dir`` (str)
+    - ``active_config_preset`` (str)
+    - ``session_config`` (dict | None)
+    - ``session_groups`` (list)
+    - ``daw_state`` (dict)
+    - ``tracks`` (list[TrackContext]) — audio_data is None; filepath validated
+    - ``project_name`` (str)
+
+    Raises ``ValueError`` on version mismatch or missing required fields.
+    Raises ``json.JSONDecodeError`` / ``OSError`` on file errors.
+    """
+    with open(path, "r", encoding="utf-8") as fh:
+        raw = json.load(fh)
+
+    if not raw.get("source_dir"):
+        raise ValueError("Session file is missing 'source_dir'.")
+
+    return deserialize_session_state(raw)
