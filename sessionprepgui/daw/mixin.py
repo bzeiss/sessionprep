@@ -315,13 +315,16 @@ class DawMixin:  # pylint: disable=too-few-public-methods
         self._daw_check_label.setText("Connecting\u2026")
         self._daw_check_label.setStyleSheet(f"color: {COLORS['dim']};")
         self._update_daw_lifecycle_buttons()
-        self._daw_check_worker = DawCheckWorker(self._active_daw_processor)
+        self._daw_check_worker = DawCheckWorker(self._active_daw_processor, parent=self)
         self._daw_check_worker.result.connect(self._on_daw_check_result)
         self._daw_check_worker.start()
 
     @Slot(bool, str)
     def _on_daw_check_result(self, ok: bool, message: str):
+        worker = self._daw_check_worker
         self._daw_check_worker = None
+        if worker:
+            worker.deleteLater()
         if ok:
             self._daw_check_label.setText(message)
             self._daw_check_label.setStyleSheet(f"color: {COLORS['clean']};")
@@ -357,7 +360,7 @@ class DawMixin:  # pylint: disable=too-few-public-methods
         self._transfer_progress.start("Fetching folder structure\u2026")
 
         self._daw_fetch_worker = DawFetchWorker(
-            self._active_daw_processor, self._session)
+            self._active_daw_processor, self._session, parent=self)
         self._daw_fetch_worker.progress.connect(self._on_transfer_progress)
         self._daw_fetch_worker.progress_value.connect(self._on_transfer_progress_value)
         self._daw_fetch_worker.result.connect(self._on_daw_fetch_result)
@@ -366,7 +369,10 @@ class DawMixin:  # pylint: disable=too-few-public-methods
 
     @Slot(bool, str, object)
     def _on_daw_fetch_result(self, ok: bool, message: str, session):
+        worker = self._daw_fetch_worker
         self._daw_fetch_worker = None
+        if worker:
+            worker.deleteLater()
         self._fetch_action.setEnabled(True)
 
         if "PRO_TOOLS_SESSION_OPEN" in message:
@@ -564,7 +570,7 @@ class DawMixin:  # pylint: disable=too-few-public-methods
         self._transfer_progress.start("Preparing\u2026")
 
         self._daw_transfer_worker = DawTransferWorker(
-            self._active_daw_processor, self._session, output_path)
+            self._active_daw_processor, self._session, output_path, parent=self)
         self._daw_transfer_worker.progress.connect(self._on_transfer_progress)
         self._daw_transfer_worker.progress_value.connect(
             self._on_transfer_progress_value)
@@ -582,7 +588,10 @@ class DawMixin:  # pylint: disable=too-few-public-methods
 
     @Slot(bool, str, object)
     def _on_daw_transfer_result(self, ok: bool, message: str, results):
+        worker = self._daw_transfer_worker
         self._daw_transfer_worker = None
+        if worker:
+            worker.deleteLater()
         self._update_daw_lifecycle_buttons()
         if ok:
             self._transfer_progress.finish(message)

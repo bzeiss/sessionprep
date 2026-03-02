@@ -20,8 +20,8 @@ class DawCheckWorker(QThread):
 
     result = Signal(bool, str)  # (ok, message)
 
-    def __init__(self, processor: DawProcessor):
-        super().__init__()
+    def __init__(self, processor: DawProcessor, parent=None):
+        super().__init__(parent)
         self._processor = processor
 
     def run(self):
@@ -39,8 +39,8 @@ class DawFetchWorker(QThread):
     progress_value = Signal(int, int)   # (current, total)
     result = Signal(bool, str, object)  # (ok, message, session_or_none)
 
-    def __init__(self, processor: DawProcessor, session):
-        super().__init__()
+    def __init__(self, processor: DawProcessor, session, parent=None):
+        super().__init__(parent)
         self._processor = processor
         self._session = session
 
@@ -68,8 +68,8 @@ class DawTransferWorker(QThread):
     progress_value = Signal(int, int)   # (current, total)
     result = Signal(bool, str, object)  # (ok, message, results_list)
 
-    def __init__(self, processor: DawProcessor, session, output_path: str):
-        super().__init__()
+    def __init__(self, processor: DawProcessor, session, output_path: str, parent=None):
+        super().__init__(parent)
         self._processor = processor
         self._session = session
         self._output_path = output_path
