@@ -145,17 +145,6 @@ class ProToolsDawProcessor(DawProcessor):
     def config_params(cls) -> list[ParamSpec]:
         return super().config_params() + [
             ParamSpec(
-                key="protools_project_dir",
-                type=str,
-                default="",
-                label="Project directory",
-                description=(
-                    "Directory where newly created Pro Tools projects are saved. "
-                    "Leave empty to prompt for a location each time."
-                ),
-                widget_hint="path_picker_folder",
-            ),
-            ParamSpec(
                 key="protools_temp_dir",
                 type=str,
                 default="",

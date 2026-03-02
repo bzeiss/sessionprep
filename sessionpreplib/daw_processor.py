@@ -39,7 +39,7 @@ class DawProcessor(ABC):
 
     @classmethod
     def config_params(cls) -> list[ParamSpec]:
-        """Base returns the enabled toggle. Subclasses call super() + [...]."""
+        """Base returns the enabled toggle and project dir. Subclasses call super() + [...]."""
         return [
             ParamSpec(
                 key=f"{cls.id}_enabled",
@@ -51,17 +51,34 @@ class DawProcessor(ABC):
                     "in the toolbar. Disable if you never use this DAW."
                 ),
             ),
+            ParamSpec(
+                key=f"{cls.id}_project_dir",
+                type=str,
+                default="",
+                label="Project directory",
+                description=(
+                    f"Directory where newly created {cls.name} projects are saved. "
+                    "Leave empty to prompt for a location each time."
+                ),
+                widget_hint="path_picker_folder",
+            ),
         ]
 
     def configure(self, config: dict[str, Any]) -> None:
         """Read config values. Subclasses should call super().configure(config)."""
         self._enabled: bool = config.get(f"{self.id}_enabled", True)
         self._connected: bool = False
+        self._project_dir: str = config.get(f"{type(self).id}_project_dir", "")
 
     @property
     def enabled(self) -> bool:
         """Whether this processor is available for selection."""
         return self._enabled
+
+    @property
+    def project_dir(self) -> str:
+        """The directory where new projects should be created."""
+        return self._project_dir
 
     @property
     def connected(self) -> bool:

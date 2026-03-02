@@ -217,6 +217,7 @@ class BatchQueueDock(QDockWidget):
     load_requested = Signal(object)  # Emits BatchItem
     run_batch_requested = Signal(list)  # Emits list[BatchItem]
     run_single_requested = Signal(object)  # Emits BatchItem
+    open_project_requested = Signal(object) # Emits BatchItem
 
     def __init__(self, parent=None):
         super().__init__("Batch Queue", parent)
@@ -267,6 +268,11 @@ class BatchQueueDock(QDockWidget):
 
         bottom_layout.addStretch()
 
+        self._open_project_btn = QPushButton("Open Project Folder")
+        self._open_project_btn.setEnabled(False)
+        self._open_project_btn.clicked.connect(self._on_open_batch_project_folder)
+        bottom_layout.addWidget(self._open_project_btn)
+
         self._clear_btn = QPushButton("Clear All")
         self._clear_btn.clicked.connect(self.clear_all)
         bottom_layout.addWidget(self._clear_btn)
@@ -278,6 +284,25 @@ class BatchQueueDock(QDockWidget):
 
         layout.addLayout(bottom_layout)
         self.setWidget(container)
+        
+        self._table.itemSelectionChanged.connect(self._on_table_selection_changed)
+
+    @Slot()
+    def _on_table_selection_changed(self):
+        selected = self._table.selectedItems()
+        self._open_project_btn.setEnabled(len(selected) > 0 and not self._is_running)
+
+    @Slot()
+    def _on_open_batch_project_folder(self):
+        selected = self._table.selectedItems()
+        if not selected:
+            return
+
+        row = selected[0].row()
+        item_id = self._table.item(row, 0).data(Qt.UserRole)
+        item = next((i for i in self._items if i.id == item_id), None)
+        if item:
+            self.open_project_requested.emit(item)
 
     def add_item(self, item: BatchItem) -> bool:
         """Add a job to the queue. Returns False if duplicate project name."""

@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QMessageBox,
+    QPushButton,
     QSizePolicy,
     QSplitter,
     QStackedWidget,
@@ -196,6 +197,11 @@ class DawMixin:
         self._project_name_edit.textChanged.connect(self._on_project_name_changed)
         proj_name_layout.addWidget(proj_name_label)
         proj_name_layout.addWidget(self._project_name_edit, 1)
+
+        self._open_project_btn = QPushButton("Open Project Folder")
+        self._open_project_btn.clicked.connect(self._on_open_active_project_folder)
+        proj_name_layout.addWidget(self._open_project_btn)
+
         tree_page_layout.addWidget(proj_name_container)
 
         self._folder_tree = _FolderDropTree()
@@ -452,18 +458,17 @@ class DawMixin:
             )
             return
 
-        # 2. Target Directory Validation (Pro Tools specific)
-        if self._active_daw_processor.id.startswith("protools"):
-            flat_config = self._flat_config()
-            project_dir = flat_config.get("protools_project_dir", "").strip()
-            
+        # 2. Target Directory Validation
+        if hasattr(self._active_daw_processor, "project_dir"):
+            project_dir = self._active_daw_processor.project_dir.strip()
+
             if not project_dir:
                 QMessageBox.critical(
                     self, "Project Directory Not Set",
-                    "A 'Project directory' must be configured in Pro Tools preferences before creating a project."
+                    f"A 'Project directory' must be configured in {self._active_daw_processor.name} preferences before creating a project."
                 )
                 return
-                
+
             if not os.path.isdir(project_dir):
                 QMessageBox.critical(
                     self, "Project Directory Not Found",
@@ -472,16 +477,16 @@ class DawMixin:
                 )
                 return
 
-            # 3. Collision Check
-            target_path = os.path.join(project_dir, project_name)
-            if os.path.exists(target_path):
-                QMessageBox.warning(
-                    self, "Project Already Exists",
-                    f"A folder named '{project_name}' already exists in the project directory.\n\n"
-                    "Please choose a different project name."
-                )
-                return
-
+            # 3. Collision Check (Pro Tools specific)
+            if self._active_daw_processor.id.startswith("protools"):
+                target_path = os.path.join(project_dir, project_name)
+                if os.path.exists(target_path):
+                    QMessageBox.warning(
+                        self, "Project Already Exists",
+                        f"A folder named '{project_name}' already exists in the project directory.\n\n"
+                        "Please choose a different project name."
+                    )
+                    return
         # 4. Enqueue or Transfer
         batch_mode = getattr(self, "_batch_mode_action", None)
         if batch_mode and batch_mode.isChecked():
@@ -1026,3 +1031,34 @@ class DawMixin:
                     self._status_bar.showMessage(
                         f"Removed duplicate '{e.daw_track_name}'")
                 break
+
+    @Slot()
+    def _on_open_active_project_folder(self):
+        if not self._active_daw_processor:
+            return
+            
+        project_name = self._project_name_edit.text().strip()
+        project_dir = getattr(self._active_daw_processor, "project_dir", "").strip()
+        
+        if not project_dir:
+            QMessageBox.information(
+                self, "Open Project Folder",
+                f"No project directory configured for {self._active_daw_processor.name}."
+            )
+            return
+            
+        import os
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+        
+        target_path = os.path.join(project_dir, project_name) if project_name else project_dir
+        
+        if os.path.isdir(target_path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(target_path))
+        elif os.path.isdir(project_dir):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(project_dir))
+        else:
+            QMessageBox.warning(
+                self, "Open Project Folder",
+                f"The directory does not exist:\n\n{project_dir}"
+            )

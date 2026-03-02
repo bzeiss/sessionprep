@@ -155,6 +155,7 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         self._batch_dock.load_requested.connect(self._on_load_batch_item)
         self._batch_dock.run_batch_requested.connect(self._batch_manager.start_batch)
         self._batch_dock.run_single_requested.connect(self._batch_manager.start_single)
+        self._batch_dock.open_project_requested.connect(self._on_open_batch_project_folder)
         self.addDockWidget(Qt.RightDockWidgetArea, self._batch_dock)
         self._batch_dock.hide()  # hidden by default
         
@@ -385,6 +386,53 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
                 return
         self._restore_session_state(item.session_state)
         self._batch_dock.remove_item(item.id)
+
+    @Slot(object)
+    def _on_open_batch_project_folder(self, item):
+        daw_processor = None
+        for dp in self._daw_processors:
+            if dp.id == item.daw_processor_id:
+                daw_processor = dp
+                break
+
+        if not daw_processor:
+            QMessageBox.warning(
+                self, "Open Project Folder",
+                f"The configured DAW processor '{item.daw_processor_name}' is not available."
+            )
+            return
+
+        project_dir = getattr(daw_processor, "project_dir", "").strip()
+
+        if not project_dir:
+            QMessageBox.information(
+                self, "Open Project Folder",
+                f"No project directory configured for {daw_processor.name}."
+            )
+            return
+
+        import os
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+
+        # For DAWs like DAWproject that specify a full output path (e.g. .dawproject file)
+        # we try to just open the directory containing it if the output path exists.
+        if item.output_path and os.path.exists(os.path.dirname(item.output_path)):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(item.output_path)))
+            return
+
+        # Otherwise, try the conventional project directory approach
+        target_path = os.path.join(project_dir, item.project_name) if item.project_name else project_dir
+        
+        if os.path.isdir(target_path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(target_path))
+        elif os.path.isdir(project_dir):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(project_dir))
+        else:
+            QMessageBox.warning(
+                self, "Open Project Folder",
+                f"The directory does not exist:\n\n{project_dir}"
+            )
 
     @Slot()
     def _on_batch_started(self):
