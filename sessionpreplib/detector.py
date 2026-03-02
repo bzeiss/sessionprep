@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from .config import ParamSpec
+from .models import ParamSpec
 from .models import DetectorResult, Severity, TrackContext, SessionContext
 
 _REPORT_AS_MAP: dict[str, Severity] = {

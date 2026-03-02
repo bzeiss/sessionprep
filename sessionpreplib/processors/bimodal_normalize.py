@@ -4,7 +4,7 @@ import math
 
 import numpy as np
 
-from ..config import ParamSpec
+from ..models import ParamSpec
 from ..processor import AudioProcessor, PRIORITY_NORMALIZE
 from ..models import ProcessorResult, TrackContext
 from ..audio import db_to_linear, dbfs_offset

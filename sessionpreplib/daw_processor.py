@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from .config import ParamSpec
+from .models import ParamSpec
 from .models import DawCommand, DawCommandResult, SessionContext
 
 

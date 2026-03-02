@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..config import ParamSpec
+from ..models import ParamSpec
 from ..detector import TrackDetector
 from ..models import DetectorResult, IssueLocation, Severity, TrackContext
 from ..audio import dbfs_offset, get_stereo_rms, is_silent, linear_to_db

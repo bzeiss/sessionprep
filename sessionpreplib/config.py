@@ -5,6 +5,8 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
+from .models import ParamSpec
+
 PRESET_SCHEMA_VERSION = "1.0"
 
 # Keys that are internal/CLI-only and should not be saved in presets
@@ -30,30 +32,6 @@ class ConfigFieldError:
     key: str
     value: Any
     message: str
-
-
-@dataclass(frozen=True)
-class ParamSpec:
-    """Declarative specification for a single configuration parameter.
-
-    Used by detectors, processors, and the shared analysis / session
-    sections to describe their parameters — including type, default,
-    valid range, allowed values, and human-readable labels.
-    """
-    key: str
-    type: type | tuple              # expected Python type(s)
-    default: Any
-    label: str                       # short UI label
-    description: str = ""            # longer tooltip / help text
-    min: float | int | None = None   # inclusive lower bound (unless min_exclusive)
-    max: float | int | None = None   # inclusive upper bound (unless max_exclusive)
-    min_exclusive: bool = False
-    max_exclusive: bool = False
-    choices: list | None = None      # allowed string values
-    item_type: type | None = None    # element type for list fields
-    nullable: bool = False           # True if None is valid
-    presentation_only: bool = False  # True → changing this key never requires re-analysis
-    widget_hint: str | None = None   # rendering hint for the GUI widget factory (never read by the library)
 
 
 def default_config() -> dict[str, Any]:

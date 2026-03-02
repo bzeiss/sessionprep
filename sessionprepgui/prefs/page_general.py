@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from sessionpreplib.config import ParamSpec
+from sessionpreplib.models import ParamSpec
 
 from .param_form import (
     _build_param_page,

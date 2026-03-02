@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..config import ParamSpec
+from ..models import ParamSpec
 from ..detector import TrackDetector
 from ..models import DetectorResult, Severity, TrackContext
 from ..audio import get_stereo_channels_subsampled, is_silent

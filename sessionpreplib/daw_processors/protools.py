@@ -9,7 +9,7 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-from ..config import ParamSpec
+from ..models import ParamSpec
 from ..daw_processor import DawProcessor
 from ..models import DawCommand, DawCommandResult, SessionContext
 from . import ptsl_helpers as ptslh

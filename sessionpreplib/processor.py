@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 
-from .config import ParamSpec
+from .models import ParamSpec
 from .models import ProcessorResult, TrackContext
 
 
