@@ -1,3 +1,4 @@
+# pylint: disable=cyclic-import
 """
 SessionPrep GUI — PySide6 front-end for session analysis.
 

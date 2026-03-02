@@ -30,7 +30,7 @@ class BatchManager(QObject):
         self._queue: list[BatchItem] = []
         self._current_index: int = 0
         self._running: bool = False
-        
+
         # Workers
         self._check_worker: DawCheckWorker | None = None
         self._transfer_worker: DawTransferWorker | None = None
@@ -41,7 +41,7 @@ class BatchManager(QObject):
     def start_batch(self, items: list[BatchItem]):
         if self._running or not items:
             return
-        
+
         self._queue = items
         self._current_index = 0
         self._running = True
@@ -53,7 +53,7 @@ class BatchManager(QObject):
     def start_single(self, item: BatchItem):
         if self._running:
             return
-            
+
         self._queue = [item]
         self._current_index = 0
         self._running = True
@@ -96,14 +96,14 @@ class BatchManager(QObject):
     @Slot(object, bool, str)
     def _on_check_result(self, item: BatchItem, ok: bool, message: str):
         self._check_worker = None
-        
+
         if not ok:
             self._handle_item_failure(item, f"DAW Check Failed: {message}")
             return
-            
+
         # Optional: Further checks against the DAW state could be placed here if needed.
         # e.g., if message indicates a session is already open and shouldn't be.
-        # We rely on the fetch/check logic for now. 
+        # We rely on the fetch/check logic for now.
         if "PRO_TOOLS_SESSION_OPEN" in message:
             self._handle_item_failure(item, "DAW Check Failed: Pro Tools session is open. Close it first.")
             return
@@ -112,7 +112,7 @@ class BatchManager(QObject):
         item.result_text = "Transferring..."
         self.item_finished.emit(item.id, item.status, item.result_text)
         self.batch_progress_message.emit(f"[{item.project_name}] Transferring...")
-        
+
         self._transfer_worker = DawTransferWorker(
             self._current_dp, self._current_session, item.output_path)
         self._transfer_worker.progress.connect(self._on_transfer_progress)
@@ -135,13 +135,13 @@ class BatchManager(QObject):
         else:
             overall_total = 100
             overall_current = int(fraction * 100)
-            
+
         self.batch_progress_value.emit(overall_current, overall_total)
 
     @Slot(object, bool, str)
     def _on_transfer_result(self, item: BatchItem, ok: bool, message: str):
         self._transfer_worker = None
-        
+
         if ok:
             item.status = "Success"
             item.result_text = "Success"
@@ -181,9 +181,9 @@ class BatchManager(QObject):
 
         tracks = state_dict.get("tracks", [])
         source_dir = state_dict.get("source_dir", "")
-        
+
         flat_config = dict(default_config())
-        
+
         # Inject defaults for all components so that toggles like protools_enabled exist
         for det in default_detectors():
             for param in getattr(det.__class__, "config_params", lambda: [])():
@@ -198,11 +198,11 @@ class BatchManager(QObject):
         if state_dict.get("session_config"):
             from sessionpreplib.config import flatten_structured_config
             flat_config.update(flatten_structured_config(state_dict["session_config"]))
-            
+
         # Re-inject the saved groups and colors for the DAW processor to use
         # (This matches what _do_daw_transfer does before calling the worker)
         flat_config.setdefault("gui", {})["groups"] = state_dict.get("session_groups", [])
-        
+
         # Colors must come from the global config. The manager receives the main window reference,
         # so we can fetch the active global colors from it.
         from sessionprepgui.theme import PT_DEFAULT_COLORS
@@ -211,13 +211,13 @@ class BatchManager(QObject):
         else:
             colors = PT_DEFAULT_COLORS
         flat_config["gui"]["colors"] = colors
-        
+
         flat_config["_source_dir"] = source_dir
 
         all_detectors = default_detectors()
         for d in all_detectors:
             d.configure(flat_config)
-            
+
         all_processors = []
         for proc in default_processors():
             proc.configure(flat_config)
@@ -237,10 +237,10 @@ class BatchManager(QObject):
             base_transfer_manifest=state_dict.get("base_transfer_manifest", []),
             project_name=state_dict.get("project_name", ""),
         )
-        # Assuming topology and topology_applied are needed we could restore them too, 
+        # Assuming topology and topology_applied are needed we could restore them too,
         # but for transfer, `transfer_manifest` and `output_tracks` (which we rebuilt during load) are key.
-        # Wait, output_tracks are not in state_dict. 
-        # But prepare step created the files, so we might need output_tracks. 
+        # Wait, output_tracks are not in state_dict.
+        # But prepare step created the files, so we might need output_tracks.
         # We can let DawTransferWorker handle it or rebuild it if needed.
         # We need output_tracks for the transfer process to know file names.
         if state_dict.get("topology_applied", False) and state_dict.get("topology"):
@@ -251,7 +251,7 @@ class BatchManager(QObject):
             prep_folder = flat_config.get("app", {}).get("phase2_output_folder", "sp_02_prepared")
             topo_dir = os.path.join(source_dir, topo_folder)
             prep_dir = os.path.join(source_dir, prep_folder)
-            
+
             manifest_group = {e.output_filename: e.group for e in session.transfer_manifest}
             rebuilt = []
             topology = state_dict.get("topology")

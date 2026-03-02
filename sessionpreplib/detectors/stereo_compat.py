@@ -268,7 +268,7 @@ class StereoCompatDetector(TrackDetector):
     # Windowed analysis helper
     # ------------------------------------------------------------------
 
-    def _windowed_analysis(
+    def _windowed_analysis(  # pylint: disable=too-many-positional-arguments
         self,
         track: TrackContext,
         win_results: list[tuple[int, int, float, float]],

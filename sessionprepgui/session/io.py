@@ -366,7 +366,7 @@ def deserialize_session_state(raw: dict) -> dict:
     raw = _migrate(raw)
 
     source_dir = raw.get("source_dir", "")
-    
+
     tracks = [
         _deserialize_track(fname, source_dir, tdata)
         for fname, tdata in raw.get("tracks", {}).items()

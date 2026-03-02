@@ -508,10 +508,10 @@ class ProToolsTemplatesWidget(QWidget):
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setSelectionMode(QTableWidget.SingleSelection)
         self._table.cellChanged.connect(lambda r, c: self.templates_changed.emit())
-        
+
         # Ensure the table is tall enough to show ~3 rows comfortably
         self._table.setMinimumHeight(130)
-        
+
         layout.addWidget(self._table, 1)
 
         btn_row = QHBoxLayout()
@@ -656,7 +656,7 @@ def build_config_pages(
                 if key == enabled_key and isinstance(widget, QCheckBox):
                     widget.toggled.connect(on_daw_config_changed)
                     break
-        
+
         if dp.id == "dawproject":
             tpl_widget = DawProjectTemplatesWidget()
             tpl_widget.set_templates(dp_sections.get(dp.id, {}).get("dawproject_templates", []))
@@ -727,7 +727,7 @@ def load_config_widgets(
         for key, widget in widgets_dict[wkey]:
             if key in vals:
                 _set_widget_value(widget, vals[key])
-        
+
         if dp.id == "dawproject" and "dawproject" in daw_custom_widgets:
             daw_custom_widgets["dawproject"].set_templates(vals.get("dawproject_templates", []))
         elif dp.id == "protools" and "protools" in daw_custom_widgets:
@@ -789,7 +789,7 @@ def read_config_widgets(
         section = {}
         for key, widget in widgets_dict[wkey]:
             section[key] = _read_widget(widget)
-        
+
         if dp.id == "dawproject" and "dawproject" in daw_custom_widgets:
             section["dawproject_templates"] = daw_custom_widgets["dawproject"].get_templates()
         elif dp.id == "protools" and "protools" in daw_custom_widgets:

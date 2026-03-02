@@ -277,7 +277,7 @@ class SubsonicDetector(TrackDetector):
     # Windowed analysis helper
     # ------------------------------------------------------------------
 
-    def _windowed_analysis(
+    def _windowed_analysis(  # pylint: disable=too-many-positional-arguments
         self,
         track: TrackContext,
         cutoff: float,

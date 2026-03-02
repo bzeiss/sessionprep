@@ -188,7 +188,7 @@ def get_session_audio_dir(engine) -> str:
 
 # ── Session lifecycle ────────────────────────────────────────────────
 
-def create_session_from_template(
+def create_session_from_template(  # pylint: disable=too-many-positional-arguments
     engine, session_name: str, session_location: str,
     template_group: str, template_name: str,
     sample_rate: str = "SR_48000",
@@ -314,7 +314,7 @@ def batch_import_audio(
 
 # ── Track operations ─────────────────────────────────────────────────
 
-def create_track(
+def create_track(  # pylint: disable=too-many-positional-arguments
     engine, name: str, track_format: str,
     track_type: str = "TT_Audio",
     timebase: str = "TTB_Samples",

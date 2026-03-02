@@ -41,18 +41,18 @@ def parse_arguments():
     )
     parser.add_argument("--version", action="version",
                         version=f"sessionprep {__version__}")
-    
-    parser.add_argument("directory", type=str, 
+
+    parser.add_argument("directory", type=str,
                         help="Source directory containing audio tracks (.wav, .aif, .aiff)")
-    
+
     # Targets
-    parser.add_argument("--target_rms", type=float, default=-18.0, 
+    parser.add_argument("--target_rms", type=float, default=-18.0,
                         help="Target RMS for sustained sources (dBFS)")
-    parser.add_argument("--target_peak", type=float, default=-6.0, 
+    parser.add_argument("--target_peak", type=float, default=-6.0,
                         help="Target/max peak level (dBFS)")
-    parser.add_argument("--crest_threshold", type=float, default=12.0, 
+    parser.add_argument("--crest_threshold", type=float, default=12.0,
                         help="Crest factor threshold for transient detection (dB)")
-    
+
     # Diagnostics & Detection
     parser.add_argument("--clip_consecutive", type=int, default=3,
                         help="Number of consecutive samples at ±1.0 to flag as clipped")
@@ -74,11 +74,11 @@ def parse_arguments():
                         help="Subsonic detector cutoff frequency (Hz)")
     parser.add_argument("--subsonic_warn_ratio_db", type=float, default=-20.0,
                         help="Warn if subsonic power ratio (<= cutoff) exceeds this level (dB relative to full-band power)")
-    
+
     # Analysis
-    parser.add_argument("--window", type=positive_int, default=400, 
+    parser.add_argument("--window", type=positive_int, default=400,
                         help="RMS analysis window (ms)")
-    parser.add_argument("--stereo_mode", type=str, choices=["avg", "sum"], 
+    parser.add_argument("--stereo_mode", type=str, choices=["avg", "sum"],
                         default="avg", help="Stereo RMS calculation mode")
 
     # RMS Anchor (momentary window statistics)
@@ -95,7 +95,7 @@ def parse_arguments():
                         help="Only report tail regions exceeding the anchor by at least this many dB")
     parser.add_argument("--tail_hop_ms", type=positive_int, default=10,
                         help="Hop size for tail region reporting (ms). Larger values reduce the number of reported regions.")
-    
+
     # Balance restoration
     parser.add_argument("--anchor", type=str, default=None,
                         help="Anchor track filename (fader stays at 0dB)")
@@ -122,22 +122,22 @@ def parse_arguments():
                         help="Execute processing (write processed WAVs and reports). Without -x this runs in analysis-only mode.")
     parser.add_argument("--output_folder", type=str, default="processed",
                         help="Subfolder name for processed files")
-    parser.add_argument("--backup", type=str, default="_originals", 
+    parser.add_argument("--backup", type=str, default="_originals",
                         help="Backup folder name (Only used if overwriting files)")
-    
+
     # Reporting
     parser.add_argument("--report", type=str, default="sessionprep.txt",
                         help="Output report filename")
     parser.add_argument("--json", type=str, default="sessionprep.json",
                         help="Output JSON filename for automation")
-    
+
     if len(sys.argv) == 1:
         parser.print_help(sys.stderr)
         sys.exit(1)
-    
+
     args = parser.parse_args()
 
-    if not (0.0 < args.rms_percentile < 100.0):
+    if not 0.0 < args.rms_percentile < 100.0:
         parser.error("--rms_percentile must be between 0 and 100 (exclusive)")
 
     if args.gate_relative_db < 0.0:
@@ -421,11 +421,6 @@ def process_files():
     table.add_column("Gain", justify="right")
     table.add_column("Fader", justify="right", style="bold green")
     table.add_column("Status", justify="right")
-
-    def _get_primary_pr(track):
-        if track.processor_results:
-            return next(iter(track.processor_results.values()))
-        return None
 
     for t in session.tracks:
         if t.status != "OK":

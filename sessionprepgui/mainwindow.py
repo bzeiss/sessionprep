@@ -67,7 +67,9 @@ from .topology import TopologyMixin
 from .batch import BatchQueueDock, BatchManager
 
 
-class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
+class SessionPrepWindow(  # pylint: disable=too-many-ancestors
+    QMainWindow,
+    AnalysisMixin, TrackColumnsMixin,
                         GroupsMixin, DawMixin, TopologyMixin, DetailMixin):
     def __init__(self):
         t_init = time.perf_counter()
@@ -117,7 +119,7 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         self._daw_fetch_worker: DawFetchWorker | None = None
         self._daw_transfer_worker: DawTransferWorker | None = None
         self._prepare_worker: PrepareWorker | None = None
-        
+
         self._batch_manager = BatchManager(self)
         self._batch_manager.finished.connect(self._on_batch_finished)
         self._batch_manager.item_finished.connect(self._on_batch_item_finished)
@@ -150,7 +152,7 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         t0 = time.perf_counter()
         self._init_ui()
         dbg(f"_init_ui: {(time.perf_counter() - t0) * 1000:.1f} ms")
-        
+
         self._batch_dock = BatchQueueDock(self)
         self._batch_dock.load_requested.connect(self._on_load_batch_item)
         self._batch_dock.run_batch_requested.connect(self._batch_manager.start_batch)
@@ -158,7 +160,7 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         self._batch_dock.open_project_requested.connect(self._on_open_batch_project_folder)
         self.addDockWidget(Qt.RightDockWidgetArea, self._batch_dock)
         self._batch_dock.hide()  # hidden by default
-        
+
         self._batch_manager.started.connect(self._on_batch_started)
         self._batch_manager.batch_progress_value.connect(self._batch_dock.update_progress)
         self._batch_manager.batch_progress_message.connect(self._status_bar.showMessage)
@@ -277,7 +279,7 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         file_menu.addAction(self._save_batch_action)
 
         file_menu.addSeparator()
-        
+
         self._batch_mode_action = QAction("Batch Processing Mode", self)
         self._batch_mode_action.setCheckable(True)
         self._batch_mode_action.toggled.connect(self._on_batch_mode_toggled)
@@ -308,7 +310,7 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         if not self._batch_dock.has_items:
             QMessageBox.information(self, "Save Batch Queue", "The batch queue is empty.")
             return
-            
+
         start_dir = self._config.get("app", {}).get("default_project_dir", "") or ""
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Batch Queue", start_dir,
@@ -341,7 +343,7 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         except Exception as exc:
             QMessageBox.critical(self, "Load Batch Queue Failed", f"Could not load batch queue:\n\n{exc}")
             return
-            
+
         if not isinstance(state, list):
             QMessageBox.critical(self, "Invalid File", "The selected file is not a valid batch queue format.")
             return
@@ -351,20 +353,20 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
             msg = QMessageBox(self)
             msg.setWindowTitle("Load Batch Queue")
             msg.setText("How would you like to load the batch queue?")
-            
+
             replace_btn = msg.addButton("Replace", QMessageBox.AcceptRole)
             append_btn = msg.addButton("Append", QMessageBox.AcceptRole)
             cancel_btn = msg.addButton("Cancel", QMessageBox.RejectRole)
-            
+
             msg.exec()
-            
+
             if msg.clickedButton() == cancel_btn:
                 return
             if msg.clickedButton() == append_btn:
                 append = True
 
         self._batch_dock.load_state(state, append=append)
-        
+
         self._batch_mode_action.setChecked(True)
         self._clear_workspace()
         self._status_bar.showMessage(f"Batch queue loaded from {path}")
@@ -373,7 +375,7 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
     def _on_batch_mode_toggled(self, checked: bool):
         self._batch_dock.setVisible(checked)
         self._update_daw_lifecycle_buttons()
-        
+
     @Slot(object)
     def _on_load_batch_item(self, item):
         if self._session:
@@ -423,7 +425,7 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
 
         # Otherwise, try the conventional project directory approach
         target_path = os.path.join(project_dir, item.project_name) if item.project_name else project_dir
-        
+
         if os.path.isdir(target_path):
             QDesktopServices.openUrl(QUrl.fromLocalFile(target_path))
         elif os.path.isdir(project_dir):
@@ -442,7 +444,7 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
     def _on_batch_finished(self):
         self._batch_dock.set_running_state(False)
         self._status_bar.showMessage("Batch processing complete.")
-        
+
     @Slot(str, str, str)
     def _on_batch_item_finished(self, item_id: str, status: str, result_text: str):
         self._batch_dock.update_item(item_id, status, result_text)

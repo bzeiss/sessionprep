@@ -33,7 +33,7 @@ from .utils import (
 
 
 class Pipeline:
-    def __init__(
+    def __init__(  # pylint: disable=too-many-positional-arguments
         self,
         detectors: list,
         audio_processors: list[AudioProcessor] | None = None,

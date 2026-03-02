@@ -79,59 +79,59 @@ class _BatchTable(QTableWidget):
         self.setDragDropMode(QAbstractItemView.DragDrop)
         self.setDefaultDropAction(Qt.MoveAction)
         self.setDropIndicatorShown(False)
-        
+
         self._insert_line_y: int | None = None
 
     def startDrag(self, supportedActions):
         selected = self.selectedItems()
         if not selected:
             return
-            
+
         row = selected[0].row()
-        
+
         # Calculate the bounding rect of the entire row
         rect = self.visualRect(self.model().index(row, 0))
         for col in range(1, self.columnCount()):
             rect = rect.united(self.visualRect(self.model().index(row, col)))
-            
+
         # Render the row into a pixmap
         pixmap = QPixmap(rect.size())
         pixmap.fill(Qt.transparent)
         self.viewport().render(pixmap, QPoint(0, 0), rect)
-        
+
         # Create a new pixmap with 50% opacity
         transparent_pixmap = QPixmap(pixmap.size())
         transparent_pixmap.fill(Qt.transparent)
-        
+
         painter = QPainter(transparent_pixmap)
         painter.setOpacity(0.5)
         painter.drawPixmap(0, 0, pixmap)
         painter.end()
-        
+
         # Start the drag operation
         drag = QDrag(self)
         mime = self.model().mimeData(self.selectedIndexes())
         drag.setMimeData(mime)
         drag.setPixmap(transparent_pixmap)
-        
+
         # Get mouse position relative to the row's top-left so the drag image aligns correctly
         mouse_pos = self.viewport().mapFromGlobal(self.cursor().pos())
         hotspot = mouse_pos - rect.topLeft()
         drag.setHotSpot(hotspot)
-        
+
         drag.exec_(supportedActions)
 
     def dragMoveEvent(self, event):
         if event.source() != self:
             event.ignore()
             return
-            
+
         event.setDropAction(Qt.MoveAction)
         event.accept()
-        
+
         pos = event.position().toPoint()
         row = self.rowAt(pos.y())
-        
+
         if row == -1:
             # Hovering below the last row
             last_row = self.rowCount() - 1
@@ -147,9 +147,9 @@ class _BatchTable(QTableWidget):
                 self._insert_line_y = rect.top()
             else:
                 self._insert_line_y = rect.bottom()
-                
+
         self.viewport().update()
-        
+
     def dragEnterEvent(self, event):
         if event.source() == self:
             event.setDropAction(Qt.MoveAction)
@@ -165,7 +165,7 @@ class _BatchTable(QTableWidget):
     def dropEvent(self, event: QDropEvent):
         self._insert_line_y = None
         self.viewport().update()
-        
+
         if event.source() != self:
             event.ignore()
             return
@@ -174,11 +174,11 @@ class _BatchTable(QTableWidget):
         if not selected:
             event.ignore()
             return
-            
+
         source_row = selected[0].row()
         pos = event.position().toPoint()
         target_row = self.rowAt(pos.y())
-        
+
         if target_row == -1:
             target_row = self.rowCount()
         else:
@@ -284,7 +284,7 @@ class BatchQueueDock(QDockWidget):
 
         layout.addLayout(bottom_layout)
         self.setWidget(container)
-        
+
         self._table.itemSelectionChanged.connect(self._on_table_selection_changed)
 
     @Slot()
@@ -342,7 +342,7 @@ class BatchQueueDock(QDockWidget):
             self._progress_bar.setValue(0)
         self._clear_btn.setEnabled(not is_running)
         self._run_btn.setEnabled(not is_running and len(self.get_pending_items()) > 0)
-        
+
     def update_progress(self, current: int, total: int):
         self._progress_bar.setRange(0, total)
         self._progress_bar.setValue(current)
@@ -351,13 +351,13 @@ class BatchQueueDock(QDockWidget):
         self._table.setRowCount(0)
         for i, item in enumerate(self._items):
             self._table.insertRow(i)
-            
+
             name_item = QTableWidgetItem(item.project_name)
             name_item.setData(Qt.UserRole, item.id)
             self._table.setItem(i, 0, name_item)
-            
+
             self._table.setItem(i, 1, QTableWidgetItem(item.daw_processor_name))
-            
+
             status_item = QTableWidgetItem(item.status)
             if item.status == "Success":
                 status_item.setForeground(Qt.green) # Use a generic green, or from theme if needed
@@ -365,16 +365,16 @@ class BatchQueueDock(QDockWidget):
                 status_item.setForeground(Qt.red)
             elif item.status == "Running":
                 status_item.setForeground(Qt.blue)
-                
+
             self._table.setItem(i, 2, status_item)
-            
+
             details_item = QTableWidgetItem(item.result_text)
             details_item.setToolTip(item.result_text)
             self._table.setItem(i, 3, details_item)
 
         pending_count = len(self.get_pending_items())
         self._status_label.setText(f"{len(self._items)} queued ({pending_count} pending)")
-        
+
         if not self._is_running:
             self._run_btn.setEnabled(pending_count > 0)
 
@@ -386,7 +386,7 @@ class BatchQueueDock(QDockWidget):
         item = self._items.pop(source_row)
         self._items.insert(target_row, item)
         self._refresh_table()
-        
+
         # Reselect the moved item
         self._table.selectRow(target_row)
 
@@ -400,7 +400,7 @@ class BatchQueueDock(QDockWidget):
     def _on_context_menu(self, pos):
         if self._is_running:
             return
-            
+
         row = self._table.rowAt(pos.y())
         if row < 0:
             return

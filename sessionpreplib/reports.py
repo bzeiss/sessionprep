@@ -90,7 +90,7 @@ def generate_report(
         pr = _get_primary_processor_result(t)
         fader = pr.data.get("fader_offset", 0) if pr else 0
         classification = pr.classification if pr else "Unknown"
-        fader_str = "{:+.1f} dB".format(fader)
+        fader_str = f"{fader:+.1f} dB"
         lines.append(f"{t.filename[:38]:<40} {fader_str:>12} {classification:>12}")
 
     # Tail report

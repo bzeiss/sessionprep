@@ -266,7 +266,7 @@ class DawMixin:
         is_working = getattr(self, "_daw_check_worker", None) is not None or \
                      getattr(self, "_daw_fetch_worker", None) is not None or \
                      getattr(self, "_daw_transfer_worker", None) is not None
-                     
+
         if is_working:
             self._fetch_action.setEnabled(False)
             self._auto_assign_action.setEnabled(False)
@@ -285,13 +285,13 @@ class DawMixin:
         has_assignments = bool(dp_state.get("assignments"))
         self._auto_assign_action.setEnabled(has_folders)
         self._transfer_action.setEnabled(has_processor and has_assignments)
-        
+
         batch_mode = getattr(self, "_batch_mode_action", None)
         if batch_mode and batch_mode.isChecked():
             self._transfer_action.setText("Enqueue >>")
         else:
             self._transfer_action.setText("Create")
-            
+
         has_manifest = bool(
             self._session and self._session.transfer_manifest)
         self._reset_manifest_action.setEnabled(has_manifest)
@@ -354,7 +354,7 @@ class DawMixin:
         self._setup_right_stack.setCurrentIndex(_SETUP_RIGHT_TREE)
         self._folder_tree.clear()
         self._transfer_progress.start("Fetching folder structure\u2026")
-        
+
         self._daw_fetch_worker = DawFetchWorker(
             self._active_daw_processor, self._session)
         self._daw_fetch_worker.progress.connect(self._on_transfer_progress)
@@ -367,13 +367,13 @@ class DawMixin:
     def _on_daw_fetch_result(self, ok: bool, message: str, session):
         self._daw_fetch_worker = None
         self._fetch_action.setEnabled(True)
-        
+
         if "PRO_TOOLS_SESSION_OPEN" in message:
             self._transfer_progress.fail("Fetch aborted: Pro Tools session is open.")
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(
-                self, 
-                "Pro Tools Session Open", 
+                self,
+                "Pro Tools Session Open",
                 "A Pro Tools session is currently open.\n\n"
                 "Please save and close the open session in Pro Tools, then try again."
             )
@@ -413,7 +413,7 @@ class DawMixin:
             self._project_name_edit.setText(sanitized)
             self._project_name_edit.setCursorPosition(max(0, cursor_pos - 1))
             self._project_name_edit.blockSignals(False)
-            
+
         if self._session:
             self._session.project_name = sanitized
 
@@ -448,7 +448,7 @@ class DawMixin:
         import os
         if not self._active_daw_processor or not self._session:
             return
-            
+
         # 1. Project Name Validation
         project_name = self._project_name_edit.text().strip()
         if not project_name:
@@ -493,7 +493,7 @@ class DawMixin:
             import uuid
             from ..batch import BatchItem
             from ..theme import PT_DEFAULT_COLORS
-            
+
             output_folder = self._config.get("app", {}).get(
                 "phase2_output_folder", "sp_02_prepared")
 
@@ -504,7 +504,7 @@ class DawMixin:
             self._session.config["gui"]["colors"] = colors
             self._session.config["_source_dir"] = self._source_dir
             self._session.config["_output_folder"] = output_folder
-            
+
             # Resolve output path here so it doesn't prompt during batch execution
             output_path = self._active_daw_processor.resolve_output_path(
                 self._session, self)
@@ -1036,23 +1036,23 @@ class DawMixin:
     def _on_open_active_project_folder(self):
         if not self._active_daw_processor:
             return
-            
+
         project_name = self._project_name_edit.text().strip()
         project_dir = getattr(self._active_daw_processor, "project_dir", "").strip()
-        
+
         if not project_dir:
             QMessageBox.information(
                 self, "Open Project Folder",
                 f"No project directory configured for {self._active_daw_processor.name}."
             )
             return
-            
+
         import os
         from PySide6.QtGui import QDesktopServices
         from PySide6.QtCore import QUrl
-        
+
         target_path = os.path.join(project_dir, project_name) if project_name else project_dir
-        
+
         if os.path.isdir(target_path):
             QDesktopServices.openUrl(QUrl.fromLocalFile(target_path))
         elif os.path.isdir(project_dir):

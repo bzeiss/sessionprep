@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 """Analysis mixin: open/save/load session, analyze, prepare, session config tab."""
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ from ..theme import COLORS, FILE_COLOR_OK, FILE_COLOR_ERROR
 from .worker import AnalyzeWorker, PrepareWorker
 
 
-class AnalysisMixin:
+class AnalysisMixin:  # pylint: disable=too-few-public-methods
     """Session lifecycle: open, save, load, analyze, prepare, session config tab.
 
     Mixed into ``SessionPrepWindow`` — not meant to be used standalone.
