@@ -105,8 +105,8 @@ class BatchManager(QObject):
         # e.g., if message indicates a session is already open and shouldn't be.
         # We rely on the fetch/check logic for now. 
         if "PRO_TOOLS_SESSION_OPEN" in message:
-             self._handle_item_failure(item, "DAW Check Failed: Pro Tools session is open. Close it first.")
-             return
+            self._handle_item_failure(item, "DAW Check Failed: Pro Tools session is open. Close it first.")
+            return
 
         # 3. Start Transfer
         item.result_text = "Transferring..."

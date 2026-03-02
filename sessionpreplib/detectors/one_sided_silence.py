@@ -81,10 +81,10 @@ class OneSidedSilenceDetector(TrackDetector):
 
         one_sided = False
         side = None
-        if l_rms_lin <= silence_lin and r_rms_lin > silence_lin:
+        if l_rms_lin <= silence_lin < r_rms_lin:
             one_sided = True
             side = "L"
-        elif r_rms_lin <= silence_lin and l_rms_lin > silence_lin:
+        elif r_rms_lin <= silence_lin < l_rms_lin:
             one_sided = True
             side = "R"
 

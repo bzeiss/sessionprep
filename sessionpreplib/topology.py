@@ -8,7 +8,7 @@ list references input files and specifies per-channel routing with gain.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .models import TrackContext
@@ -120,8 +120,7 @@ def resolve_entry_audio(
     for src in entry.sources:
         audio, _sr = track_audio[src.input_filename]
         n = audio.shape[0]
-        if n > max_samples:
-            max_samples = n
+        max_samples = max(max_samples, n)
 
     if max_samples == 0:
         if entry.output_channels == 1:

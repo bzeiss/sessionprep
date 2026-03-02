@@ -164,8 +164,7 @@ class ColorsPage(QWidget):
         color = QColorDialog.getColor(
             current, self, "Select Color", QColorDialog.ShowAlphaChannel)
         if color.isValid():
-            argb = "#{:02x}{:02x}{:02x}{:02x}".format(
-                color.alpha(), color.red(), color.green(), color.blue())
+            argb = f"#{color.alpha():02x}{color.red():02x}{color.green():02x}{color.blue():02x}"
             item.setBackground(color)
             item.setData(Qt.UserRole, argb)
             item.setToolTip(argb)

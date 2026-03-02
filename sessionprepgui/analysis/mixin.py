@@ -208,7 +208,7 @@ class AnalysisMixin:
 
         if getattr(self, "_waveform", None) is not None:
             self._waveform.set_audio(None, 44100)
-            
+
         self._phase_tabs.setCurrentIndex(_PHASE_TOPOLOGY)
         self._phase_tabs.setTabEnabled(_PHASE_ANALYSIS, False)
         self._phase_tabs.setTabEnabled(_PHASE_SETUP, False)
@@ -307,7 +307,7 @@ class AnalysisMixin:
         )
         if not path:
             return
-            
+
         try:
             state = self._capture_session_state()
             _save_session_file(path, state)
@@ -323,14 +323,14 @@ class AnalysisMixin:
         # Ensure we capture all active edits from the session settings widgets
         if not getattr(self, "_loading_session_widgets", False):
             self._session_config = self._read_session_config()
-            
+
         # Ensure project name is synced from widget
         if self._session:
             self._session.project_name = self._project_name_edit.text().strip()
-            
+
         active_dp_id = getattr(self, "_active_daw_processor", None)
         active_dp_id = active_dp_id.id if active_dp_id else None
-            
+
         return {
             "source_dir": self._source_dir,
             "active_config_preset": self._active_config_preset_name,
@@ -416,10 +416,10 @@ class AnalysisMixin:
         self._active_config_preset_name = preset_name
         self._session_config = data.get("session_config")
         self._session_groups = data.get("session_groups", [])
-        
+
         if self._session_config:
             self._load_session_widgets(self._session_config)
-            
+
         # Ensure the DAW processors and combo reflect the newly loaded session config
         self._configure_daw_processors()
         self._populate_daw_combo()
@@ -475,12 +475,12 @@ class AnalysisMixin:
         )
 
         self._session = session
-        
+
         # Restore project name widget
         self._project_name_edit.blockSignals(True)
         self._project_name_edit.setText(session.project_name)
         self._project_name_edit.blockSignals(False)
-        
+
         self._summary = build_diagnostic_summary(session)
 
         # ── Populate file list in track table ─────────────────────────────────
@@ -574,7 +574,7 @@ class AnalysisMixin:
             session.config["_use_processed"] = True
             self._use_processed_cb.setChecked(True)
         self._update_use_processed_action()
-        
+
         # ── Restore active DAW processor ──────────────────────────────────────
         active_daw_id = data.get("active_daw_processor_id")
         if active_daw_id:

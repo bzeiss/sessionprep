@@ -153,18 +153,18 @@ def _config_dir() -> str:
         if not base:
             base = os.path.expanduser("~")
         return os.path.join(base, "sessionprep")
-    elif system == "Darwin":
+    if system == "Darwin":
         return os.path.join(
             os.path.expanduser("~"),
             "Library",
             "Application Support",
             "sessionprep",
         )
-    else:  # Linux / BSD / …
-        base = os.environ.get("XDG_CONFIG_HOME")
-        if not base:
-            base = os.path.join(os.path.expanduser("~"), ".config")
-        return os.path.join(base, "sessionprep")
+    # Linux / BSD / …
+    base = os.environ.get("XDG_CONFIG_HOME")
+    if not base:
+        base = os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.join(base, "sessionprep")
 
 
 def config_path() -> str:

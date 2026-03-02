@@ -206,7 +206,7 @@ class SubsonicDetector(TrackDetector):
                 f"subsonic energy {float(combined_ratio):.1f} dB "
                 f"(<= {self.cutoff_hz:g} Hz)"
             )
-        elif any_ch_warn:
+        else:
             parts = []
             for ch in warn_channels:
                 parts.append(f"ch {ch}: {ch_ratios[ch]:.1f} dB")

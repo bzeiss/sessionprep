@@ -360,7 +360,7 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
             
             if msg.clickedButton() == cancel_btn:
                 return
-            elif msg.clickedButton() == append_btn:
+            if msg.clickedButton() == append_btn:
                 append = True
 
         self._batch_dock.load_state(state, append=append)
@@ -858,7 +858,7 @@ class SessionPrepWindow(QMainWindow, AnalysisMixin, TrackColumnsMixin,
         if self._batch_dock.has_items:
             reply = QMessageBox.warning(
                 self, "Pending Batch Items",
-                f"You have pending sessions in the batch queue. Are you sure you want to quit?",
+                "You have pending sessions in the batch queue. Are you sure you want to quit?",
                 QMessageBox.Yes | QMessageBox.No
             )
             if reply != QMessageBox.Yes:
