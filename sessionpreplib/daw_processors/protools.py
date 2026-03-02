@@ -231,6 +231,12 @@ class ProToolsDawProcessor(DawProcessor):
             if version < 2025:
                 self._connected = False
                 return False, "Protocol 2025 or newer required"
+                
+            from . import ptsl_helpers as ptslh
+            if not ptslh.wait_for_host_ready(engine, timeout=25.0, sleep_time=self._command_delay):
+                self._connected = False
+                return False, "Connected, but Pro Tools is busy or not ready. Please bring its window to the front."
+                
             self._connected = True
             return True, f"Protocol: {version}"
         except Exception as e:
@@ -267,6 +273,12 @@ class ProToolsDawProcessor(DawProcessor):
                 application_name=self._application_name,
                 address=address,
             )
+
+            if progress_cb:
+                progress_cb(15, 100, "Waiting for Pro Tools to become ready...")
+
+            if not ptslh.wait_for_host_ready(engine, timeout=25.0, sleep_time=self._command_delay):
+                raise RuntimeError("Pro Tools is busy or not ready. Please bring its window to the front to wake it.")
 
             if ptslh.is_session_open(engine):
                 raise RuntimeError("PRO_TOOLS_SESSION_OPEN")
@@ -497,6 +509,12 @@ class ProToolsDawProcessor(DawProcessor):
                 progress_cb(0, 100, "Connecting to Pro Tools...")
             engine = self._open_engine()
 
+            if progress_cb:
+                progress_cb(2, 100, "Waiting for Pro Tools to become ready...")
+
+            if not ptslh.wait_for_host_ready(engine, timeout=25.0, sleep_time=self._command_delay):
+                raise RuntimeError("Pro Tools is busy or not ready. Please bring its window to the front to wake it.")
+
             # ── 0. Setup & Safety Checks ─────────────────────────
 
             if not self._project_dir:
@@ -676,7 +694,7 @@ class ProToolsDawProcessor(DawProcessor):
                 batch_job_id = None
 
             try:
-                ptslh.close_session(engine, save_on_close=True)
+                ptslh.close_session(engine, save_on_close=True, delay=delay)
                 results.append(DawCommandResult(command=DawCommand("close_session", "", {}), success=True))
             except Exception as e:
                 results.append(DawCommandResult(command=DawCommand("close_session", "", {}), success=False, error=str(e)))

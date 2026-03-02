@@ -132,8 +132,8 @@ def extract_track_id(resp: dict) -> str:
 # ── Session queries ──────────────────────────────────────────────────
 
 def is_session_open(engine) -> bool:
-    """Check if a session is currently open in Pro Tools.
-    
+    """Check if Pro Tools currently has a session open.
+
     Returns True if a session is open, False otherwise.
     """
     try:
@@ -143,6 +143,30 @@ def is_session_open(engine) -> bool:
     except Exception:
         # PTSL commands typically fail if no session is open.
         return False
+
+def wait_for_host_ready(engine, timeout: float = 25.0, sleep_time: float = 0.5) -> bool:
+    """
+    Poll the Pro Tools HostReadyCheck endpoint.
+    Returns True if the host is ready, False if the timeout is reached.
+    """
+    import time
+    from ptsl import ops
+
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        op = ops.HostReadyCheck()
+        try:
+            # We run the operation directly through the client so we can inspect the response
+            engine.client.run(op)
+            if op.response and getattr(op.response, "is_host_ready", False):
+                return True
+        except Exception:
+            # Ignore temporary gRPC errors, timeout, or parsing failures while waking up
+            pass
+
+        time.sleep(sleep_time)
+
+    return False
 
 def get_color_palette(engine, target: str = "CPTarget_Tracks") -> list[str]:
     """Fetch the Pro Tools color palette.  Returns ``[]`` on failure."""
@@ -215,10 +239,13 @@ def create_session_from_template(
             f"template '{template_group} / {template_name}' actually exists."
         )
 
-def close_session(engine, save_on_close: bool = False) -> None:
+def close_session(engine, save_on_close: bool = False, delay: float = 0.5) -> None:
     """Close the current Pro Tools session."""
     from ptsl import PTSL_pb2 as pt
+    import time
     run_command(engine, pt.CommandId.CId_CloseSession, {"save_on_close": save_on_close})
+    # Give the host a breather to physically close the document
+    time.sleep(delay)
 
 
 # ── Batch job lifecycle ──────────────────────────────────────────────
