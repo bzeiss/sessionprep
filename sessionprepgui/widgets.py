@@ -80,9 +80,13 @@ class ProgressPanel(QWidget):
         self._bar.setFixedHeight(14)
         layout.addWidget(self._bar)
         self.setVisible(False)
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.timeout.connect(self._auto_hide)
 
     def start(self, text: str = "Preparing\u2026"):
         """Reset bar to 0 and show the panel with *text*."""
+        self._hide_timer.stop()
         self._bar.setValue(0)
         self._label.setText(text)
         self.setVisible(True)
@@ -101,13 +105,13 @@ class ProgressPanel(QWidget):
         self._label.setText(text)
         self._bar.setValue(self._bar.maximum())
         if auto_hide:
-            QTimer.singleShot(self.AUTO_HIDE_MS, self._auto_hide)
+            self._hide_timer.start(self.AUTO_HIDE_MS)
 
     def fail(self, text: str, auto_hide: bool = True):
         """Show failure message and optionally auto-hide."""
         self._label.setText(f"Failed: {text}")
         if auto_hide:
-            QTimer.singleShot(self.AUTO_HIDE_MS, self._auto_hide)
+            self._hide_timer.start(self.AUTO_HIDE_MS)
 
     def _auto_hide(self):
         self.setVisible(False)
