@@ -239,47 +239,9 @@ class BatchManager(QObject):
         )
         # Assuming topology and topology_applied are needed we could restore them too,
         # but for transfer, `transfer_manifest` and `output_tracks` (which we rebuilt during load) are key.
-        # Wait, output_tracks are not in state_dict.
-        # But prepare step created the files, so we might need output_tracks.
-        # We can let DawTransferWorker handle it or rebuild it if needed.
-        # We need output_tracks for the transfer process to know file names.
-        if state_dict.get("topology_applied", False) and state_dict.get("topology"):
-            import os
-            import soundfile as sf
-            from sessionpreplib.models import TrackContext
-            topo_folder = flat_config.get("app", {}).get("phase1_output_folder", "sp_01_tracklayout")
-            prep_folder = flat_config.get("app", {}).get("phase2_output_folder", "sp_02_prepared")
-            topo_dir = os.path.join(source_dir, topo_folder)
-            prep_dir = os.path.join(source_dir, prep_folder)
-
-            manifest_group = {e.output_filename: e.group for e in session.transfer_manifest}
-            rebuilt = []
-            topology = state_dict.get("topology")
-            if topology:
-                for entry in topology.entries:
-                    topo_path = os.path.join(topo_dir, entry.output_filename)
-                    if not os.path.isfile(topo_path):
-                        continue
-                    try:
-                        info = sf.info(topo_path)
-                        proc_path = os.path.join(prep_dir, entry.output_filename)
-                        out_tc = TrackContext(
-                            filename=entry.output_filename,
-                            filepath=topo_path,
-                            audio_data=None,
-                            samplerate=info.samplerate,
-                            channels=info.channels,
-                            total_samples=info.frames,
-                            bitdepth=str(info.subtype_info) if hasattr(info, 'subtype_info') else "",
-                            subtype=info.subtype,
-                            duration_sec=info.duration,
-                            processed_filepath=(proc_path if os.path.isfile(proc_path) else None)
-                        )
-                        out_tc.group = manifest_group.get(entry.output_filename)
-                        rebuilt.append(out_tc)
-                    except Exception:
-                        pass
-            session.output_tracks = rebuilt
+        # Restore output_tracks directly from the state dict (added in v6 format)
+        # Rebuilding from topology would lose processor_results (e.g. fader_offset)
+        session.output_tracks = state_dict.get("output_tracks", [])
 
         return session
 
