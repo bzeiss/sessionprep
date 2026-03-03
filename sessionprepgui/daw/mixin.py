@@ -571,7 +571,7 @@ class DawMixin:  # pylint: disable=too-few-public-methods
         self._transfer_progress.start("Preparing\u2026")
 
         self._daw_transfer_worker = DawTransferWorker(
-            self._active_daw_processor, self._session, output_path, parent=self)
+            self._active_daw_processor, self._session, output_path, parent=self, close_session=False)
         self._daw_transfer_worker.progress.connect(self._on_transfer_progress)
         self._daw_transfer_worker.progress_value.connect(
             self._on_transfer_progress_value)

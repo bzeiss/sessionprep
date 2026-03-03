@@ -69,11 +69,12 @@ class DawTransferWorker(QThread):
     progress_value = Signal(int, int)   # (current, total)
     result = Signal(bool, str, object)  # (ok, message, results_list)
 
-    def __init__(self, processor: DawProcessor, session, output_path: str, parent=None):
+    def __init__(self, processor: DawProcessor, session, output_path: str, parent=None, close_session: bool = True):
         super().__init__(parent)
         self._processor = processor
         self._session = session
         self._output_path = output_path
+        self._close_session = close_session
 
     def _on_progress(self, current: int, total: int, message: str):
         self.progress.emit(message)
@@ -82,7 +83,7 @@ class DawTransferWorker(QThread):
     def run(self):
         try:
             results = self._processor.transfer(
-                self._session, self._output_path, progress_cb=self._on_progress)
+                self._session, self._output_path, progress_cb=self._on_progress, close_when_done=self._close_session)
             failures = [r for r in results if not r.success]
             if failures:
                 msg = f"Transfer done: {len(results) - len(failures)}/{len(results)} OK"

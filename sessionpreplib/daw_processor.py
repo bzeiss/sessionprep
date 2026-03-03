@@ -133,6 +133,7 @@ class DawProcessor(ABC):
         session: SessionContext,
         output_path: str,
         progress_cb=None,
+        close_when_done: bool = True,
     ) -> list[DawCommandResult]:
         """Initial full push of session data to the DAW.
 

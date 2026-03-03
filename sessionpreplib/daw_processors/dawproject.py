@@ -239,6 +239,7 @@ class DawProjectDawProcessor(DawProcessor):
         session: SessionContext,
         output_path: str,
         progress_cb=None,
+        close_when_done: bool = True,
     ) -> list[DawCommandResult]:
         try:
             from dawproject import (

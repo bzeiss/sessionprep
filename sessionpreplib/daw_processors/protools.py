@@ -555,6 +555,7 @@ class ProToolsDawProcessor(DawProcessor):
         session: SessionContext,
         output_path: str,
         progress_cb=None,
+        close_when_done: bool = True,
     ) -> list[DawCommandResult]:
         """Create a new Pro Tools session from a template and import audio.
 
@@ -881,23 +882,33 @@ class ProToolsDawProcessor(DawProcessor):
             # ── 6. Save & Close ──────────────────────────────────
 
             if progress_cb:
-                progress_cb(98, 100, "Saving and closing session...")
+                msg = "Saving and closing session..." if close_when_done else "Saving session..."
+                progress_cb(98, 100, msg)
 
             if batch_job_id:
                 ptslh.complete_batch_job(engine, batch_job_id)
                 batch_job_id = None
 
             try:
-                ptslh.close_session(engine, save_on_close=True, delay=delay)
-                results.append(
-                    DawCommandResult(
-                        command=DawCommand("close_session", "", {}), success=True
+                if close_when_done:
+                    ptslh.close_session(engine, save_on_close=True, delay=delay)
+                    results.append(
+                        DawCommandResult(
+                            command=DawCommand("close_session", "", {}), success=True
+                        )
                     )
-                )
+                else:
+                    ptslh.save_session(engine)
+                    results.append(
+                        DawCommandResult(
+                            command=DawCommand("save_session", "", {}), success=True
+                        )
+                    )
             except Exception as e:
+                cmd_name = "close_session" if close_when_done else "save_session"
                 results.append(
                     DawCommandResult(
-                        command=DawCommand("close_session", "", {}),
+                        command=DawCommand(cmd_name, "", {}),
                         success=False,
                         error=str(e),
                     )
