@@ -34,22 +34,27 @@ No app-specific dependencies.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QItemSelectionModel, QTimer
-from PySide6.QtGui import QBrush, QColor, QPainter
+import time as _time
+
+from PySide6.QtCore import Qt, QItemSelectionModel, QTimer, Signal, QPoint
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QFrame,
+    QGridLayout,
     QLabel,
     QProgressBar,
+    QPushButton,
     QStyle,
     QStyledItemDelegate,
-    QStyleOptionViewItem,
     QTableWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from .prefs.param_form import _argb_to_qcolor
 from .theme import COLORS
 
 
@@ -343,12 +348,6 @@ class BatchToolButton(QToolButton):
 # Grid-based color picker
 # ---------------------------------------------------------------------------
 
-from PySide6.QtCore import Signal, QPoint
-from PySide6.QtWidgets import QGridLayout, QPushButton, QFrame, QScrollArea
-
-import time as _time
-
-from .prefs.param_form import _argb_to_qcolor
 
 
 def _contrast_text(qc: QColor) -> str:
