@@ -349,7 +349,8 @@ class DawMixin:  # pylint: disable=too-few-public-methods
         if not self._active_daw_processor or not self._session:
             return
         self._fetch_action.setEnabled(False)
-        self._run_daw_check_then(self._do_daw_fetch)
+        # Skip pre-flight connectivity check so template cache hits are instant
+        self._do_daw_fetch()
 
     def _do_daw_fetch(self):
         """Actually start the fetch (called after successful connectivity check)."""

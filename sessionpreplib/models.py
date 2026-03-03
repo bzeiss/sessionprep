@@ -47,6 +47,12 @@ class JobStatus(Enum):
     CANCELLED = "cancelled"
 
 
+class LifecyclePhase(Enum):
+    """Defines when a detector or processor runs in the pipeline."""
+    PHASE1 = "topology"  # Structural and format checks
+    PHASE2 = "analysis"  # Acoustic and content-based DSP
+
+
 @dataclass
 class IssueLocation:
     """A detected issue at a specific position or region in the waveform.

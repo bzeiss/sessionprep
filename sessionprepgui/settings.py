@@ -276,14 +276,9 @@ def resolve_config_preset(
 # ---------------------------------------------------------------------------
 
 
-def _config_dir() -> str:
-    """Return the OS-specific configuration directory for SessionPrep."""
-    return get_app_dir()
-
-
 def config_path() -> str:
     """Return the full path to the GUI config file."""
-    return os.path.join(_config_dir(), CONFIG_FILENAME)
+    return os.path.join(get_app_dir(), CONFIG_FILENAME)
 
 
 # ---------------------------------------------------------------------------

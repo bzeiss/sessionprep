@@ -43,7 +43,7 @@ from ..tracks.table_widgets import (
     _PHASE_ANALYSIS, _PHASE_TOPOLOGY, _PHASE_SETUP,
 )
 from ..theme import COLORS, FILE_COLOR_OK, FILE_COLOR_ERROR
-from .worker import AnalyzeWorker, PrepareWorker
+from .worker import AnalyzeWorker, PrepareWorker, Phase1AnalyzeWorker
 
 
 class AnalysisMixin:  # pylint: disable=too-few-public-methods
@@ -182,9 +182,40 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
 
     # ── Slots: file / analysis ────────────────────────────────────────────
 
+    def _cancel_worker(self, worker_attr: str) -> None:
+        """Safely detach and cancel a background worker to avoid QThread GC destruction."""
+        worker = getattr(self, worker_attr, None)
+        if worker is not None:
+            if hasattr(worker, "isRunning") and worker.isRunning():
+                # Disconnect all signals so it stops updating UI
+                try:
+                    worker.disconnect()
+                except RuntimeError:
+                    pass
+                worker.requestInterruption()
+                # Maintain python reference until it finishes so it doesn't get GC'd
+                if not hasattr(self, "_zombie_workers"):
+                    self._zombie_workers = set()
+                self._zombie_workers.add(worker)
+                
+                # Cleanup reference once finished
+                def _cleanup(*args, w=worker):
+                    if hasattr(self, "_zombie_workers"):
+                        self._zombie_workers.discard(w)
+                
+                if hasattr(worker, "finished"):
+                    worker.finished.connect(_cleanup)
+                if hasattr(worker, "error"):
+                    worker.error.connect(_cleanup)
+            setattr(self, worker_attr, None)
+
     def _clear_workspace(self):
         """Clear the UI and reset session state."""
         self._on_stop()
+        self._cancel_worker("_p1_worker")
+        self._cancel_worker("_worker")
+        self._cancel_worker("_batch_reanalyze_worker")
+        self._cancel_worker("_prepare_worker")
         self._session = None
         self._summary = None
         self._current_track = None
@@ -195,6 +226,7 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
 
         if getattr(self, "_topo_input_tree", None) is not None:
             self._topo_input_tree.clear()
+            self._topo_input_tree.set_source_dir(None)
         if getattr(self, "_topo_output_tree", None) is not None:
             self._topo_output_tree.clear()
         if getattr(self, "_topo_status_label", None) is not None:
@@ -214,6 +246,7 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
         self._phase_tabs.setTabEnabled(_PHASE_ANALYSIS, False)
         self._phase_tabs.setTabEnabled(_PHASE_SETUP, False)
         self._track_table.setRowCount(0)
+        self._track_table.set_source_dir(None)
         self._setup_table.setRowCount(0)
         self._summary_view.clear()
         self._file_report.clear()
@@ -246,6 +279,7 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
         self._clear_workspace()
         self._source_dir = path
         self._track_table.set_source_dir(path)
+        self._topo_input_tree.set_source_dir(path)
 
         app_cfg = self._config.get("app", {})
         skip_folders = {
@@ -279,21 +313,51 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
         # Preserve original source tracks for Phase 1 topology input table
         self._topo_source_tracks = list(tracks)
 
-        # Phase 1 topology stored separately from session so Prepare
-        # doesn't confuse original-source references with Phase 1 outputs.
-        self._topo_topology = build_default_topology(tracks)
+        # Phase 1 topology will be built intelligently after analysis finishes.
+        self._topo_topology = None
 
         # Create session with discovered tracks (no topology on session)
         self._session = SessionContext(tracks=tracks, config={})
 
-        # Populate Phase 1 topology tables
+        self._run_phase1_analysis()
+
+    def _run_phase1_analysis(self):
+        """Asynchronously run Phase 1 format and structural checks on newly loaded tracks."""
+        self._analyze_action.setEnabled(False)
+        if getattr(self, "_topo_apply_action", None):
+            self._topo_apply_action.setEnabled(False)
+            
+        self._progress_label.setText("Analyzing Format & Layout\u2026")
+        self._right_stack.setCurrentIndex(_PAGE_PROGRESS)
+        self._progress_bar.setRange(0, 0)
+        
+        config = self._flat_config()
+        config["_source_dir"] = self._source_dir
+        
+        self._p1_worker = Phase1AnalyzeWorker(self._session, config)
+        self._p1_worker.progress.connect(self._on_worker_progress)
+        self._p1_worker.progress_value.connect(self._on_worker_progress_value)
+        self._p1_worker.finished.connect(self._on_phase1_done)
+        self._p1_worker.error.connect(self._on_analyze_error)
+        self._p1_worker.start()
+
+    @Slot(object)
+    def _on_phase1_done(self, session):
+        self._session = session
+        self._p1_worker = None
+        
+        # Rebuild topology intelligently using Phase 1 results
+        self._topo_topology = build_default_topology(session.tracks)
+        
+        # Populate Phase 1 topology tables using Phase 1 output issues
         self._populate_topology_tab()
 
         self._analyze_action.setEnabled(True)
         self._status_bar.showMessage(
-            f"Discovered {len(tracks)} file(s) from {path} — "
-            "edit topology, then click Apply"
+            f"Discovered {len(session.tracks)} file(s) from {self._source_dir} \u2014 "
+            "review layout, then click Apply"
         )
+        self._right_stack.setCurrentIndex(_PAGE_TABS)
         self.setWindowTitle("SessionPrep")
 
     @Slot()

@@ -314,9 +314,9 @@
 
 ## In Development
 
+## Done
+
 ### InnoSetup Installer
 
   - defaultExpanded: false
-
-## Done
 

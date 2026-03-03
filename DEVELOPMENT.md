@@ -199,13 +199,13 @@ Output goes to `dist_nuitka/`.
 Each executable name includes a platform and architecture suffix generated
 automatically by `build_conf.py`:
 
-| Platform        | CLI output filename                             | GUI output filename                                 |
-|-----------------|-------------------------------------------------|-----------------------------------------------------|
-| Windows x64     | `sessionprep-win-x64.exe`                       | `sessionprep-gui-win-x64.exe`                       |
-| macOS ARM       | `sessionprep-macos-arm64`                       | `sessionprep-gui-macos-arm64`                       |
-| macOS Intel     | `sessionprep-macos-x64`                         | `sessionprep-gui-macos-x64`                         |
-| Linux x64       | `sessionprep-linux-x64`                         | `sessionprep-gui-linux-x64`                         |
-| Linux ARM64     | `sessionprep-linux-arm64`                       | `sessionprep-gui-linux-arm64`                       |
+| Platform    | CLI output filename       | GUI output filename           |
+|-------------|---------------------------|-------------------------------|
+| Windows x64 | `sessionprep-win-x64.exe` | `sessionprep-gui-win-x64.exe` |
+| macOS ARM   | `sessionprep-macos-arm64` | `sessionprep-gui-macos-arm64` |
+| macOS Intel | `sessionprep-macos-x64`   | `sessionprep-gui-macos-x64`   |
+| Linux x64   | `sessionprep-linux-x64`   | `sessionprep-gui-linux-x64`   |
+| Linux ARM64 | `sessionprep-linux-arm64` | `sessionprep-gui-linux-arm64` |
 
 **Note on macOS:** GUI builds always use `onedir` mode (producing a `.app`
 bundle) because `--onefile` + `--windowed` is deprecated in both engines for
@@ -239,13 +239,13 @@ sessionpreplib/_version.py   →   __version__ = "0.1.0"
 
 Everything else reads from this one source:
 
-| Consumer | How it reads the version |
-|----------|------------------------|
-| `pyproject.toml` | `dynamic = ["version"]` + `[tool.hatch.version] path` |
-| `sessionpreplib` | `from ._version import __version__` (re-exported in `__init__.py`) |
+| Consumer               | How it reads the version                                           |
+|------------------------|--------------------------------------------------------------------|
+| `pyproject.toml`       | `dynamic = ["version"]` + `[tool.hatch.version] path`              |
+| `sessionpreplib`       | `from ._version import __version__` (re-exported in `__init__.py`) |
 | CLI (`sessionprep.py`) | `from sessionpreplib import __version__` (powers `--version` flag) |
-| GUI About dialog | `from sessionpreplib import __version__` |
-| PyInstaller builds | Bundled automatically via `--collect-all sessionpreplib` |
+| GUI About dialog       | `from sessionpreplib import __version__`                           |
+| PyInstaller builds     | Bundled automatically via `--collect-all sessionpreplib`           |
 
 To bump the version, edit only `sessionpreplib/_version.py`.
 
@@ -269,31 +269,31 @@ sudo dnf install gcc patchelf ccache libatomic-static
 
 ### 2.7 Project Structure for Packaging
 
-| File | Purpose |
-|------|--------|
-| `pyproject.toml` | Package metadata, dependencies, build config, entry points |
-| `uv.lock` | Lockfile for reproducible dependency resolution |
-| `build_conf.py` | Shared build metadata and isolation rules (Source of Truth) |
-| `build_pyinstaller.py`| PyInstaller automation (standard builds) |
-| `build_nuitka.py` | Nuitka automation (optimized builds) |
-| `sessionprep.py` | Thin CLI entry point |
-| `sessionprep-gui.py` | Thin GUI entry point |
+| File                   | Purpose                                                     |
+|------------------------|-------------------------------------------------------------|
+| `pyproject.toml`       | Package metadata, dependencies, build config, entry points  |
+| `uv.lock`              | Lockfile for reproducible dependency resolution             |
+| `build_conf.py`        | Shared build metadata and isolation rules (Source of Truth) |
+| `build_pyinstaller.py` | PyInstaller automation (standard builds)                    |
+| `build_nuitka.py`      | Nuitka automation (optimized builds)                        |
+| `sessionprep.py`       | Thin CLI entry point                                        |
+| `sessionprep-gui.py`   | Thin GUI entry point                                        |
 ### 2.5 Dependencies
 
-| Package | Type | Used by |
-|---------|------|--------|
-| `numpy` | Runtime | `sessionpreplib` (DSP, array ops) |
-| `soundfile` | Runtime | `sessionpreplib/audio.py` (WAV I/O, bundles libsndfile) |
-| `scipy` | Runtime | `sessionpreplib/audio.py` (subsonic STFT analysis), `sessionprepgui/waveform/compute.py` (mel spectrogram) |
-| `rich` | Runtime | `sessionprep.py` (CLI rendering: tables, panels, progress) |
-| `PySide6` | Optional (gui) | `sessionprepgui` (Qt widgets, main window, waveform) |
-| `sounddevice` | Optional (gui) | `sessionprepgui/detail/playback.py` (audio playback via PortAudio) |
-| `py-ptsl` | Optional (gui) | `sessionpreplib/daw_processors/protools.py` (Pro Tools Scripting SDK gRPC client) |
-| `dawproject` | Optional (gui) | `sessionpreplib/daw_processors/dawproject.py` (DAWproject file format library) |
-| `pytest` | Dev | Test runner |
-| `pytest-cov` | Dev | Coverage reporting |
-| `pyinstaller` | Dev | Standalone executable builds |
-| `Pillow` | Dev | Icon format conversion for PyInstaller (macOS .png → .icns) |
+| Package       | Type           | Used by                                                                                                    |
+|---------------|----------------|------------------------------------------------------------------------------------------------------------|
+| `numpy`       | Runtime        | `sessionpreplib` (DSP, array ops)                                                                          |
+| `soundfile`   | Runtime        | `sessionpreplib/audio.py` (WAV I/O, bundles libsndfile)                                                    |
+| `scipy`       | Runtime        | `sessionpreplib/audio.py` (subsonic STFT analysis), `sessionprepgui/waveform/compute.py` (mel spectrogram) |
+| `rich`        | Runtime        | `sessionprep.py` (CLI rendering: tables, panels, progress)                                                 |
+| `PySide6`     | Optional (gui) | `sessionprepgui` (Qt widgets, main window, waveform)                                                       |
+| `sounddevice` | Optional (gui) | `sessionprepgui/detail/playback.py` (audio playback via PortAudio)                                         |
+| `py-ptsl`     | Optional (gui) | `sessionpreplib/daw_processors/protools.py` (Pro Tools Scripting SDK gRPC client)                          |
+| `dawproject`  | Optional (gui) | `sessionpreplib/daw_processors/dawproject.py` (DAWproject file format library)                             |
+| `pytest`      | Dev            | Test runner                                                                                                |
+| `pytest-cov`  | Dev            | Coverage reporting                                                                                         |
+| `pyinstaller` | Dev            | Standalone executable builds                                                                               |
+| `Pillow`      | Dev            | Icon format conversion for PyInstaller (macOS .png → .icns)                                                |
 
 Core runtime dependencies (`numpy`, `soundfile`, `scipy`) are declared in
 `[project].dependencies`. GUI-only dependencies (`PySide6`, `sounddevice`)
@@ -507,12 +507,12 @@ class ParamSpec:
 `sessionprepgui/prefs/param_form.py`'s `_build_widget()`.  The library itself
 never reads it.  Supported values:
 
-| Value | Widget produced |
-|---|---|
-| `"path_picker_folder"` | `PathPicker(mode=FOLDER)` — line edit + Browse dir dialog |
-| `"path_picker_file"` | `PathPicker(mode=OPEN_FILE)` — line edit + Open file dialog |
-| `"path_picker_save"` | `PathPicker(mode=SAVE_FILE)` — line edit + Save file dialog |
-| `None` (default) | Standard widget derived from `type` and `choices` |
+| Value                  | Widget produced                                             |
+|------------------------|-------------------------------------------------------------|
+| `"path_picker_folder"` | `PathPicker(mode=FOLDER)` — line edit + Browse dir dialog   |
+| `"path_picker_file"`   | `PathPicker(mode=OPEN_FILE)` — line edit + Open file dialog |
+| `"path_picker_save"`   | `PathPicker(mode=SAVE_FILE)` — line edit + Save file dialog |
+| `None` (default)       | Standard widget derived from `type` and `choices`           |
 
 Every detector and processor exposes its parameters via a
 `config_params()` classmethod that returns `list[ParamSpec]`.  Shared
@@ -787,7 +787,7 @@ cycles.
 #### 6.3.1 SilenceDetector (`silence.py`)
 
 - **ID:** `silence` | **Depends on:** (none)
-- **Data:** `{"is_silent": bool}`
+- **Data:** `{"is_silent": bool, "topology_action": "drop"}`
 - **Issues:** Whole-file `IssueLocation` (all channels) when track is silent
 - **Severity:** `ATTENTION` if silent, `CLEAN` otherwise
 - **Clean message:** `"No silent files detected"`
@@ -822,7 +822,7 @@ cycles.
 
 - **ID:** `dual_mono` | **Depends on:** `["silence"]`
 - **Config:** `dual_mono_eps`
-- **Data:** `{"dual_mono": bool}`
+- **Data:** `{"dual_mono": bool, "topology_action": "extract_channel", "topology_channel": 0}`
 - **Severity:** `INFO` if dual-mono, `CLEAN` otherwise
 
 #### 6.3.6 *(removed — merged into StereoCompatDetector)*
@@ -831,7 +831,7 @@ cycles.
 
 - **ID:** `one_sided_silence` | **Depends on:** `["silence"]`
 - **Config:** `one_sided_silence_db`
-- **Data:** `{"one_sided_silence": bool, "one_sided_silence_side": str | None, "l_rms_db": float, "r_rms_db": float}`
+- **Data:** `{"one_sided_silence": bool, "one_sided_silence_side": str | None, "l_rms_db": float, "r_rms_db": float, "topology_action": "extract_channel", "topology_channel": int | None}`
 - **Issues:** Per-channel `IssueLocation` spanning the entire file for the silent channel
 - **Severity:** `ATTENTION` if detected, `CLEAN` otherwise
 - **Hint:** `"check stereo export / channel routing"`
@@ -1129,12 +1129,12 @@ through the `py-ptsl` Python client.
 
 **Lifecycle implementation:**
 
-| Method | Behaviour |
-|--------|-----------|
-| `check_connectivity()` | Opens a `ptsl.Engine`, calls `ptsl.open()`, returns success/failure + PTSL protocol version. On failure, the GUI shows a `QMessageBox.warning` dialog with the error and keeps the toolbar functional. |
-| `fetch(session)` | Retrieves the folder track hierarchy and stores it in `session.daw_state["protools"]["folders"]`. Populates the GUI folder tree for drag-and-drop track assignment. |
-| `transfer(session)` | Wrapped in a PTSL batch job for modal progress + user-lock. Phases: (1) batch import all audio files in one call, (2) per-track create + spot clip (parallel, 6 workers), (3) batch colorize by group, (4) set fader offsets (when bimodal normalization is enabled and processed files are used). Accepts a `progress_callback(step, total, message)` for GUI progress. Results appended to `session.daw_command_log`. |
-| `sync(session)` | Not yet implemented (raises `NotImplementedError`). |
+| Method                 | Behaviour                                                                                                                                                                                                                                                                                                                                                                                                               |
+|------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `check_connectivity()` | Opens a `ptsl.Engine`, calls `ptsl.open()`, returns success/failure + PTSL protocol version. On failure, the GUI shows a `QMessageBox.warning` dialog with the error and keeps the toolbar functional.                                                                                                                                                                                                                  |
+| `fetch(session)`       | Retrieves the folder track hierarchy and stores it in `session.daw_state["protools"]["folders"]`. Populates the GUI folder tree for drag-and-drop track assignment.                                                                                                                                                                                                                                                     |
+| `transfer(session)`    | Wrapped in a PTSL batch job for modal progress + user-lock. Phases: (1) batch import all audio files in one call, (2) per-track create + spot clip (parallel, 6 workers), (3) batch colorize by group, (4) set fader offsets (when bimodal normalization is enabled and processed files are used). Accepts a `progress_callback(step, total, message)` for GUI progress. Results appended to `session.daw_command_log`. |
+| `sync(session)`        | Not yet implemented (raises `NotImplementedError`).                                                                                                                                                                                                                                                                                                                                                                     |
 
 **Batch import optimisation:** All audio files are imported to the Pro Tools
 clip list in a single `CId_ImportData` call (instead of one per track),
@@ -1178,11 +1178,11 @@ processor dropdown (e.g. "DAWproject – MyTemplate").
 
 **Lifecycle implementation:**
 
-| Method | Behaviour |
-|--------|-----------|
-| `check_connectivity()` | Validates template file exists and is a valid ZIP; returns `(True, "Template OK")` or failure message. |
-| `fetch(session)` | Loads the template's folder track hierarchy into `session.daw_state`. Populates the GUI folder tree for drag-and-drop assignment. |
-| `transfer(session)` | Loads template project, creates new audio tracks with clips in the arrangement, sets fader volumes and group colors, writes the result to `<output_folder>/<template_name>.dawproject`. When bimodal normalization is enabled and files are not processed, expression gain (clip gain) is written as automation `Points` nested inside a `Lanes` within the `Clip` (sibling of the `Audio` element). |
+| Method                 | Behaviour                                                                                                                                                                                                                                                                                                                                                                                            |
+|------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `check_connectivity()` | Validates template file exists and is a valid ZIP; returns `(True, "Template OK")` or failure message.                                                                                                                                                                                                                                                                                               |
+| `fetch(session)`       | Loads the template's folder track hierarchy into `session.daw_state`. Populates the GUI folder tree for drag-and-drop assignment.                                                                                                                                                                                                                                                                    |
+| `transfer(session)`    | Loads template project, creates new audio tracks with clips in the arrangement, sets fader volumes and group colors, writes the result to `<output_folder>/<template_name>.dawproject`. When bimodal normalization is enabled and files are not processed, expression gain (clip gain) is written as automation `Points` nested inside a `Lanes` within the `Clip` (sibling of the `Audio` element). |
 
 **Gain application logic:**
 
@@ -1219,10 +1219,10 @@ execute()   -> Apply gains, backup originals, write processed files (CLI legacy)
 
 ### 9.2 Phase Usage by Mode
 
-| Mode | Phases executed |
-|------|----------------|
-| Dry-run (default) | `analyze` → `plan` |
-| GUI with Prepare | `analyze` → `plan` → `prepare` |
+| Mode                 | Phases executed                |
+|----------------------|--------------------------------|
+| Dry-run (default)    | `analyze` → `plan`             |
+| GUI with Prepare     | `analyze` → `plan` → `prepare` |
 | Execute (CLI legacy) | `analyze` → `plan` → `execute` |
 
 ### 9.3 Pipeline Class
@@ -1441,26 +1441,26 @@ class EventBus:
 
 ### Implemented Event Types
 
-| Event | Emitted by | Data |
-|-------|-----------|------|
-| `track.load` | `load_session` | `filename`, `index`, `total` |
-| `track.analyze_start` | Pipeline | `filename`, `index`, `total` |
-| `track.analyze_complete` | Pipeline | `filename`, `index`, `total` |
-| `detector.start` | Pipeline | `detector_id`, `filename` |
-| `detector.complete` | Pipeline | `detector_id`, `filename`, `severity` |
-| `session_detector.start` | Pipeline | `detector_id` |
-| `session_detector.complete` | Pipeline | `detector_id` |
-| `track.plan_start` | Pipeline | `filename`, `index`, `total` |
-| `processor.start` | Pipeline | `processor_id`, `filename` |
-| `processor.complete` | Pipeline | `processor_id`, `filename` |
-| `track.plan_complete` | Pipeline | `filename`, `index`, `total` |
-| `track.write_start` | Pipeline | `filename`, `index`, `total` |
-| `track.write_complete` | Pipeline | `filename`, `index`, `total` |
-| `prepare.start` | Pipeline | `filename` |
-| `prepare.complete` | Pipeline | `filename` |
-| `prepare.error` | Pipeline | `filename`, `error` |
-| `job.start` | Queue | `job_id` |
-| `job.complete` | Queue | `job_id`, `status` |
+| Event                       | Emitted by     | Data                                  |
+|-----------------------------|----------------|---------------------------------------|
+| `track.load`                | `load_session` | `filename`, `index`, `total`          |
+| `track.analyze_start`       | Pipeline       | `filename`, `index`, `total`          |
+| `track.analyze_complete`    | Pipeline       | `filename`, `index`, `total`          |
+| `detector.start`            | Pipeline       | `detector_id`, `filename`             |
+| `detector.complete`         | Pipeline       | `detector_id`, `filename`, `severity` |
+| `session_detector.start`    | Pipeline       | `detector_id`                         |
+| `session_detector.complete` | Pipeline       | `detector_id`                         |
+| `track.plan_start`          | Pipeline       | `filename`, `index`, `total`          |
+| `processor.start`           | Pipeline       | `processor_id`, `filename`            |
+| `processor.complete`        | Pipeline       | `processor_id`, `filename`            |
+| `track.plan_complete`       | Pipeline       | `filename`, `index`, `total`          |
+| `track.write_start`         | Pipeline       | `filename`, `index`, `total`          |
+| `track.write_complete`      | Pipeline       | `filename`, `index`, `total`          |
+| `prepare.start`             | Pipeline       | `filename`                            |
+| `prepare.complete`          | Pipeline       | `filename`                            |
+| `prepare.error`             | Pipeline       | `filename`, `error`                   |
+| `job.start`                 | Queue          | `job_id`                              |
+| `job.complete`              | Queue          | `job_id`, `status`                    |
 
 No EventBus = no overhead. All emissions are guarded with `if self.event_bus`.
 
@@ -1531,13 +1531,13 @@ Currently applies to:
 
 ### 15.2 Error Handling Table
 
-| Failure | Policy |
-|---------|--------|
-| One detector throws on one track | Store `DetectorResult` with `Severity.PROBLEM`, `error` field set; **continue** |
-| One track file cannot be read | Mark `TrackContext.status = "Error: ..."`, skip all detectors/processors; **continue** |
-| An audio processor throws on one track | Store `ProcessorResult` with `error` field set; skip audio write; **continue** |
-| Config validation fails at startup | **Abort** with descriptive error |
-| Cyclic detector dependency | **Abort** at pipeline construction |
+| Failure                                | Policy                                                                                 |
+|----------------------------------------|----------------------------------------------------------------------------------------|
+| One detector throws on one track       | Store `DetectorResult` with `Severity.PROBLEM`, `error` field set; **continue**        |
+| One track file cannot be read          | Mark `TrackContext.status = "Error: ..."`, skip all detectors/processors; **continue** |
+| An audio processor throws on one track | Store `ProcessorResult` with `error` field set; skip audio write; **continue**         |
+| Config validation fails at startup     | **Abort** with descriptive error                                                       |
+| Cyclic detector dependency             | **Abort** at pipeline construction                                                     |
 
 ### 15.3 Implementation
 
@@ -1566,12 +1566,12 @@ for the `ParamSpec` dataclass.
 
 **Validation entry points:**
 
-| Function | Input | Output | Use case |
-|----------|-------|--------|----------|
-| `validate_param_values(params, values)` | `list[ParamSpec]`, flat dict | `list[ConfigFieldError]` | Validate any subset of params |
-| `validate_config_fields(config)` | flat dict | `list[ConfigFieldError]` | Validate all known params (auto-collects from components) |
-| `validate_structured_config(structured)` | structured dict | `list[ConfigFieldError]` | Validate the GUI config file section by section |
-| `validate_config(config)` | flat dict | raises `ConfigError` | Backward-compatible wrapper (CLI) |
+| Function                                 | Input                        | Output                   | Use case                                                  |
+|------------------------------------------|------------------------------|--------------------------|-----------------------------------------------------------|
+| `validate_param_values(params, values)`  | `list[ParamSpec]`, flat dict | `list[ConfigFieldError]` | Validate any subset of params                             |
+| `validate_config_fields(config)`         | flat dict                    | `list[ConfigFieldError]` | Validate all known params (auto-collects from components) |
+| `validate_structured_config(structured)` | structured dict              | `list[ConfigFieldError]` | Validate the GUI config file section by section           |
+| `validate_config(config)`                | flat dict                    | raises `ConfigError`     | Backward-compatible wrapper (CLI)                         |
 
 **Checks performed per field (in order):**
 
@@ -1617,43 +1617,43 @@ group).
 
 ### 18.2 Package Architecture
 
-| Module | Responsibility |
-|--------|---------------|
-| `__init__.py` | Exports `main()` |
-| `settings.py` | `load_config()`, `save_config()`, `config_path()` — persistent GUI preferences |
-| `theme.py` | `COLORS` dict, `FILE_COLOR_*` constants, dark palette + stylesheet |
-| `helpers.py` | `esc()`, `track_analysis_label(track, detectors=None)` (filters via `is_relevant()`), `fmt_time()`, severity maps |
-| `widgets.py` | `BatchEditTableWidget`, `BatchComboBox` — reusable batch-edit base classes preserving multi-row selection across cell-widget clicks (zero app imports) |
-| `log.py` | `dbg(msg)` — lightweight debug logging to stderr, gated by `SP_DEBUG` env var. Timestamped output with caller class name. Used by `pipeline.py`, `dawproject.py`, and other modules via conditional import. |
-| `analysis/mixin.py` | `AnalysisMixin` — open/save/load session, analyze, prepare, session Config tab wiring |
-| `analysis/worker.py` | QThread workers: `AnalyzeWorker` (pipeline in background, thread-safe progress, per-track signals), `BatchReanalyzeWorker` (subset re-analysis after batch overrides), `PrepareWorker` (runs `Pipeline.prepare()` in background with progress), `DawCheckWorker` (connectivity check), `DawFetchWorker` (folder fetch), `DawTransferWorker` (transfer with progress + progress_value signals) |
-| `daw/mixin.py` | `DawMixin` — DAW processor selection, check/fetch/transfer/sync, folder tree, drag-and-drop track assignment, Track Name inline editing, duplication with `-[N]` naming |
-| `topology/mixin.py` | `TopologyMixin` — Phase 1 Channel Topology UI, "Scan subfolders" checkbox (recursive discovery), Apply worker, collapsible waveform preview |
-| `topology/input_tree.py` | `InputTree` — QTreeWidget for source tracks, drag-out of channels via custom MIME |
-| `topology/output_tree.py` | `OutputTree` — QTreeWidget for output tracks, drag-in from input tree, internal channel reorder with insert-position line, cross-file channel moves |
-| `topology/operations.py` | Topology mutation functions: add/remove/reorder/move/wire channels, rename/remove outputs |
-| `detail/mixin.py` | `DetailMixin` — file detail view, waveform display, detector overlay panel, playback toolbar wiring |
-| `detail/playback.py` | `PlaybackController` — sounddevice OutputStream lifecycle, QTimer cursor updates, signal-based API |
-| `detail/report.py` | HTML rendering: `render_summary_html()`, `render_fader_table_html()`, `render_track_detail_html()` |
-| `session/io.py` | Session save/load — serialises full analysis state (detector + processor results, user edits, recursive_scan flag) to `.spsession` JSON without re-running analysis. Versioned format (v4) with forward-compatible migrations. |
-| `tracks/columns_mixin.py` | `TrackColumnsMixin` — track table column definitions, cell rendering, sorting |
-| `tracks/groups_mixin.py` | `GroupsMixin` — group assignment UI, color rendering in track table |
-| `tracks/table_widgets.py` | Track table widget classes (custom cell widgets, batch-edit base classes) |
-| `waveform/__init__.py` | Re-exports `WaveformWidget`, `WaveformLoadWorker`, `SPECTROGRAM_COLORMAPS` |
-| `waveform/compute.py` | Colormaps (magma/viridis/grayscale LUTs), mel math, spectrogram computation, `WaveformLoadWorker` QThread |
-| `waveform/renderer.py` | `WaveformRenderer` — vectorised NumPy peak/RMS downsampling, waveform drawing, RMS L/R and AVG envelopes, dB scale, peak/RMS markers |
-| `waveform/spectrogram.py` | `SpectrogramRenderer` — mel spectrogram QImage (256 mel bins via `scipy.signal.stft`), frequency scale, freq zoom/pan, background recompute worker |
-| `waveform/overlay.py` | Stateless overlay drawing functions — detector issue overlays (with optional frequency bounds), horizontal time scale |
-| `waveform/widget.py` | `WaveformWidget` — thin orchestrator coordinating `WaveformRenderer` and `SpectrogramRenderer`; paintEvent, mouse/keyboard event handlers, zoom/pan API, public setters |
-| `prefs/param_form.py` | **Portable** generic widget factory — `ParamSpec` protocol, `PathPickerMode`, `PathPicker`, `_build_widget`, `_build_param_page`, `_set_widget_value`, `_read_widget`, tooltip/subtext builders, `sanitize_output_folder`.  Zero sessionpreplib dependency; copy to any PySide6 project. |
-| `prefs/preset_panel.py` | **Portable** `NamedPresetPanel` — reusable CRUD widget for named presets with add/duplicate/rename/delete signals. |
-| `prefs/config_pages.py` | SessionPrep-specific builders: `GroupsTableWidget`, `DawProjectTemplatesWidget`, `build_config_pages`, `load_config_widgets`, `read_config_widgets`. |
-| `prefs/page_general.py` | `GeneralPage` — app-level settings (`_APP_PARAMS` list drives `_build_param_page`; `widget_hint="path_picker_folder"` on `default_project_dir` auto-generates a `PathPicker`). |
-| `prefs/page_colors.py` | `ColorsPage` — editable color palette table with `load`/`commit`/`color_provider` interface. |
-| `prefs/page_groups.py` | `GroupsPage` — named group presets using `NamedPresetPanel` + `GroupsTableWidget` with `load`/`commit` interface. |
-| `prefs/dialog.py` | `PreferencesDialog` — thin ~270-line orchestrator wiring all pages, managing config presets via `NamedPresetPanel`, and handling save with validation. |
-| `prefs/param_widgets.py` | Backward-compatible re-export shim — all public names forward to `param_form.py` / `config_pages.py`. |
-| `mainwindow.py` | `SessionPrepWindow` (QMainWindow) — orchestrator, UI layout, slot handlers, toolbar config/group preset combos, session Config tab |
+| Module                    | Responsibility                                                                                                                                                                                                                                                                                                                                                                                |
+|---------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `__init__.py`             | Exports `main()`                                                                                                                                                                                                                                                                                                                                                                              |
+| `settings.py`             | `load_config()`, `save_config()`, `config_path()` — persistent GUI preferences                                                                                                                                                                                                                                                                                                                |
+| `theme.py`                | `COLORS` dict, `FILE_COLOR_*` constants, dark palette + stylesheet                                                                                                                                                                                                                                                                                                                            |
+| `helpers.py`              | `esc()`, `track_analysis_label(track, detectors=None)` (filters via `is_relevant()`), `fmt_time()`, severity maps                                                                                                                                                                                                                                                                             |
+| `widgets.py`              | `BatchEditTableWidget`, `BatchComboBox` — reusable batch-edit base classes preserving multi-row selection across cell-widget clicks (zero app imports)                                                                                                                                                                                                                                        |
+| `log.py`                  | `dbg(msg)` — lightweight debug logging to stderr, gated by `SP_DEBUG` env var. Timestamped output with caller class name. Used by `pipeline.py`, `dawproject.py`, and other modules via conditional import.                                                                                                                                                                                   |
+| `analysis/mixin.py`       | `AnalysisMixin` — open/save/load session, analyze, prepare, session Config tab wiring                                                                                                                                                                                                                                                                                                         |
+| `analysis/worker.py`      | QThread workers: `AnalyzeWorker` (pipeline in background, thread-safe progress, per-track signals), `BatchReanalyzeWorker` (subset re-analysis after batch overrides), `PrepareWorker` (runs `Pipeline.prepare()` in background with progress), `DawCheckWorker` (connectivity check), `DawFetchWorker` (folder fetch), `DawTransferWorker` (transfer with progress + progress_value signals) |
+| `daw/mixin.py`            | `DawMixin` — DAW processor selection, check/fetch/transfer/sync, folder tree, drag-and-drop track assignment, Track Name inline editing, duplication with `-[N]` naming                                                                                                                                                                                                                       |
+| `topology/mixin.py`       | `TopologyMixin` — Phase 1 Channel Topology UI, "Scan subfolders" checkbox (recursive discovery), Apply worker, collapsible waveform preview                                                                                                                                                                                                                                                   |
+| `topology/input_tree.py`  | `InputTree` — QTreeWidget for source tracks, drag-out of channels via custom MIME                                                                                                                                                                                                                                                                                                             |
+| `topology/output_tree.py` | `OutputTree` — QTreeWidget for output tracks, drag-in from input tree, internal channel reorder with insert-position line, cross-file channel moves                                                                                                                                                                                                                                           |
+| `topology/operations.py`  | Topology mutation functions: add/remove/reorder/move/wire channels, rename/remove outputs                                                                                                                                                                                                                                                                                                     |
+| `detail/mixin.py`         | `DetailMixin` — file detail view, waveform display, detector overlay panel, playback toolbar wiring                                                                                                                                                                                                                                                                                           |
+| `detail/playback.py`      | `PlaybackController` — sounddevice OutputStream lifecycle, QTimer cursor updates, signal-based API                                                                                                                                                                                                                                                                                            |
+| `detail/report.py`        | HTML rendering: `render_summary_html()`, `render_fader_table_html()`, `render_track_detail_html()`                                                                                                                                                                                                                                                                                            |
+| `session/io.py`           | Session save/load — serialises full analysis state (detector + processor results, user edits, recursive_scan flag) to `.spsession` JSON without re-running analysis. Versioned format (v4) with forward-compatible migrations.                                                                                                                                                                |
+| `tracks/columns_mixin.py` | `TrackColumnsMixin` — track table column definitions, cell rendering, sorting                                                                                                                                                                                                                                                                                                                 |
+| `tracks/groups_mixin.py`  | `GroupsMixin` — group assignment UI, color rendering in track table                                                                                                                                                                                                                                                                                                                           |
+| `tracks/table_widgets.py` | Track table widget classes (custom cell widgets, batch-edit base classes)                                                                                                                                                                                                                                                                                                                     |
+| `waveform/__init__.py`    | Re-exports `WaveformWidget`, `WaveformLoadWorker`, `SPECTROGRAM_COLORMAPS`                                                                                                                                                                                                                                                                                                                    |
+| `waveform/compute.py`     | Colormaps (magma/viridis/grayscale LUTs), mel math, spectrogram computation, `WaveformLoadWorker` QThread                                                                                                                                                                                                                                                                                     |
+| `waveform/renderer.py`    | `WaveformRenderer` — vectorised NumPy peak/RMS downsampling, waveform drawing, RMS L/R and AVG envelopes, dB scale, peak/RMS markers                                                                                                                                                                                                                                                          |
+| `waveform/spectrogram.py` | `SpectrogramRenderer` — mel spectrogram QImage (256 mel bins via `scipy.signal.stft`), frequency scale, freq zoom/pan, background recompute worker                                                                                                                                                                                                                                            |
+| `waveform/overlay.py`     | Stateless overlay drawing functions — detector issue overlays (with optional frequency bounds), horizontal time scale                                                                                                                                                                                                                                                                         |
+| `waveform/widget.py`      | `WaveformWidget` — thin orchestrator coordinating `WaveformRenderer` and `SpectrogramRenderer`; paintEvent, mouse/keyboard event handlers, zoom/pan API, public setters                                                                                                                                                                                                                       |
+| `prefs/param_form.py`     | **Portable** generic widget factory — `ParamSpec` protocol, `PathPickerMode`, `PathPicker`, `_build_widget`, `_build_param_page`, `_set_widget_value`, `_read_widget`, tooltip/subtext builders, `sanitize_output_folder`.  Zero sessionpreplib dependency; copy to any PySide6 project.                                                                                                      |
+| `prefs/preset_panel.py`   | **Portable** `NamedPresetPanel` — reusable CRUD widget for named presets with add/duplicate/rename/delete signals.                                                                                                                                                                                                                                                                            |
+| `prefs/config_pages.py`   | SessionPrep-specific builders: `GroupsTableWidget`, `DawProjectTemplatesWidget`, `build_config_pages`, `load_config_widgets`, `read_config_widgets`.                                                                                                                                                                                                                                          |
+| `prefs/page_general.py`   | `GeneralPage` — app-level settings (`_APP_PARAMS` list drives `_build_param_page`; `widget_hint="path_picker_folder"` on `default_project_dir` auto-generates a `PathPicker`).                                                                                                                                                                                                                |
+| `prefs/page_colors.py`    | `ColorsPage` — editable color palette table with `load`/`commit`/`color_provider` interface.                                                                                                                                                                                                                                                                                                  |
+| `prefs/page_groups.py`    | `GroupsPage` — named group presets using `NamedPresetPanel` + `GroupsTableWidget` with `load`/`commit` interface.                                                                                                                                                                                                                                                                             |
+| `prefs/dialog.py`         | `PreferencesDialog` — thin ~270-line orchestrator wiring all pages, managing config presets via `NamedPresetPanel`, and handling save with validation.                                                                                                                                                                                                                                        |
+| `prefs/param_widgets.py`  | Backward-compatible re-export shim — all public names forward to `param_form.py` / `config_pages.py`.                                                                                                                                                                                                                                                                                         |
+| `mainwindow.py`           | `SessionPrepWindow` (QMainWindow) — orchestrator, UI layout, slot handlers, toolbar config/group preset combos, session Config tab                                                                                                                                                                                                                                                            |
 
 ### 18.3 Dependency Direction
 
@@ -1894,10 +1894,10 @@ leaves. `prefs/` reads `ParamSpec` metadata from detectors and processors.
 The GUI stores all settings in a JSON config file in the OS-specific user
 preferences directory:
 
-| OS      | Path |
-|---------|------|
-| Windows | `%APPDATA%\sessionprep\sessionprep.config.json` |
-| macOS   | `~/Library/Application Support/sessionprep/sessionprep.config.json` |
+| OS      | Path                                                                              |
+|---------|-----------------------------------------------------------------------------------|
+| Windows | `%APPDATA%\sessionprep\sessionprep.config.json`                                   |
+| macOS   | `~/Library/Application Support/sessionprep/sessionprep.config.json`               |
 | Linux   | `$XDG_CONFIG_HOME/sessionprep/sessionprep.config.json` (defaults to `~/.config/`) |
 
 **Four-section format** — separates global settings from named presets:
@@ -2006,34 +2006,34 @@ The CLI is **not** affected by this file — it continues to use its own
 
 ### 19.1 Mapping from Original Code to Library
 
-| Original (`sessionprep.py`) | Library location |
-|------|-------------|
-| `parse_arguments()` | `sessionprep.py` (CLI only) |
-| `analyze_audio()` | `audio.py` (DSP) + individual detectors |
-| `check_clipping()` / `detect_clipping_ranges()` | `audio.py` + `detectors/clipping.py` |
-| `subsonic_ratio_db()` | `audio.py` (`subsonic_stft_analysis`) + `detectors/subsonic.py` |
-| `calculate_gain()` | `processors/bimodal_normalize.py` |
-| `matches_keywords()` | `utils.py` |
-| `parse_group_specs()` / `assign_groups()` | `utils.py` |
-| `build_session_overview()` | Session-level detectors + `rendering.py` |
-| `build_diagnostic_summary()` | `rendering.py` |
-| `render_diagnostic_summary_text()` | `rendering.py` |
-| `print_diagnostic_summary()` | `sessionprep.py` (Rich) |
-| `generate_report()` / `save_json()` | `sessionprep.py` |
-| `process_files()` | `pipeline.py` + `sessionprep.py` |
-| `protools_sort_key()` | `utils.py` |
-| `db_to_linear()` / `linear_to_db()` / `format_duration()` | `audio.py` |
+| Original (`sessionprep.py`)                               | Library location                                                |
+|-----------------------------------------------------------|-----------------------------------------------------------------|
+| `parse_arguments()`                                       | `sessionprep.py` (CLI only)                                     |
+| `analyze_audio()`                                         | `audio.py` (DSP) + individual detectors                         |
+| `check_clipping()` / `detect_clipping_ranges()`           | `audio.py` + `detectors/clipping.py`                            |
+| `subsonic_ratio_db()`                                     | `audio.py` (`subsonic_stft_analysis`) + `detectors/subsonic.py` |
+| `calculate_gain()`                                        | `processors/bimodal_normalize.py`                               |
+| `matches_keywords()`                                      | `utils.py`                                                      |
+| `parse_group_specs()` / `assign_groups()`                 | `utils.py`                                                      |
+| `build_session_overview()`                                | Session-level detectors + `rendering.py`                        |
+| `build_diagnostic_summary()`                              | `rendering.py`                                                  |
+| `render_diagnostic_summary_text()`                        | `rendering.py`                                                  |
+| `print_diagnostic_summary()`                              | `sessionprep.py` (Rich)                                         |
+| `generate_report()` / `save_json()`                       | `sessionprep.py`                                                |
+| `process_files()`                                         | `pipeline.py` + `sessionprep.py`                                |
+| `protools_sort_key()`                                     | `utils.py`                                                      |
+| `db_to_linear()` / `linear_to_db()` / `format_duration()` | `audio.py`                                                      |
 
 ### 19.2 Dependencies
 
-| Package | Used by |
-|---------|---------|
-| `numpy` | `sessionpreplib` (core dependency) |
-| `soundfile` | `sessionpreplib/audio.py` (audio I/O) |
-| `scipy` | `sessionpreplib/audio.py` (subsonic STFT), `sessionprepgui/waveform/compute.py` (mel spectrogram) — core dependency |
-| `rich` | `sessionprep.py` only — **not** a library dependency |
-| `PySide6` | `sessionprepgui` only — optional GUI dependency |
-| `sounddevice` | `sessionprepgui/detail/playback.py` only — optional GUI dependency |
+| Package       | Used by                                                                                                             |
+|---------------|---------------------------------------------------------------------------------------------------------------------|
+| `numpy`       | `sessionpreplib` (core dependency)                                                                                  |
+| `soundfile`   | `sessionpreplib/audio.py` (audio I/O)                                                                               |
+| `scipy`       | `sessionpreplib/audio.py` (subsonic STFT), `sessionprepgui/waveform/compute.py` (mel spectrogram) — core dependency |
+| `rich`        | `sessionprep.py` only — **not** a library dependency                                                                |
+| `PySide6`     | `sessionprepgui` only — optional GUI dependency                                                                     |
+| `sounddevice` | `sessionprepgui/detail/playback.py` only — optional GUI dependency                                                  |
 
 ### 19.3 Layer Cake
 

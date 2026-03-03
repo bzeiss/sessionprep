@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..models import ParamSpec
+from ..models import ParamSpec, LifecyclePhase
 from ..detector import TrackDetector
 from ..models import DetectorResult, Severity, TrackContext
 from ..audio import get_stereo_channels_subsampled, is_silent
@@ -12,6 +12,7 @@ class DualMonoDetector(TrackDetector):
     id = "dual_mono"
     name = "Dual-Mono (Identical L/R)"
     shorthand = "DM"
+    phase = LifecyclePhase.PHASE1
     depends_on = ["silence"]
 
     @classmethod
@@ -74,7 +75,11 @@ class DualMonoDetector(TrackDetector):
                 detector_id=self.id,
                 severity=Severity.INFO,
                 summary="dual-mono (identical L/R)",
-                data={"dual_mono": True},
+                data={
+                    "dual_mono": True,
+                    "topology_action": "extract_channel",
+                    "topology_channel": 0,
+                },
             )
 
         return DetectorResult(

@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from .models import ParamSpec
+from .models import ParamSpec, LifecyclePhase
 from .models import DetectorResult, Severity, TrackContext, SessionContext
 
 _REPORT_AS_MAP: dict[str, Severity] = {
@@ -33,6 +33,7 @@ class TrackDetector(ABC):
     name: str = ""
     shorthand: str = ""  # short abbreviation for compact UI labels
     depends_on: list[str] = []
+    phase: LifecyclePhase = LifecyclePhase.PHASE2
 
     @classmethod
     def config_params(cls) -> list[ParamSpec]:
@@ -151,6 +152,7 @@ class SessionDetector(ABC):
     id: str = ""
     name: str = ""
     shorthand: str = ""  # short abbreviation for compact UI labels
+    phase: LifecyclePhase = LifecyclePhase.PHASE2
 
     @classmethod
     def config_params(cls) -> list[ParamSpec]:

@@ -322,7 +322,7 @@ def process_files():
             console.print(f"[red]No audio files found in {source_dir}[/]")
             return
 
-        task_id = progress.add_task("[cyan]Loading & analyzing tracks...", total=len(wav_files))
+        task_id = progress.add_task("[cyan]Loading & analyzing tracks...", total=len(wav_files) * 2)
 
         # Wire up progress callback
         def on_track_analyze_complete(**data):
@@ -336,7 +336,8 @@ def process_files():
             return
 
         # --- ANALYZE ---
-        session = pipeline.analyze(session)
+        session = pipeline.analyze_phase1(session)
+        session = pipeline.analyze_phase2(session)
 
         event_bus.unsubscribe("track.analyze_complete", on_track_analyze_complete)
 

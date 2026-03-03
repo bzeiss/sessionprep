@@ -27,6 +27,7 @@ COLORS = {
 # File list item colors by status
 FILE_COLOR_OK = QColor("#cccccc")
 FILE_COLOR_ERROR = QColor("#ff4444")
+FILE_COLOR_WARNING = QColor(COLORS["attention"])
 FILE_COLOR_SILENT = QColor("#888888")
 FILE_COLOR_TRANSIENT = QColor("#cc77ff")
 FILE_COLOR_SUSTAINED = QColor("#44cccc")

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..models import ParamSpec
+from ..models import ParamSpec, LifecyclePhase
 from ..detector import TrackDetector
 from ..models import DetectorResult, IssueLocation, Severity, TrackContext
 from ..audio import dbfs_offset, get_stereo_rms, is_silent, linear_to_db
@@ -12,6 +12,7 @@ class OneSidedSilenceDetector(TrackDetector):
     id = "one_sided_silence"
     name = "One-Sided Silence"
     shorthand = "OS"
+    phase = LifecyclePhase.PHASE1
     depends_on = ["silence"]
 
     @classmethod
@@ -88,14 +89,18 @@ class OneSidedSilenceDetector(TrackDetector):
             one_sided = True
             side = "R"
 
+        ch_idx = 0 if side == "L" else 1 if side == "R" else None
+        
         data = {
             "one_sided_silence": bool(one_sided),
             "one_sided_silence_side": side,
             "l_rms_db": l_rms_db,
             "r_rms_db": r_rms_db,
         }
-
+        
         if one_sided:
+            data["topology_action"] = "extract_channel"
+            data["topology_channel"] = 1 if side == "L" else 0  # If L is silent, extract R (1). If R is silent, extract L (0).
             off = self._db_offset
 
             def fmt_db(x):
@@ -112,7 +117,6 @@ class OneSidedSilenceDetector(TrackDetector):
                     f"one-sided silence "
                     f"(L {fmt_db(l_rms_db)} dBFS, R {fmt_db(r_rms_db)} dBFS)"
                 )
-            ch_idx = 0 if side == "L" else 1 if side == "R" else None
             issues = [IssueLocation(
                 sample_start=0,
                 sample_end=track.total_samples - 1,

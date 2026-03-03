@@ -98,6 +98,7 @@ A detector earns its place if it meets at least one of these criteria:
 - **What it means:** a stereo file appears to have the same signal in L and R.
 - **Why it matters:** usually a valid delivery choice and often intentional.
 - **Controls:** `--dual_mono_eps`
+- **Track Layout:** Triggers a layout recommendation (`topology_action: extract_channel`) to downmix output to a single channel, saving storage and DSP overhead.
 - **Categorization:**
   - INFORMATION: `Dual-mono (identical L/R)` with per-file details.
 
@@ -105,6 +106,7 @@ A detector earns its place if it meets at least one of these criteria:
 
 - **What it means:** the file is all zeros (or effectively empty).
 - **Why it matters:** may be intentional (placeholder) but is often an export issue.
+- **Track Layout:** Triggers a layout recommendation (`topology_action: drop`) to skip the file in the session layout outputs entirely.
 - **Categorization:**
   - CLEAN: `No silent files detected`.
   - ATTENTION: `Silent files` with per-file details.
@@ -114,6 +116,7 @@ A detector earns its place if it meets at least one of these criteria:
 - **What it means:** a stereo file has one channel that is effectively silent while the other has signal.
 - **Why it matters:** often an export/cabling/routing mistake; importing it as stereo can cause unexpected balance issues.
 - **Controls:** `--one_sided_silence_db`
+- **Track Layout:** Triggers a layout recommendation (`topology_action: extract_channel`) to extract specifically the active, non-silent channel into a mono output track.
 - **Categorization:**
   - CLEAN: `No one-sided silent stereo files detected`.
   - ATTENTION: `One-sided silence` with per-file details.
@@ -431,20 +434,20 @@ third-party tools.
 
 ### 6.1 Mouse
 
-| Action | Effect |
-|--------|--------|
-| **Click** | Set playback cursor position |
-| **Hover** | Crosshair guide with dBFS readout (waveform) or frequency readout (spectrogram) |
-| **Ctrl + wheel** | Horizontal zoom (centered on pointer) |
-| **Ctrl + Shift + wheel** | Vertical zoom (amplitude in waveform, frequency range in spectrogram) |
-| **Shift + Alt + wheel** | Scroll up / down (frequency pan, spectrogram mode) |
-| **Shift + wheel** | Scroll left / right |
+| Action                   | Effect                                                                          |
+|--------------------------|---------------------------------------------------------------------------------|
+| **Click**                | Set playback cursor position                                                    |
+| **Hover**                | Crosshair guide with dBFS readout (waveform) or frequency readout (spectrogram) |
+| **Ctrl + wheel**         | Horizontal zoom (centered on pointer)                                           |
+| **Ctrl + Shift + wheel** | Vertical zoom (amplitude in waveform, frequency range in spectrogram)           |
+| **Shift + Alt + wheel**  | Scroll up / down (frequency pan, spectrogram mode)                              |
+| **Shift + wheel**        | Scroll left / right                                                             |
 
 ### 6.2 Keyboard Shortcuts
 
-| Key | Effect |
-|-----|--------|
-| **R** | Zoom in (centered on mouse guide, or cursor if not hovering) |
+| Key   | Effect                                                        |
+|-------|---------------------------------------------------------------|
+| **R** | Zoom in (centered on mouse guide, or cursor if not hovering)  |
 | **T** | Zoom out (centered on mouse guide, or cursor if not hovering) |
 
 > The waveform must have keyboard focus (click it first) for keyboard
@@ -452,28 +455,28 @@ third-party tools.
 
 ### 6.3 Toolbar Buttons
 
-| Button | Effect |
-|--------|--------|
-| **Waveform / Spectrogram ▾** | Switch between waveform and spectrogram display mode |
-| **Display ▾** | Spectrogram settings: FFT Size, Window, Color Theme, dB Floor, dB Ceiling (spectrogram mode only) |
-| **Detector Overlays ▾** | Toggle visibility of individual detector overlays (both modes) |
-| **Peak / RMS Max** | Toggle peak ("P") and max-RMS ("R") markers (waveform mode, off by default) |
-| **RMS L/R** | Toggle per-channel RMS envelope (yellow, waveform mode) |
-| **RMS AVG** | Toggle combined RMS envelope (orange, waveform mode) |
-| **Fit** | Reset zoom to show entire file |
-| **+** | Zoom in at cursor |
-| **−** | Zoom out at cursor |
-| **↑** | Scale up (amplitude in waveform, frequency range in spectrogram) |
-| **↓** | Scale down (amplitude in waveform, frequency range in spectrogram) |
+| Button                       | Effect                                                                                            |
+|------------------------------|---------------------------------------------------------------------------------------------------|
+| **Waveform / Spectrogram ▾** | Switch between waveform and spectrogram display mode                                              |
+| **Display ▾**                | Spectrogram settings: FFT Size, Window, Color Theme, dB Floor, dB Ceiling (spectrogram mode only) |
+| **Detector Overlays ▾**      | Toggle visibility of individual detector overlays (both modes)                                    |
+| **Peak / RMS Max**           | Toggle peak ("P") and max-RMS ("R") markers (waveform mode, off by default)                       |
+| **RMS L/R**                  | Toggle per-channel RMS envelope (yellow, waveform mode)                                           |
+| **RMS AVG**                  | Toggle combined RMS envelope (orange, waveform mode)                                              |
+| **Fit**                      | Reset zoom to show entire file                                                                    |
+| **+**                        | Zoom in at cursor                                                                                 |
+| **−**                        | Zoom out at cursor                                                                                |
+| **↑**                        | Scale up (amplitude in waveform, frequency range in spectrogram)                                  |
+| **↓**                        | Scale down (amplitude in waveform, frequency range in spectrogram)                                |
 
 ### 6.4 Playback Controls
 
-| Button | Effect |
-|--------|--------|
-| **▶ Play** | Start playback from cursor position |
-| **■ Stop** | Stop playback and return cursor to start position |
-| **M** | Toggle mono playback — folds stereo to mono via (L+R)/2 for auditioning mono compatibility. Latched: toggle once, then play/stop freely. Orange when active. |
-| **Space** | Toggle play/stop (global shortcut) |
+| Button     | Effect                                                                                                                                                       |
+|------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **▶ Play** | Start playback from cursor position                                                                                                                          |
+| **■ Stop** | Stop playback and return cursor to start position                                                                                                            |
+| **M**      | Toggle mono playback — folds stereo to mono via (L+R)/2 for auditioning mono compatibility. Latched: toggle once, then play/stop freely. Orange when active. |
+| **Space**  | Toggle play/stop (global shortcut)                                                                                                                           |
 
 ---
 
@@ -485,12 +488,12 @@ The **Analysis** column displays per-track severity counts instead of a single
 worst-severity label.  Each severity level is color-coded and only non-zero
 counts are shown:
 
-| Display | Meaning |
-|---------|---------|
+| Display    | Meaning                                                      |
+|------------|--------------------------------------------------------------|
 | `2P 1A 5I` | 2 Problems (red), 1 Attention (orange), 5 Information (blue) |
-| `1A` | 1 Attention only |
-| `OK` | All detectors clean (green) |
-| `Error` | File could not be read (red) |
+| `1A`       | 1 Attention only                                             |
+| `OK`       | All detectors clean (green)                                  |
+| `Error`    | File could not be read (red)                                 |
 
 The column is sortable — tracks with problems sort first, then attention, then
 clean.  Within the same worst severity, tracks with more total issues sort
@@ -500,11 +503,11 @@ higher.
 
 Standard Extended Selection applies to the track table:
 
-| Action | Effect |
-|--------|--------|
-| **Click** | Select single row |
-| **Shift + click** | Extend selection to contiguous range |
-| **Ctrl + click** | Toggle individual rows (non-adjacent selection) |
+| Action            | Effect                                          |
+|-------------------|-------------------------------------------------|
+| **Click**         | Select single row                               |
+| **Shift + click** | Extend selection to contiguous range            |
+| **Ctrl + click**  | Toggle individual rows (non-adjacent selection) |
 
 ### 7.3 Batch Editing
 
@@ -523,23 +526,23 @@ where Alt-clicking a control applies it across the track selection.
 
 Supported batch dropdowns:
 
-| Dropdown | Column | Effect |
-|----------|--------|--------|
-| **RMS Anchor** | 5 | Override per-track RMS anchor; triggers full re-analysis (detectors + processors) |
-| **Classification** | 3 | Override per-track classification; triggers processor-only re-calculation |
+| Dropdown           | Column | Effect                                                                            |
+|--------------------|--------|-----------------------------------------------------------------------------------|
+| **RMS Anchor**     | 5      | Override per-track RMS anchor; triggers full re-analysis (detectors + processors) |
+| **Classification** | 3      | Override per-track classification; triggers processor-only re-calculation         |
 
 ### 7.4 RMS Anchor Override
 
 Per-track dropdown overriding the global `rms_anchor` analysis setting.
 
-| Label | Override value | Meaning |
-|-------|---------------|---------|
-| Default | *(none)* | Use the global setting from Preferences |
-| Max | `max` | Loudest gated RMS window |
-| P99 | `p99` | 99th percentile of gated RMS windows |
-| P95 | `p95` | 95th percentile (default global setting) |
-| P90 | `p90` | 90th percentile |
-| P85 | `p85` | 85th percentile |
+| Label   | Override value | Meaning                                  |
+|---------|----------------|------------------------------------------|
+| Default | *(none)*       | Use the global setting from Preferences  |
+| Max     | `max`          | Loudest gated RMS window                 |
+| P99     | `p99`          | 99th percentile of gated RMS windows     |
+| P95     | `p95`          | 95th percentile (default global setting) |
+| P90     | `p90`          | 90th percentile                          |
+| P85     | `p85`          | 85th percentile                          |
 
 Changing the anchor re-runs all detectors and processors for the affected
 track(s), since the anchor value influences both tail exceedance detection and
@@ -549,11 +552,11 @@ gain calculation.
 
 Per-track dropdown overriding the auto-detected audio classification.
 
-| Label | Effect |
-|-------|--------|
-| Transient | Force peak-based normalization (`target_peak`) |
-| Sustained | Force RMS-based normalization (`target_rms`) |
-| Skip | Exclude track from processing (gain = 0 dB, spin box disabled) |
+| Label     | Effect                                                         |
+|-----------|----------------------------------------------------------------|
+| Transient | Force peak-based normalization (`target_peak`)                 |
+| Sustained | Force RMS-based normalization (`target_rms`)                   |
+| Skip      | Exclude track from processing (gain = 0 dB, spin box disabled) |
 
 Changing the classification re-runs processors only (no detector re-analysis
 needed), since the classification affects only the normalization method and
