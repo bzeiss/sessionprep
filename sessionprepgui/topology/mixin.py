@@ -78,10 +78,18 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
 
         toolbar.addSeparator()
 
+        self._topo_reanalyze_action = QAction("Reanalyze", self)
+        self._topo_reanalyze_action.setToolTip(
+            "Rescan the current folder for new or changed files")
+        self._topo_reanalyze_action.triggered.connect(self._on_topo_reanalyze)
+        self._topo_reanalyze_action.setEnabled(False)
+        toolbar.addAction(self._topo_reanalyze_action)
+
         self._topo_reset_action = QAction("Reset to Default", self)
         self._topo_reset_action.setToolTip(
             "Rebuild the default passthrough topology from input tracks")
         self._topo_reset_action.triggered.connect(self._on_topo_reset)
+        self._topo_reset_action.setEnabled(False)
         toolbar.addAction(self._topo_reset_action)
 
         self._topo_add_output_action = QAction("Add Output", self)

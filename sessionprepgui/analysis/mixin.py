@@ -236,6 +236,10 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
 
         if getattr(self, "_analyze_action", None) is not None:
             self._analyze_action.setEnabled(False)
+        if getattr(self, "_topo_reanalyze_action", None) is not None:
+            self._topo_reanalyze_action.setEnabled(False)
+        if getattr(self, "_topo_reset_action", None) is not None:
+            self._topo_reset_action.setEnabled(False)
         if getattr(self, "_save_session_action", None) is not None:
             self._save_session_action.setEnabled(False)
 
@@ -276,6 +280,14 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
         if not path:
             return
 
+        self._load_directory(path)
+
+    @Slot()
+    def _on_topo_reanalyze(self):
+        if self._source_dir:
+            self._load_directory(self._source_dir)
+
+    def _load_directory(self, path: str):
         self._clear_workspace()
         self._source_dir = path
         self._track_table.set_source_dir(path)
@@ -344,7 +356,9 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
     @Slot(object)
     def _on_phase1_done(self, session):
         self._session = session
-        self._p1_worker = None
+        if self._p1_worker is not None:
+            self._p1_worker.deleteLater()
+            self._p1_worker = None
         
         # Rebuild topology intelligently using Phase 1 results
         self._topo_topology = build_default_topology(session.tracks)
@@ -353,6 +367,11 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
         self._populate_topology_tab()
 
         self._analyze_action.setEnabled(True)
+        if getattr(self, "_topo_reanalyze_action", None) is not None:
+            self._topo_reanalyze_action.setEnabled(True)
+        if getattr(self, "_topo_reset_action", None) is not None:
+            self._topo_reset_action.setEnabled(True)
+            
         self._status_bar.showMessage(
             f"Discovered {len(session.tracks)} file(s) from {self._source_dir} \u2014 "
             "review layout, then click Apply"
@@ -873,7 +892,9 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
         self._summary = summary
         self._analyze_action.setEnabled(True)
         self._track_table.setVisible(True)
-        self._worker = None
+        if self._worker is not None:
+            self._worker.deleteLater()
+            self._worker = None
 
         if not self._session_groups:
             # First analysis — load from Default group preset
@@ -953,7 +974,9 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
     def _on_analyze_error(self, message: str):
         self._analyze_action.setEnabled(True)
         self._track_table.setVisible(True)
-        self._worker = None
+        if self._worker is not None:
+            self._worker.deleteLater()
+            self._worker = None
 
         from ..helpers import esc
 
@@ -1014,7 +1037,9 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
 
     @Slot()
     def _on_prepare_done(self):
-        self._prepare_worker = None
+        if self._prepare_worker is not None:
+            self._prepare_worker.deleteLater()
+            self._prepare_worker = None
         self._update_prepare_button()
         self._update_use_processed_action()
 
@@ -1048,7 +1073,9 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
 
     @Slot(str)
     def _on_prepare_error(self, message: str):
-        self._prepare_worker = None
+        if self._prepare_worker is not None:
+            self._prepare_worker.deleteLater()
+            self._prepare_worker = None
         self._prepare_action.setEnabled(True)
         self._prepare_progress.fail(message)
         self._status_bar.showMessage(f"Prepare failed: {message}")
