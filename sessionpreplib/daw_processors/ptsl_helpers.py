@@ -383,18 +383,80 @@ def colorize_tracks(
         batch_job_id=batch_job_id, progress=progress)
 
 
+# ── IMPORTANT: How PTSL fader control works ──────────────────────────
+#
+# Pro Tools 2025.10 introduced CId_SetTrackControlBreakpoints (command
+# 150) which writes AUTOMATION BREAKPOINTS, not live fader positions.
+#
+# Key behaviours discovered through empirical testing:
+#
+#   1. The command writes automation data into the track's volume
+#      automation lane.  A single breakpoint at sample 0 effectively
+#      sets a flat automation value across the entire timeline.
+#
+#   2. Faders do NOT visually move when the command is issued.  They
+#      only snap to the written value when the TRANSPORT PLAYS and
+#      Pro Tools reads the automation.  This is expected behaviour,
+#      not a bug.
+#
+#   3. The value is ACTUAL dB (empirically verified 2025-03-03).
+#      Despite the proto documentation claiming a -1.0 to +1.0 range
+#      for TCType_Volume, testing confirms that the float value maps
+#      directly to dB.  No transfer function is needed.
+#        +12.0  →  +12 dB  (fader fully up)
+#          0.0  →    0 dB  (unity gain)
+#         -6.0  →   -6 dB
+#        -18.0  →  -18 dB  (SessionPrep sustained target)
+#        -80.0  →  -80 dB  (near silence)
+#      The proto's -1.0/+1.0 range likely applies only to pan, mute,
+#      LFE, and plugin parameter controls — not volume.
+#
+#   4. Both track_id (GUID string) and track_name (display name) are
+#      accepted for track identification.  Either field can be used,
+#      the proto defines them as alternatives.
+#
+#   5. The command can be wrapped in a batch job (CId_CreateBatchJob /
+#      CId_CompleteBatchJob) which shows a modal progress dialog in
+#      Pro Tools and blocks user interaction during the operation.
+#
+#   6. As of Pro Tools 2025.12, only TCType_Volume (and sends) work.
+#      TCType_Pan, TCType_Mute, TCType_Lfe, TCType_PluginParameter
+#      return "Not yet implemented" from the server.
+#
+# Reference: PTSL SDK 2025.10 documentation, Chapter 3 (Batch Jobs)
+#            and SetTrackControlBreakpointsRequestBody in PTSL.proto.
+# ─────────────────────────────────────────────────────────────────────
+
+
 def set_track_volume(
     engine, track_id: str, volume_db: float,
     batch_job_id: str | None = None, progress: int = 0,
 ) -> None:
-    """Set a track's fader volume to *volume_db* (direct dB value).
+    """Set a track's fader volume via automation breakpoint (by track_id).
 
-    Uses ``CId_SetTrackControlBreakpoints`` with ``TCType_Volume`` on
-    ``TSId_MainOut`` at sample 0.  The *volume_db* value maps directly
-    to dBFS (e.g. ``-12.0`` sets the fader to −12 dB).
+    Writes a single automation breakpoint at sample 0 using
+    ``CId_SetTrackControlBreakpoints`` with ``TCType_Volume`` on
+    ``TSId_MainOut``.
+
+    .. important::
+
+        This writes **automation data**, not a live fader position.
+        The fader only visually moves when the transport plays and
+        Pro Tools reads the automation.
+
+    Args:
+        track_id:     Pro Tools track GUID, e.g.
+                      ``"{00000000-2a000000-eead9701-ea871516}"``.
+        volume_db:    Fader value in **actual dB**.  Pro Tools range is
+                      roughly ``-inf`` to ``+12.0``.  E.g. ``0.0`` = unity,
+                      ``-6.0`` = −6 dB, ``+12.0`` = fader fully up.
+        batch_job_id: Optional batch job ID (from ``create_batch_job``).
+        progress:     Batch job progress percentage (0–100).
+
+    Requires Pro Tools 2025.10+.
     """
     from ptsl import PTSL_pb2 as pt
-    dbg(f"set_track_volume: id={track_id}, db={volume_db}")
+    dbg(f"set_track_volume: id={track_id}, value={volume_db}")
     try:
         run_command(
             engine, pt.CommandId.CId_SetTrackControlBreakpoints,
@@ -410,9 +472,52 @@ def set_track_volume(
                         "time_type": "TLType_Samples",
                     },
                     "value": volume_db,
-                }],
+                }]
             },
             batch_job_id=batch_job_id, progress=progress)
     except Exception as e:
-        dbg(f"Error in set_track_volume ({track_id}, {volume_db} dB): {e}")
+        dbg(f"Error in set_track_volume ({track_id}, {volume_db}): {e}")
+        raise
+
+
+def set_track_volume_by_trackname(
+    engine, track_name: str, volume: float,
+    batch_job_id: str | None = None, progress: int = 0,
+) -> None:
+    """Set a track's fader volume via automation breakpoint (by track_name).
+
+    Identical to :func:`set_track_volume` but identifies the track by
+    its display name instead of its GUID.  See that function's docstring
+    for full details on behaviour, value range, and caveats.
+
+    Args:
+        track_name:   Pro Tools track display name, e.g. ``"Audio 1"``.
+        volume:       Fader value in **actual dB** (see :func:`set_track_volume`).
+        batch_job_id: Optional batch job ID (from ``create_batch_job``).
+        progress:     Batch job progress percentage (0–100).
+
+    Requires Pro Tools 2025.10+.
+    """
+    from ptsl import PTSL_pb2 as pt
+    dbg(f"set_track_volume_by_trackname: name={track_name}, value={volume}")
+    try:
+        run_command(
+            engine, pt.CommandId.CId_SetTrackControlBreakpoints,
+            {
+                "track_name": track_name,
+                "control_id": {
+                    "section": "TSId_MainOut",
+                    "control_type": "TCType_Volume",
+                },
+                "breakpoints": [{
+                    "time": {
+                        "location": "0",
+                        "time_type": "TLType_Samples",
+                    },
+                    "value": volume,
+                }]
+            },
+            batch_job_id=batch_job_id, progress=progress)
+    except Exception as e:
+        dbg(f"Error in set_track_volume_by_trackname ({track_name}, {volume}): {e}")
         raise
