@@ -76,15 +76,17 @@ jobs:
           rm "$TMPCONFIG"
 
           STAGING=$(mktemp -d)
-          cp dist_nuitka/sessionprep-linux-x64       "$STAGING/sessionprep"
-          cp dist_nuitka/sessionprep-gui-linux-x64   "$STAGING/sessionprep-gui"
+          cp -r dist_nuitka/sessionprep.dist         "$STAGING/sessionprep.dist"
+          cp -r dist_nuitka/sessionprep-gui.dist     "$STAGING/sessionprep-gui.dist"
+          # RPS binaries are now inside the .dist folders via python build script
           cp sessionprepgui/res/sessionprep.png      "$STAGING/sessionprep.png"
           cp packaging/linux/sessionprep.desktop     "$STAGING/sessionprep.desktop"
           cp packaging/linux/install-sessionprep.sh  "$STAGING/install-sessionprep.sh"
           chmod +x "$STAGING/install-sessionprep.sh"
           tar -czf "dist_nuitka/sessionprep-${VERSION}-linux-x64.tar.gz" \
             -C "$STAGING" \
-            sessionprep sessionprep-gui sessionprep.png \
+            sessionprep.dist sessionprep-gui.dist \
+            sessionprep.png \
             sessionprep.desktop install-sessionprep.sh
 
       - name: Build InnoSetup Installer

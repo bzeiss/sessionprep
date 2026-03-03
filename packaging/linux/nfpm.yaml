@@ -13,15 +13,11 @@ description: Batch audio analyzer and normalizer for mix session preparation
 license: GPL-3.0-or-later
 
 contents:
-  - src: "${DIST_DIR}/sessionprep-linux-x64"
-    dst: /usr/local/bin/sessionprep
-    file_info:
-      mode: 0755
+  - src: "${DIST_DIR}/sessionprep.dist/"
+    dst: /opt/sessionprep/
 
-  - src: "${DIST_DIR}/sessionprep-gui-linux-x64"
-    dst: /usr/local/bin/sessionprep-gui
-    file_info:
-      mode: 0755
+  - src: "${DIST_DIR}/sessionprep-gui.dist/"
+    dst: /opt/sessionprep/
 
   - src: sessionprepgui/res/sessionprep.png
     dst: /usr/local/share/pixmaps/sessionprep.png
@@ -32,3 +28,11 @@ contents:
     dst: /usr/local/share/applications/sessionprep.desktop
     file_info:
       mode: 0644
+
+  - src: /opt/sessionprep/sessionprep-linux-x64
+    dst: /usr/local/bin/sessionprep
+    type: symlink
+
+  - src: /opt/sessionprep/sessionprep-gui-linux-x64
+    dst: /usr/local/bin/sessionprep-gui
+    type: symlink

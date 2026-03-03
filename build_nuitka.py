@@ -12,6 +12,8 @@ import subprocess
 import argparse
 from build_conf import TARGETS, BASE_DIR, DIST_NUITKA, MACOS_APP_NAME
 
+RPS_VERSION = "0.2.2"
+
 def _check_dependencies(target_key):
     """Ensure required packages for the target are installed."""
     from importlib.util import find_spec
@@ -19,8 +21,73 @@ def _check_dependencies(target_key):
     # Check explicitly for PySide6 if it's the GUI target
     if target_key == "gui":
         if find_spec("PySide6") is None:
-            print(f"\n[ERROR] PySide6 is missing. Run: uv sync --extra gui")
+            print("\n[ERROR] PySide6 is missing. Run: uv sync --extra gui")
             sys.exit(1)
+
+def fetch_and_bundle_rps(dist_dir, target):
+    """Fetch RPS release binaries and bundle them with the executable."""
+    import urllib.request
+    import tarfile
+    import zipfile
+    from build_conf import get_platform_suffix
+    
+    suffix = get_platform_suffix()
+    if sys.platform in ("win32", "darwin"):
+        ext = "zip"
+    else:
+        ext = "tar.gz"
+        
+    url = f"https://github.com/bzeiss/rps/releases/download/{RPS_VERSION}/rps-{suffix}.{ext}"
+    archive_path = os.path.join(dist_dir, f"rps-{suffix}.{ext}")
+    
+    print(f"\n[POST-PROCESS] Fetching RPS binaries for {suffix}...")
+    try:
+        if not os.path.exists(archive_path):
+            print(f"               Downloading {url}")
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req) as response, open(archive_path, 'wb') as out_file:
+                shutil.copyfileobj(response, out_file)
+    except Exception as e:
+        print(f"               [WARNING] Could not download {url}: {e}")
+        return
+        
+    # Determine the destination
+    script_stem = os.path.splitext(os.path.basename(target["script"]))[0]
+    if sys.platform == "darwin" and not target["console"]:
+        dest_dir = os.path.join(dist_dir, f"{MACOS_APP_NAME}.app", "Contents", "MacOS")
+    elif sys.platform in ("win32", "linux"):
+        dest_dir = os.path.join(dist_dir, f"{script_stem}.dist")
+    else:
+        dest_dir = dist_dir
+        
+    print(f"               Extracting to {dest_dir}...")
+    os.makedirs(dest_dir, exist_ok=True)
+    
+    binaries = ["rps-server", "rps-pluginscanner"]
+    if sys.platform == "win32":
+        binaries = [b + ".exe" for b in binaries]
+        
+    if ext == "zip":
+        with zipfile.ZipFile(archive_path, 'r') as zip_ref:
+            for member in zip_ref.namelist():
+                name = os.path.basename(member)
+                if name in binaries:
+                    source = zip_ref.open(member)
+                    target_path = os.path.join(dest_dir, name)
+                    with open(target_path, "wb") as target_file:
+                        shutil.copyfileobj(source, target_file)
+                    if sys.platform != "win32":
+                        os.chmod(target_path, 0o755)
+    else:
+        with tarfile.open(archive_path, 'r:gz') as tar_ref:
+            for member in tar_ref.getmembers():
+                name = os.path.basename(member.name)
+                if name in binaries:
+                    source = tar_ref.extractfile(member)
+                    target_path = os.path.join(dest_dir, name)
+                    with open(target_path, "wb") as target_file:
+                        shutil.copyfileobj(source, target_file)
+                    os.chmod(target_path, 0o755)
 
 def run_nuitka(target_key, clean=False):
     _check_dependencies(target_key)
@@ -49,10 +116,8 @@ def run_nuitka(target_key, clean=False):
         "--lto=no",
     ]
 
-    # We use onefile on Linux and macOS (for CLI).
-    # On Windows, we use directory mode (standalone) for faster startup.
-    if sys.platform != "win32":
-        cmd.append("--onefile")
+    # Windows and Linux use directory mode (standalone) for faster startup.
+    # macOS GUI uses .app bundle (configured below). macOS CLI is not built.
 
     # Platform specific flags
     if not target["console"]:
@@ -69,8 +134,6 @@ def run_nuitka(target_key, clean=False):
             icon_path = target.get("icon")
             if icon_path and os.path.isfile(icon_path):
                 cmd.append(f"--macos-app-icon={icon_path}")
-        else:
-            pass  # Linux GUI: keep --onefile
     # Plugins
     for plugin in target.get("nuitka_plugins", []):
         cmd.append(f"--enable-plugin={plugin}")
@@ -100,14 +163,6 @@ def run_nuitka(target_key, clean=False):
     print(f"        Command: {' '.join(cmd)}")
     subprocess.check_call(cmd)
 
-    # Nuitka on Linux adds .bin suffix to avoid name collisions with source files.
-    # We rename it back to the target name to match PyInstaller behavior.
-    if sys.platform == "linux":
-        bin_path = output_exe + ".bin"
-        if os.path.exists(bin_path) and not os.path.exists(output_exe):
-            print(f"        Renaming {bin_path} -> {output_exe}")
-            os.rename(bin_path, output_exe)
-
     # On macOS GUI, output is a .app bundle (directory), not a single file.
     # Nuitka names the bundle from the script name, not --output-filename.
     # Rename it to MACOS_APP_NAME for a clean user-facing name.
@@ -123,7 +178,11 @@ def run_nuitka(target_key, clean=False):
         print(f"[SUCCESS] Built {output_exe}")
         print(f"          Size: {os.path.getsize(output_exe) / (1024*1024):.2f} MB")
     else:
-        print(f"[SUCCESS] Build completed")
+        print("[SUCCESS] Build completed")
+
+    # Post processing step: Fetch and bundle RPS C++ plugins (GUI only)
+    if not target["console"]:
+        fetch_and_bundle_rps(dist_dir, target)
 
 def main():
     parser = argparse.ArgumentParser(description="Build SessionPrep with Nuitka")
@@ -136,7 +195,10 @@ def main():
 
     targets_to_build = []
     if args.target == "all":
-        targets_to_build = ["cli", "gui"]
+        if sys.platform == "darwin":
+            targets_to_build = ["gui"]  # macOS only ships the .app bundle
+        else:
+            targets_to_build = ["cli", "gui"]
     else:
         targets_to_build = [args.target]
 
