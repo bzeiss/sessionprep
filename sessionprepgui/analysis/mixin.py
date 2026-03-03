@@ -377,6 +377,7 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
             "review layout, then click Apply"
         )
         self._right_stack.setCurrentIndex(_PAGE_TABS)
+        self._save_session_action.setEnabled(True)
         self.setWindowTitle("SessionPrep")
 
     @Slot()
