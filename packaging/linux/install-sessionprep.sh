@@ -16,8 +16,7 @@ set -euo pipefail
 # Constants — filenames and the placeholder in the bundled .desktop template
 # ---------------------------------------------------------------------------
 
-readonly CLI_DIR="sessionprep.dist"
-readonly GUI_DIR="sessionprep-gui.dist"
+readonly DIST_DIR="sessionprep.dist"
 readonly CLI_BIN="sessionprep-linux-x64"
 readonly GUI_BIN="sessionprep-gui-linux-x64"
 readonly CLI_CMD="sessionprep"
@@ -43,7 +42,7 @@ die() {
 # Check that all source files are present next to this script.
 validate_sources() {
     local missing=0
-    for f in "$CLI_DIR" "$GUI_DIR" "$ICON_FILE" "$DESKTOP_FILE"; do
+    for f in "$DIST_DIR" "$ICON_FILE" "$DESKTOP_FILE"; do
         if [ ! -e "$SCRIPT_DIR/$f" ]; then
             echo "  Missing source file: $SCRIPT_DIR/$f" >&2
             missing=1
@@ -108,8 +107,7 @@ do_install() {
 
     # Copy distribution folders contents into a flat directory
     rm -rf "$LIB_DIR"/*
-    cp -R "$SCRIPT_DIR/$CLI_DIR"/* "$LIB_DIR/"
-    cp -R "$SCRIPT_DIR/$GUI_DIR"/* "$LIB_DIR/"
+    cp -R "$SCRIPT_DIR/$DIST_DIR"/* "$LIB_DIR/"
 
     # Symlink executables into PATH
     ln -sf "$LIB_DIR/$CLI_BIN" "$BIN_DIR/$CLI_CMD"

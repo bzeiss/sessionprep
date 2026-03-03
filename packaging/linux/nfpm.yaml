@@ -17,10 +17,6 @@ contents:
     dst: /opt/sessionprep/
     type: tree
 
-  - src: "${DIST_DIR}/sessionprep-gui.dist/"
-    dst: /opt/sessionprep/
-    type: tree
-
   - src: sessionprepgui/res/sessionprep.png
     dst: /usr/local/share/pixmaps/sessionprep.png
     file_info:
