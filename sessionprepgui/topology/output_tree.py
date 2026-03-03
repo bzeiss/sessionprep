@@ -433,6 +433,23 @@ class OutputTree(QTreeWidget):
                                              source_channel):
                         self._set_row_bg(src_item, hl)
 
+    def find_item_for_source(self, input_filename: str) -> QTreeWidgetItem | None:
+        """Return the first output item (file, channel, or source) referencing `input_filename`."""
+        for i in range(self.topLevelItemCount()):
+            fi = self.topLevelItem(i)
+            # Check the output file itself
+            if self._item_references(fi, input_filename, None):
+                return fi
+            for j in range(fi.childCount()):
+                ch_item = fi.child(j)
+                if self._item_references(ch_item, input_filename, None):
+                    return ch_item
+                for k in range(ch_item.childCount()):
+                    src_item = ch_item.child(k)
+                    if self._item_references(src_item, input_filename, None):
+                        return src_item
+        return None
+
     def clear_highlights(self) -> None:
         """Remove all usage-highlight backgrounds."""
         for i in range(self.topLevelItemCount()):
@@ -1086,7 +1103,22 @@ class OutputTree(QTreeWidget):
     def _action_remove_output(self, output_filename: str):
         if not self._topo:
             return
-        remove_output(self._topo, output_filename)
+            
+        items = self.selectedItems()
+        selected_files = set()
+        for item in items:
+            data = item.data(COL_NAME, Qt.UserRole)
+            if data and data[0] == "file":
+                selected_files.add(data[1])
+                
+        if output_filename in selected_files:
+            # The clicked item is part of the selection; remove all selected files
+            for fn in selected_files:
+                remove_output(self._topo, fn)
+        else:
+            # The clicked item is NOT part of the selection; remove only it
+            remove_output(self._topo, output_filename)
+            
         self.topology_modified.emit()
 
     def _action_clear_channel(self, output_filename: str, target_ch: int):

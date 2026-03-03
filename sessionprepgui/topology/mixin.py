@@ -6,6 +6,7 @@ import os
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QDialog,
     QDialogButtonBox,
@@ -18,6 +19,8 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QToolBar,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -191,6 +194,10 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
             lambda sel, desel: self._on_topo_selection_changed("input"))
         self._topo_output_tree.selectionModel().selectionChanged.connect(
             lambda sel, desel: self._on_topo_selection_changed("output"))
+
+        # Synchronized scrolling
+        self._syncing_scroll = False
+        self._topo_input_tree.verticalScrollBar().valueChanged.connect(self._on_input_scroll)
 
         # Waveform preview panel (starts collapsed)
         self._topo_wf_panel = WaveformPanel(analysis_mode=False)
@@ -457,7 +464,7 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
 
         menu = QMenu(self)
 
-        act_open_folder = menu.addAction("Open folder")
+        act_open_folder = menu.addAction("Open Folder")
         act_open_folder.triggered.connect(
             lambda checked, fn=filename: self._open_folder_for_file(fn)
         )
@@ -569,6 +576,42 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
             return
         ops.exclude_input(topo, filename)
         self._topo_changed()
+
+    # ── Synchronized scrolling ────────────────────────────────────────
+
+    def _get_item_at_center(self, tree: QTreeWidget) -> QTreeWidgetItem | None:
+        """Find the item currently in the vertical center of the viewport."""
+        viewport = tree.viewport()
+        center_y = viewport.height() // 2
+        # Use itemAt to find what's rendered at that physical pixel
+        item = tree.itemAt(viewport.width() // 2, center_y)
+        return item
+
+    @Slot()
+    def _on_input_scroll(self):
+        """When input scrolled, attempt to center the corresponding output."""
+        if self._syncing_scroll or not self._topo_topology:
+            return
+            
+        item = self._get_item_at_center(self._topo_input_tree)
+        if not item:
+            return
+            
+        data = item.data(0, Qt.UserRole)
+        input_filename = None
+        if data and data[0] == "file":
+            input_filename = data[1]
+        elif data and data[0] == "channel":
+            input_filename = data[1]
+
+        if not input_filename:
+            return
+
+        target_item = self._topo_output_tree.find_item_for_source(input_filename)
+        if target_item:
+            self._syncing_scroll = True
+            self._topo_output_tree.scrollToItem(target_item, QAbstractItemView.PositionAtCenter)
+            self._syncing_scroll = False
 
     # ── Cross-tree exclusive selection ────────────────────────────────
 

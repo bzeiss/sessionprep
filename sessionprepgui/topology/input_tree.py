@@ -239,6 +239,19 @@ class InputTree(QTreeWidget):
         self.verticalScrollBar().setValue(state.get("scroll", 0))
 
     # ------------------------------------------------------------------
+    # Search
+    # ------------------------------------------------------------------
+
+    def find_item(self, filename: str) -> QTreeWidgetItem | None:
+        """Find the top-level file item matching `filename`."""
+        for i in range(self.topLevelItemCount()):
+            item = self.topLevelItem(i)
+            data = item.data(COL_NAME, Qt.UserRole)
+            if data and data[0] == "file" and data[1] == filename:
+                return item
+        return None
+
+    # ------------------------------------------------------------------
     # Drag support
     # ------------------------------------------------------------------
 
