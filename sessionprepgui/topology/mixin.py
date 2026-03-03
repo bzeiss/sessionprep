@@ -703,15 +703,15 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
         if not file_items and not channel_items:
             return
 
+        if channel_items and not file_items:
+            self._topo_load_multi_input(None, channel_items)
+            return
+
         if len(file_items) == 1 and not channel_items:
             data = file_items[0].data(0, Qt.UserRole)
             self._topo_load_input_waveform(data[1])
-        elif len(file_items) > 1:
-            self._topo_load_multi_input(file_items)
-        elif channel_items:
-            # Single channel selected — load full file then show one channel
-            data = channel_items[0].data(0, Qt.UserRole)
-            self._topo_load_input_waveform(data[1])
+        else:
+            self._topo_load_multi_input(file_items, channel_items)
 
     def _topo_load_input_waveform(self, filename: str):
         """Load waveform for a single input file."""
@@ -756,14 +756,14 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
 
     # ── Multi-track input loading ─────────────────────────────────────
 
-    def _topo_load_multi_input(self, file_items):
-        """Load and stack waveforms for multiple input files."""
+    def _topo_load_multi_input(self, file_items, channel_items=None):
+        """Load and stack waveforms for multiple input files or channels."""
         self._topo_cancel_workers()
         self._on_topo_stop()
 
         track_map = self._topo_track_map()
         items = []
-        for fi in file_items:
+        for fi in (file_items or []):
             data = fi.data(0, Qt.UserRole)
             if not data or data[0] != "file":
                 continue
@@ -771,7 +771,22 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
             track = track_map.get(filename)
             if track:
                 stem = os.path.splitext(filename)[0]
-                items.append((track.filepath, stem, track.channels))
+                items.append((track.filepath, stem, None))
+
+        ch_map = {}
+        for ci in (channel_items or []):
+            data = ci.data(0, Qt.UserRole)
+            if not data or data[0] != "channel":
+                continue
+            filename = data[1]
+            source_ch = data[2]
+            ch_map.setdefault(filename, []).append(source_ch)
+
+        for filename, channels in ch_map.items():
+            track = track_map.get(filename)
+            if track:
+                stem = os.path.splitext(filename)[0]
+                items.append((track.filepath, stem, sorted(channels)))
         if not items:
             return
 
@@ -795,14 +810,15 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
         if not file_items and not channel_items:
             return
 
+        if channel_items and not file_items:
+            self._topo_load_multi_output(None, channel_items)
+            return
+
         if len(file_items) == 1 and not channel_items:
             data = file_items[0].data(0, Qt.UserRole)
             self._topo_load_output_waveform(data[1])
-        elif len(file_items) > 1:
-            self._topo_load_multi_output(file_items)
-        elif channel_items:
-            data = channel_items[0].data(0, Qt.UserRole)
-            self._topo_load_output_waveform(data[1])
+        else:
+            self._topo_load_multi_output(file_items, channel_items)
 
     def _topo_load_output_waveform(self, output_filename: str):
         """Resolve and display waveform for an output entry."""
@@ -845,7 +861,7 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
 
     # ── Multi-track output loading ────────────────────────────────────
 
-    def _topo_load_multi_output(self, file_items):
+    def _topo_load_multi_output(self, file_items, channel_items=None):
         """Load and stack waveforms for multiple output entries."""
         self._topo_cancel_workers()
         self._on_topo_stop()
@@ -855,7 +871,7 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
             return
 
         items = []
-        for fi in file_items:
+        for fi in (file_items or []):
             data = fi.data(0, Qt.UserRole)
             if not data or data[0] != "file":
                 continue
@@ -864,7 +880,23 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
                           if e.output_filename == filename), None)
             if entry:
                 stem = os.path.splitext(filename)[0]
-                items.append((entry, stem))
+                items.append((entry, stem, None))
+
+        ch_map = {}
+        for ci in (channel_items or []):
+            data = ci.data(0, Qt.UserRole)
+            if not data or data[0] != "channel":
+                continue
+            out_fn = data[1]
+            target_ch = data[2]
+            ch_map.setdefault(out_fn, []).append(target_ch)
+
+        for out_fn, channels in ch_map.items():
+            entry = next((e for e in topo.entries
+                          if e.output_filename == out_fn), None)
+            if entry:
+                stem = os.path.splitext(out_fn)[0]
+                items.append((entry, stem, sorted(channels)))
         if not items:
             return
 

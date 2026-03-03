@@ -452,26 +452,50 @@ class TopoMultiAudioWorker(QThread):
             import soundfile as sf
 
             track_arrays = []   # list of 2-D arrays (samples, ch)
-            track_names = []    # display names for labels
             track_ch_counts = []
+            track_labels_list = []
             sr = 44100
 
+            from sessionprepgui.waveform.panel import WaveformPanel
+
             if self._side == "input":
-                for filepath, name, _n_ch in self._items:
+                for item in self._items:
                     if self._cancelled:
                         return
+                    filepath = item[0]
+                    name = item[1]
+                    channels_to_keep = item[2] if len(item) > 2 else None
+
                     data, file_sr = sf.read(filepath, dtype='float64')
                     sr = file_sr
                     if data.ndim == 1:
                         data = data.reshape(-1, 1)
+
+                    if channels_to_keep is not None:
+                        data = data[:, channels_to_keep]
+                        ch_labels = [f"{name} Ch{c}" for c in channels_to_keep]
+                    else:
+                        n_ch = data.shape[1]
+                        ch_labels = []
+                        names = WaveformPanel._CHANNEL_LABELS.get(n_ch)
+                        for c in range(n_ch):
+                            if names and c < len(names):
+                                ch_labels.append(f"{name} {names[c]}")
+                            else:
+                                ch_labels.append(f"{name} Ch{c}")
+
                     track_arrays.append(data)
-                    track_names.append(name)
                     track_ch_counts.append(data.shape[1])
+                    track_labels_list.append(ch_labels)
             else:  # output
                 from sessionpreplib.topology import resolve_entry_audio
-                for entry, name in self._items:
+                for item in self._items:
                     if self._cancelled:
                         return
+                    entry = item[0]
+                    name = item[1]
+                    channels_to_keep = item[2] if len(item) > 2 else None
+
                     # Load source audio for this entry
                     track_audio: dict[str, tuple] = {}
                     for src in entry.sources:
@@ -481,12 +505,27 @@ class TopoMultiAudioWorker(QThread):
                         data, file_sr = sf.read(path, dtype='float64')
                         track_audio[src.input_filename] = (data, file_sr)
                         sr = file_sr
+                    
                     resolved = resolve_entry_audio(entry, track_audio)
                     if resolved.ndim == 1:
                         resolved = resolved.reshape(-1, 1)
+
+                    if channels_to_keep is not None:
+                        resolved = resolved[:, channels_to_keep]
+                        ch_labels = [f"{name} Ch{c}" for c in channels_to_keep]
+                    else:
+                        n_ch = resolved.shape[1]
+                        ch_labels = []
+                        names = WaveformPanel._CHANNEL_LABELS.get(n_ch)
+                        for c in range(n_ch):
+                            if names and c < len(names):
+                                ch_labels.append(f"{name} {names[c]}")
+                            else:
+                                ch_labels.append(f"{name} Ch{c}")
+
                     track_arrays.append(resolved)
-                    track_names.append(name)
                     track_ch_counts.append(resolved.shape[1])
+                    track_labels_list.append(ch_labels)
 
             if self._cancelled or not track_arrays:
                 return
@@ -517,18 +556,9 @@ class TopoMultiAudioWorker(QThread):
                 display_audio = display_audio[:, 0]
 
             # --- Channel labels ---
-            from sessionprepgui.waveform.panel import WaveformPanel
             labels = []
-            ch_idx = 0
-            for i, name in enumerate(track_names):
-                n_ch = track_ch_counts[i]
-                for c in range(n_ch):
-                    ch_labels = WaveformPanel._CHANNEL_LABELS.get(n_ch)
-                    if ch_labels and c < len(ch_labels):
-                        labels.append(f"{name} {ch_labels[c]}")
-                    else:
-                        labels.append(f"{name} Ch{c}")
-                    ch_idx += 1
+            for lst in track_labels_list:
+                labels.extend(lst)
 
             self.finished.emit(display_audio, playback, sr, labels)
         except Exception as exc:
