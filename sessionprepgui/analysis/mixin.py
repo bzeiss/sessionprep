@@ -197,12 +197,12 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
                 if not hasattr(self, "_zombie_workers"):
                     self._zombie_workers = set()
                 self._zombie_workers.add(worker)
-                
+
                 # Cleanup reference once finished
                 def _cleanup(*args, w=worker):
                     if hasattr(self, "_zombie_workers"):
                         self._zombie_workers.discard(w)
-                
+
                 if hasattr(worker, "finished"):
                     worker.finished.connect(_cleanup)
                 if hasattr(worker, "error"):
@@ -338,14 +338,14 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
         self._analyze_action.setEnabled(False)
         if getattr(self, "_topo_apply_action", None):
             self._topo_apply_action.setEnabled(False)
-            
+
         self._progress_label.setText("Analyzing Format & Layout\u2026")
         self._right_stack.setCurrentIndex(_PAGE_PROGRESS)
         self._progress_bar.setRange(0, 0)
-        
+
         config = self._flat_config()
         config["_source_dir"] = self._source_dir
-        
+
         self._p1_worker = Phase1AnalyzeWorker(self._session, config)
         self._p1_worker.progress.connect(self._on_worker_progress)
         self._p1_worker.progress_value.connect(self._on_worker_progress_value)
@@ -359,10 +359,10 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
         if self._p1_worker is not None:
             self._p1_worker.deleteLater()
             self._p1_worker = None
-        
+
         # Rebuild topology intelligently using Phase 1 results
         self._topo_topology = build_default_topology(session.tracks)
-        
+
         # Populate Phase 1 topology tables using Phase 1 output issues
         self._populate_topology_tab()
 
@@ -371,7 +371,7 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
             self._topo_reanalyze_action.setEnabled(True)
         if getattr(self, "_topo_reset_action", None) is not None:
             self._topo_reset_action.setEnabled(True)
-            
+
         self._status_bar.showMessage(
             f"Discovered {len(session.tracks)} file(s) from {self._source_dir} \u2014 "
             "review layout, then click Apply"

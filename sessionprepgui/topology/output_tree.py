@@ -84,9 +84,11 @@ class OutputTree(QTreeWidget):
         self.setHeaderLabels(["File", "Ch", "SR", "Bit", "Duration"])
         self.header().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         h = self.header()
-        h.setSectionResizeMode(COL_NAME, QHeaderView.Stretch)
+        h.setSectionsMovable(True)
+        h.setSectionResizeMode(COL_NAME, QHeaderView.Interactive)
+        self.setColumnWidth(COL_NAME, 380)
         for col in (COL_CH, COL_SR, COL_BIT, COL_DUR):
-            h.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+            h.setSectionResizeMode(col, QHeaderView.Interactive)
 
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.itemDoubleClicked.connect(self._on_double_click)

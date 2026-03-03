@@ -90,14 +90,14 @@ class OneSidedSilenceDetector(TrackDetector):
             side = "R"
 
         ch_idx = 0 if side == "L" else 1 if side == "R" else None
-        
+
         data = {
             "one_sided_silence": bool(one_sided),
             "one_sided_silence_side": side,
             "l_rms_db": l_rms_db,
             "r_rms_db": r_rms_db,
         }
-        
+
         if one_sided:
             data["topology_action"] = "extract_channel"
             data["topology_channel"] = 1 if side == "L" else 0  # If L is silent, extract R (1). If R is silent, extract L (0).

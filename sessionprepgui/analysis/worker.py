@@ -110,7 +110,7 @@ class Phase1AnalyzeWorker(QThread):
     def run(self):
         try:
             event_bus = EventBus()
-            
+
             # Use the already loaded session
             session = self.session_context
 
@@ -129,22 +129,22 @@ class Phase1AnalyzeWorker(QThread):
             # Calculate total progress steps for Phase 1
             ok_tracks = [t for t in session.tracks if t.status == "OK"]
             num_ok = len(ok_tracks)
-            
+
             p1_track_dets = [d for d in pipeline.track_detectors if getattr(d, 'phase', LifecyclePhase.PHASE2) == LifecyclePhase.PHASE1]
             p1_sess_dets = [d for d in pipeline.session_detectors if getattr(d, 'phase', LifecyclePhase.PHASE2) == LifecyclePhase.PHASE1]
-            
+
             num_track_det = len(p1_track_dets)
             num_session_det = len(p1_sess_dets)
-            
+
             # Load audio data first, since lightweight discovery doesn't load it
             if num_ok > 0 and ok_tracks[0].audio_data is None:
                 from sessionpreplib.audio import load_track
                 from concurrent.futures import ThreadPoolExecutor, as_completed
                 import os
-                
+
                 self.progress.emit("Loading audio data\u2026")
                 self.progress_value.emit(0, num_ok)
-                
+
                 with ThreadPoolExecutor(max_workers=min(os.cpu_count() or 4, 8)) as pool:
                     futures = {
                         pool.submit(load_track, t.filepath): t
@@ -167,7 +167,7 @@ class Phase1AnalyzeWorker(QThread):
                             t.error = str(e)
                         loaded += 1
                         self.progress_value.emit(loaded, num_ok)
-            
+
             # Re-filter OK tracks after loading (some might have failed)
             ok_tracks = [t for t in session.tracks if t.status == "OK"]
             num_ok = len(ok_tracks)

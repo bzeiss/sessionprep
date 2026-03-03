@@ -52,9 +52,11 @@ class InputTree(QTreeWidget):
         self.setHeaderLabels(["File", "Ch", "SR", "Bit", "Duration"])
         self.header().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         h = self.header()
-        h.setSectionResizeMode(COL_NAME, QHeaderView.Stretch)
+        h.setSectionsMovable(True)
+        h.setSectionResizeMode(COL_NAME, QHeaderView.Interactive)
+        self.setColumnWidth(COL_NAME, 380)
         for col in (COL_CH, COL_SR, COL_BIT, COL_DUR):
-            h.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+            h.setSectionResizeMode(col, QHeaderView.Interactive)
 
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -138,13 +140,13 @@ class InputTree(QTreeWidget):
                 if res.severity and res.severity.name != "CLEAN":
                     p1_warnings.append(res.summary)
 
-            file_color = _DIM if all_used else FILE_COLOR_OK
-            if not all_used and p1_warnings:
-                # Use a warning color if there are Phase 1 suggestions
+            if p1_warnings:
                 file_color = FILE_COLOR_WARNING
+            else:
+                file_color = _DIM if all_used else FILE_COLOR_OK
 
             file_item = QTreeWidgetItem()
-            
+
             display_name = track.filename
             if p1_warnings:
                 display_name += f"  [{', '.join(p1_warnings)}]"
@@ -276,18 +278,18 @@ class InputTree(QTreeWidget):
             return None
 
         mime = QMimeData()
-        
+
         if payload:
             mime.setData(MIME_CHANNEL,
                          QByteArray(json.dumps(payload).encode("utf-8")))
-                         
+
         if filenames and self._source_dir:
             import os
             from PySide6.QtCore import QUrl
             urls = [QUrl.fromLocalFile(os.path.join(self._source_dir, f))
                     for f in filenames]
             mime.setUrls(urls)
-            
+
         return mime
 
     def startDrag(self, supportedActions):
