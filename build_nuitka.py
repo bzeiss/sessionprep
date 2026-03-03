@@ -128,7 +128,6 @@ def run_nuitka(target_key, clean=False):
                 cmd.append(f"--windows-icon-from-ico={icon_path}")
         elif sys.platform == "darwin":
             # GUI on macOS: produce a proper .app bundle instead of a bare onefile binary
-            cmd.remove("--onefile")
             cmd.append("--macos-create-app-bundle")
             cmd.append(f"--macos-app-name={MACOS_APP_NAME}")
             icon_path = target.get("icon")

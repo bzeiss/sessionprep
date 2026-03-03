@@ -15,9 +15,11 @@ license: GPL-3.0-or-later
 contents:
   - src: "${DIST_DIR}/sessionprep.dist/"
     dst: /opt/sessionprep/
+    type: tree
 
   - src: "${DIST_DIR}/sessionprep-gui.dist/"
     dst: /opt/sessionprep/
+    type: tree
 
   - src: sessionprepgui/res/sessionprep.png
     dst: /usr/local/share/pixmaps/sessionprep.png
