@@ -58,7 +58,10 @@ class PreferencesDialog(QDialog):
         self._general_page = GeneralPage()
         self._colors_page = ColorsPage()
         self._groups_page = GroupsPage(
-            color_provider=self._colors_page.color_provider)
+            color_provider=self._colors_page.color_provider,
+            all_colors_provider=self._colors_page.all_colors_provider)
+        self._colors_page.colorsChanged.connect(
+            self._groups_page.refresh_colors)
 
         self._init_ui()
 

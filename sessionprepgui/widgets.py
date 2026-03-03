@@ -337,3 +337,240 @@ class BatchToolButton(QToolButton):
         # wrapper recreation when slots live on mixin classes.
         self.setProperty("_batch_mode", self.batch_mode)
         super().mousePressEvent(event)
+
+
+# ---------------------------------------------------------------------------
+# Grid-based color picker
+# ---------------------------------------------------------------------------
+
+from PySide6.QtCore import Signal, QPoint
+from PySide6.QtWidgets import QGridLayout, QPushButton, QFrame, QScrollArea
+
+import time as _time
+
+from .prefs.param_form import _argb_to_qcolor
+
+
+def _contrast_text(qc: QColor) -> str:
+    """Return '#000000' or '#ffffff' depending on luminance of *qc*."""
+    lum = 0.299 * qc.red() + 0.587 * qc.green() + 0.114 * qc.blue()
+    return "#000000" if lum > 128 else "#ffffff"
+
+
+class _ColorCell(QPushButton):
+    """One cell in the color grid — shows color name on a colored background."""
+
+    def __init__(self, name: str, argb: str, selected: bool = False,
+                 parent=None):
+        super().__init__(name, parent)
+        qc = _argb_to_qcolor(argb)
+        text_col = _contrast_text(qc)
+        rgb = f"rgb({qc.red()}, {qc.green()}, {qc.blue()})"
+        self.setFixedSize(75, 36)
+        self.setCursor(Qt.PointingHandCursor)
+        border = "2px solid #ffffff" if selected else "1px solid #222"
+        self.setStyleSheet(
+            f"QPushButton {{"
+            f"  background-color: {rgb}; color: {text_col};"
+            f"  border: {border}; border-radius: 2px;"
+            f"  font-family: 'Segoe UI', 'Helvetica Neue', sans-serif;"
+            f"  font-size: 8pt; padding: 1px 2px;"
+            f"  text-align: center;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  border: 2px solid #ffffff;"
+            f"}}"
+        )
+        self.color_name = name
+
+
+class ColorGridPopup(QFrame):
+    """Popup frame showing colors in a fixed-column grid."""
+
+    colorSelected = Signal(str)
+    closed = Signal()
+
+    COLUMNS = 23
+
+    def __init__(self, colors: list[dict[str, str]],
+                 selected_name: str = "",
+                 selected_argb: str = "",
+                 parent=None):
+        super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint)
+        self.setFrameShape(QFrame.Box)
+        self.setStyleSheet(
+            "ColorGridPopup {"
+            "  background-color: #181818;"
+            "  border: 2px solid #888;"
+            "  border-radius: 3px;"
+            "}"
+        )
+
+        grid = QGridLayout(self)
+        grid.setContentsMargins(6, 6, 6, 6)
+        grid.setSpacing(2)
+
+        # Check if selected_name matches any entry
+        has_name_match = any(
+            e.get("name") == selected_name for e in colors
+        ) if selected_name else False
+
+        for i, entry in enumerate(colors):
+            name = entry.get("name", "")
+            argb = entry.get("argb", "#ff888888")
+            row, col = divmod(i, self.COLUMNS)
+            # Highlight by name if possible, otherwise by ARGB
+            if has_name_match:
+                is_selected = bool(name and name == selected_name)
+            else:
+                is_selected = bool(selected_argb and argb == selected_argb)
+            cell = _ColorCell(name, argb, selected=is_selected, parent=self)
+            cell.clicked.connect(
+                lambda _checked=False, n=name: self._on_pick(n))
+            grid.addWidget(cell, row, col)
+
+    def closeEvent(self, event):
+        self.closed.emit()
+        super().closeEvent(event)
+
+    def _on_pick(self, name: str):
+        self.colorSelected.emit(name)
+        self.close()
+
+
+class ColorPickerButton(QPushButton):
+    """Button that shows the current color and opens a grid popup on click.
+
+    Drop-in replacement for the QComboBox color pickers in groups tables.
+    """
+
+    colorChanged = Signal(str)
+
+    def __init__(self, colors: list[dict[str, str]], parent=None):
+        super().__init__(parent)
+        self._colors = colors
+        self._current = ""
+        self._argb_map: dict[str, str] = {
+            c["name"]: c.get("argb", "#ff888888") for c in colors
+        }
+        self.setCursor(Qt.PointingHandCursor)
+        self.clicked.connect(self._show_popup)
+        self._last_popup_close = 0.0
+        self._update_appearance()
+
+    def currentColor(self) -> str:
+        """Return the currently selected color name."""
+        return self._current
+
+    def setCurrentColor(self, name: str):
+        """Set the current color by name (no signal emitted)."""
+        self._current = name
+        self._update_appearance()
+
+    def _update_appearance(self):
+        """Update button text and background to reflect the current color."""
+        argb = self._argb_map.get(self._current)
+        if argb:
+            qc = _argb_to_qcolor(argb)
+            text_col = _contrast_text(qc)
+            rgb = f"rgb({qc.red()}, {qc.green()}, {qc.blue()})"
+            self.setText(self._current)
+            self.setStyleSheet(
+                f"QPushButton {{"
+                f"  background-color: {rgb}; color: {text_col};"
+                f"  border: 1px solid #555; border-radius: 2px;"
+                f"  font-size: 8pt; padding: 2px 6px;"
+                f"  text-align: left;"
+                f"}}"
+                f"QPushButton:hover {{ border: 1px solid #aaa; }}"
+            )
+        else:
+            self.setText(self._current or "(no color)")
+            self.setStyleSheet(
+                "QPushButton { background-color: #3a3a3a; color: #dddddd;"
+                " border: 1px solid #555; border-radius: 2px;"
+                " font-size: 8pt; padding: 2px 6px; text-align: left; }"
+                "QPushButton:hover { border: 1px solid #aaa; }"
+            )
+
+    def _show_popup(self):
+        # Toggle: suppress reopening if popup just closed (Qt.Popup
+        # auto-closes on outside click before our handler runs)
+        if _time.monotonic() - self._last_popup_close < 0.3:
+            return
+        current_argb = self._argb_map.get(self._current, "")
+        popup = ColorGridPopup(self._colors, self._current,
+                               selected_argb=current_argb, parent=self)
+        popup.colorSelected.connect(self._on_selected)
+        popup.closed.connect(self._on_popup_closed)
+        popup.adjustSize()
+        # Center the popup horizontally on the button
+        btn_center = self.mapToGlobal(
+            QPoint(self.width() // 2, self.height()))
+        popup_x = btn_center.x() - popup.sizeHint().width() // 2
+        popup_y = btn_center.y()
+        # Clamp to screen bounds
+        screen = self.screen()
+        if screen:
+            geo = screen.availableGeometry()
+            popup_w = popup.sizeHint().width()
+            popup_h = popup.sizeHint().height()
+            popup_x = max(geo.x(), min(popup_x, geo.right() - popup_w))
+            popup_y = max(geo.y(), min(popup_y, geo.bottom() - popup_h))
+        popup.move(popup_x, popup_y)
+        popup.show()
+
+    def _on_popup_closed(self):
+        self._last_popup_close = _time.monotonic()
+
+    def _on_selected(self, name: str):
+        if name != self._current:
+            self._current = name
+            self._update_appearance()
+            self.colorChanged.emit(name)
+
+
+class ColorGridPanel(QWidget):
+    """Embeddable read-only color grid preview.
+
+    Shows colors in a 23-column matrix. Useful as a palette overview
+    in preference pages. Call ``set_colors()`` to refresh.
+    Cells stretch horizontally to fill available width.
+    """
+
+    colorClicked = Signal(int)
+
+    COLUMNS = 23
+
+    def __init__(self, colors: list[dict[str, str]] | None = None,
+                 cell_height: int = 22, parent=None):
+        super().__init__(parent)
+        self._cell_height = cell_height
+        self._layout = QGridLayout(self)
+        self._layout.setContentsMargins(4, 4, 4, 4)
+        self._layout.setSpacing(1)
+        if colors:
+            self._populate(colors)
+
+    def set_colors(self, colors: list[dict[str, str]]):
+        """Refresh the grid with a new color list."""
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._populate(colors)
+
+    def _populate(self, colors: list[dict[str, str]]):
+        from PySide6.QtWidgets import QSizePolicy
+        for i, entry in enumerate(colors):
+            name = entry.get("name", "")
+            argb = entry.get("argb", "#ff888888")
+            row, col = divmod(i, self.COLUMNS)
+            cell = _ColorCell(name, argb, parent=self)
+            cell.setFixedHeight(self._cell_height)
+            cell.setMinimumWidth(20)
+            cell.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            cell.setCursor(Qt.PointingHandCursor)
+            cell.clicked.connect(
+                lambda _checked=False, idx=i: self.colorClicked.emit(idx))
+            self._layout.addWidget(cell, row, col)

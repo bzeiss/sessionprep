@@ -32,9 +32,11 @@ class GroupsPage(QWidget):
         live color table.
     """
 
-    def __init__(self, color_provider: Callable, parent=None):
+    def __init__(self, color_provider: Callable,
+                 all_colors_provider: Callable | None = None, parent=None):
         super().__init__(parent)
         self._color_provider = color_provider
+        self._all_colors_provider = all_colors_provider
         self._presets_data: dict[str, list[dict]] = {}
         self._init_ui()
 
@@ -101,8 +103,15 @@ class GroupsPage(QWidget):
         layout.addLayout(reset_row)
 
         self._groups_widget = GroupsTableWidget(
-            color_provider=self._color_provider)
+            color_provider=self._color_provider,
+            all_colors_provider=self._all_colors_provider)
         layout.addWidget(self._groups_widget, 1)
+
+    # ── Color refresh ─────────────────────────────────────────────────
+
+    def refresh_colors(self):
+        """Rebuild color pickers with the latest palette data."""
+        self._groups_widget.refresh_colors()
 
     # ── Preset helpers ────────────────────────────────────────────────
 

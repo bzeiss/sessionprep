@@ -27,6 +27,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..widgets import ColorPickerButton
+
 from .param_form import (
     _build_param_page,
     _color_swatch_icon,
@@ -58,9 +60,12 @@ class GroupsTableWidget(QWidget):
 
     groups_changed = Signal()
 
-    def __init__(self, color_provider: ColorProvider, parent=None):
+    def __init__(self, color_provider: ColorProvider,
+                 all_colors_provider: Callable[[], list[dict[str, str]]] | None = None,
+                 parent=None):
         super().__init__(parent)
         self._color_provider = color_provider
+        self._all_colors_provider = all_colors_provider
         self._init_ui()
 
     # ── UI setup ──────────────────────────────────────────────────────
@@ -142,17 +147,15 @@ class GroupsTableWidget(QWidget):
         name_item = QTableWidgetItem(name)
         self._table.setItem(row, 0, name_item)
 
-        color_names, argb_lookup = self._color_provider()
-        color_combo = QComboBox()
-        color_combo.setIconSize(QSize(16, 16))
-        for cn in color_names:
-            argb = argb_lookup(cn)
-            icon = _color_swatch_icon(argb) if argb else QIcon()
-            color_combo.addItem(icon, cn)
-        ci = color_combo.findText(color)
-        if ci >= 0:
-            color_combo.setCurrentIndex(ci)
-        self._table.setCellWidget(row, 1, color_combo)
+        if self._all_colors_provider:
+            colors = self._all_colors_provider()
+        else:
+            color_names, argb_lookup = self._color_provider()
+            colors = [{"name": cn, "argb": argb_lookup(cn) or "#ff888888"}
+                      for cn in color_names]
+        color_picker = ColorPickerButton(colors, self._table)
+        color_picker.setCurrentColor(color)
+        self._table.setCellWidget(row, 1, color_picker)
 
         chk = QCheckBox()
         chk.setChecked(gain_linked)
@@ -187,8 +190,8 @@ class GroupsTableWidget(QWidget):
             name = name_item.text().strip()
             if not name:
                 continue
-            color_combo = self._table.cellWidget(row, 1)
-            color = color_combo.currentText() if color_combo else ""
+            color_picker = self._table.cellWidget(row, 1)
+            color = color_picker.currentColor() if color_picker else ""
             chk_container = self._table.cellWidget(row, 2)
             gain_linked = False
             if chk_container:
@@ -221,7 +224,7 @@ class GroupsTableWidget(QWidget):
             if not name:
                 continue
             cc = self._table.cellWidget(logical, 1)
-            color = cc.currentText() if cc else ""
+            color = cc.currentColor() if cc else ""
             chk_c = self._table.cellWidget(logical, 2)
             gl = False
             if chk_c:
@@ -238,6 +241,34 @@ class GroupsTableWidget(QWidget):
                            "gain_linked": gl, "daw_target": dt,
                            "match_method": mm, "match_pattern": mp})
         return groups
+
+    # ── Live color refresh ────────────────────────────────────────────
+
+    def refresh_colors(self):
+        """Rebuild all ColorPickerButton widgets with fresh color data."""
+        if self._all_colors_provider:
+            colors = self._all_colors_provider()
+        else:
+            color_names, argb_lookup = self._color_provider()
+            colors = [{"name": cn, "argb": argb_lookup(cn) or "#ff888888"}
+                      for cn in color_names]
+        # Build lookup maps for resolving stale names
+        new_names = {c["name"] for c in colors if c["name"]}
+        argb_to_name = {c.get("argb", ""): c["name"]
+                        for c in colors if c["name"]}
+        for row in range(self._table.rowCount()):
+            old_picker = self._table.cellWidget(row, 1)
+            current = old_picker.currentColor() if old_picker else ""
+            # If the assigned name no longer exists, try ARGB fallback
+            if current and current not in new_names and old_picker:
+                old_argb = old_picker._argb_map.get(current)
+                if old_argb and old_argb in argb_to_name:
+                    current = argb_to_name[old_argb]
+                else:
+                    current = ""
+            new_picker = ColorPickerButton(colors, self._table)
+            new_picker.setCurrentColor(current)
+            self._table.setCellWidget(row, 1, new_picker)
 
     # ── Name dedup ────────────────────────────────────────────────────
 
