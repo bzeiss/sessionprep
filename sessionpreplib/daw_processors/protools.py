@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import math
+
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -21,67 +21,12 @@ except ImportError:
         pass
 
 
-def _parse_argb(argb: str) -> tuple[int, int, int]:
-    """Parse '#ffRRGGBB' ARGB hex string to (R, G, B) ints."""
-    h = argb.lstrip("#")
-    if len(h) == 8:
-        return int(h[2:4], 16), int(h[4:6], 16), int(h[6:8], 16)
-    if len(h) == 6:
-        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    return 128, 128, 128
-
-
-def _srgb_to_linear(c: float) -> float:
-    """Convert sRGB channel [0..1] to linear."""
-    if c <= 0.04045:
-        return c / 12.92
-    return ((c + 0.055) / 1.055) ** 2.4
-
-
-def _rgb_to_lab(r: int, g: int, b: int) -> tuple[float, float, float]:
-    """Convert sRGB (0-255) to CIE L*a*b* (D65 illuminant)."""
-    # sRGB → linear → XYZ (D65)
-    rl = _srgb_to_linear(r / 255.0)
-    gl = _srgb_to_linear(g / 255.0)
-    bl = _srgb_to_linear(b / 255.0)
-    x = (0.4124564 * rl + 0.3575761 * gl + 0.1804375 * bl) / 0.95047
-    y = 0.2126729 * rl + 0.7151522 * gl + 0.0721750 * bl
-    z = (0.0193339 * rl + 0.1191920 * gl + 0.9503041 * bl) / 1.08883
-
-    def f(t: float) -> float:
-        if t > 0.008856:
-            return t ** (1.0 / 3.0)
-        return 7.787 * t + 16.0 / 116.0
-
-    L = 116.0 * f(y) - 16.0
-    a = 500.0 * (f(x) - f(y))
-    b_ = 200.0 * (f(y) - f(z))
-    return L, a, b_
-
-
-def _closest_palette_index(
-    target_argb: str,
-    palette: list[str],
-) -> int | None:
-    """Find the palette index whose colour is perceptually closest.
-
-    Uses CIE L*a*b* Euclidean distance.  Returns ``None`` if palette
-    is empty.
-    """
-    if not palette:
-        return None
-    tr, tg, tb = _parse_argb(target_argb)
-    tL, ta, tb_ = _rgb_to_lab(tr, tg, tb)
-    best_idx = 0
-    best_dist = float("inf")
-    for idx, entry in enumerate(palette):
-        pr, pg, pb = _parse_argb(entry)
-        pL, pa, pb2 = _rgb_to_lab(pr, pg, pb)
-        dist = math.sqrt((tL - pL) ** 2 + (ta - pa) ** 2 + (tb_ - pb2) ** 2)
-        if dist < best_dist:
-            best_dist = dist
-            best_idx = idx
-    return best_idx
+# Re-export color helpers from ptsl_helpers (private aliases for
+# backward compatibility within this module).
+_parse_argb = ptslh.parse_argb
+_srgb_to_linear = ptslh.srgb_to_linear
+_rgb_to_lab = ptslh.rgb_to_lab
+_closest_palette_index = ptslh.closest_palette_index
 
 
 class ProToolsDawProcessor(DawProcessor):

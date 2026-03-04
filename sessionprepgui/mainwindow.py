@@ -11,13 +11,12 @@ from typing import Any
 
 from PySide6.QtCore import Qt, Slot, QSize
 from PySide6.QtGui import (
-    QAction, QFont, QColor, QIcon, QKeySequence, QShortcut,
+    QAction, QFont, QIcon, QKeySequence, QShortcut,
 )
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QFileDialog,
-    QHBoxLayout,
     QHeaderView,
     QLabel,
     QMainWindow,
@@ -48,7 +47,7 @@ from .theme import COLORS, apply_dark_theme
 from .log import dbg
 from .prefs import PreferencesDialog
 from .detail import render_track_detail_html, PlaybackController, DetailMixin
-from .waveform import WaveformWidget, WaveformPanel, WaveformLoadWorker
+from .waveform import WaveformPanel, WaveformLoadWorker
 from .widgets import ProgressPanel
 from .analysis import (
     AnalysisMixin,
@@ -57,10 +56,9 @@ from .analysis import (
 )
 from .tracks import (
     TrackColumnsMixin, GroupsMixin,
-    _HelpBrowser, _DraggableTrackTable, _SortableItem,
-    _TAB_SUMMARY, _TAB_FILE, _TAB_GROUPS, _TAB_SESSION,
-    _PAGE_PROGRESS, _PAGE_TABS,
-    _PHASE_ANALYSIS, _PHASE_TOPOLOGY, _PHASE_SETUP,
+    _HelpBrowser, _DraggableTrackTable, _TAB_FILE, _TAB_GROUPS, _TAB_SESSION,
+    _PAGE_TABS,
+    _PHASE_ANALYSIS, _PHASE_SETUP,
 )
 from .daw import DawMixin
 from .topology import TopologyMixin
@@ -109,6 +107,7 @@ class SessionPrepWindow(  # pylint: disable=too-many-ancestors
         self._recursive_scan: bool = False
         self._session_config: dict[str, Any] | None = None
         self._session_widgets: dict[str, list[tuple[str, QWidget]]] = {}
+        self._pt_utils_window = None  # singleton Pro Tools Utils window
 
         t0 = time.perf_counter()
         self._detector_help = detector_help_map()
@@ -304,6 +303,14 @@ class SessionPrepWindow(  # pylint: disable=too-many-ancestors
         quit_action.setShortcut("Ctrl+Q")
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
+
+        # ── Tools menu ────────────────────────────────────────────────
+        tools_menu = self.menuBar().addMenu("&Tools")
+
+        self._pt_utils_action = QAction("Pro Tools Utils\u2026", self)
+        self._pt_utils_action.triggered.connect(self._on_open_pt_utils)
+        tools_menu.addAction(self._pt_utils_action)
+        self._update_tools_menu()
 
     @Slot()
     def _on_save_batch_queue(self):
@@ -797,6 +804,11 @@ class SessionPrepWindow(  # pylint: disable=too-many-ancestors
             self._populate_daw_combo()
             self._daw_check_label.setText("")
             self._update_daw_lifecycle_buttons()
+            self._update_tools_menu()
+
+            # Update Pro Tools Utils window if open
+            if self._pt_utils_window is not None:
+                self._pt_utils_window.update_config(self._config)
 
             if self._source_dir:
                 from sessionpreplib.config import strip_presentation_keys
@@ -843,6 +855,27 @@ class SessionPrepWindow(  # pylint: disable=too-many-ancestors
                     f"HiDPI scale factor changed from {old_scale} to {new_scale}.\n"
                     "Please restart SessionPrep for the new scaling to take effect.",
                 )
+    # ── Tools menu ─────────────────────────────────────────────────────────
+
+    def _update_tools_menu(self):
+        """Enable/disable Tools menu entries based on active config."""
+        preset = self._active_preset()
+        pt_section = preset.get("daw_processors", {}).get("protools", {})
+        pt_enabled = pt_section.get("protools_enabled", False)
+        self._pt_utils_action.setEnabled(pt_enabled)
+
+    @Slot()
+    def _on_open_pt_utils(self):
+        """Open (or activate) the Pro Tools Utils window."""
+        from .daw_tools.protools.window import ProToolsUtilsWindow
+        if self._pt_utils_window is None:
+            self._pt_utils_window = ProToolsUtilsWindow(
+                self._config, parent=self)
+        else:
+            self._pt_utils_window.update_config(self._config)
+        self._pt_utils_window.show()
+        self._pt_utils_window.raise_()
+        self._pt_utils_window.activateWindow()
 
     @Slot()
     def _on_about(self):

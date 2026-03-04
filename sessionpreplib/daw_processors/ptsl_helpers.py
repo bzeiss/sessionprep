@@ -9,6 +9,7 @@ transfer phases.
 from __future__ import annotations
 
 import json
+import math
 import os
 from typing import Any
 
@@ -170,12 +171,32 @@ def wait_for_host_ready(engine, timeout: float = 25.0, sleep_time: float = 0.5) 
 
 def get_color_palette(engine, target: str = "CPTarget_Tracks") -> list[str]:
     """Fetch the Pro Tools color palette.  Returns ``[]`` on failure."""
+    try:
+        resp = run_command(
+            engine, "CId_GetColorPalette",
+            {"color_palette_target": target})
+        return (resp or {}).get("color_list", [])
+    except Exception:
+        return []
+
+
+def get_selected_track_names(engine) -> list[str]:
+    """Return names of explicitly selected tracks in Pro Tools.
+
+    Only returns tracks the user directly selected (``SetExplicitly``),
+    not implicit children of selected folders (``SetImplicitly``).
+    """
     from ptsl import PTSL_pb2 as pt
     try:
         resp = run_command(
-            engine, pt.CommandId.CId_GetColorPalette,
-            {"color_palette_target": target})
-        return (resp or {}).get("color_list", [])
+            engine, pt.CommandId.CId_GetTrackList, {})
+        tracks = (resp or {}).get("track_list", [])
+        selected = []
+        for t in tracks:
+            attrs = t.get("track_attributes", {})
+            if attrs.get("is_selected") == "SetExplicitly":
+                selected.append(t["name"])
+        return selected
     except Exception:
         return []
 
@@ -521,3 +542,94 @@ def set_track_volume_by_trackname(
     except Exception as e:
         dbg(f"Error in set_track_volume_by_trackname ({track_name}, {volume}): {e}")
         raise
+
+
+# ── Color helpers ────────────────────────────────────────────────────
+
+
+def parse_argb(argb: str) -> tuple[int, int, int]:
+    """Parse '#ffRRGGBB' ARGB hex string to (R, G, B) ints."""
+    h = argb.lstrip("#")
+    if len(h) == 8:
+        return int(h[2:4], 16), int(h[4:6], 16), int(h[6:8], 16)
+    if len(h) == 6:
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return 128, 128, 128
+
+
+def srgb_to_linear(c: float) -> float:
+    """Convert sRGB channel [0..1] to linear."""
+    if c <= 0.04045:
+        return c / 12.92
+    return ((c + 0.055) / 1.055) ** 2.4
+
+
+def rgb_to_lab(r: int, g: int, b: int) -> tuple[float, float, float]:
+    """Convert sRGB (0-255) to CIE L*a*b* (D65 illuminant)."""
+    rl = srgb_to_linear(r / 255.0)
+    gl = srgb_to_linear(g / 255.0)
+    bl = srgb_to_linear(b / 255.0)
+    x = (0.4124564 * rl + 0.3575761 * gl + 0.1804375 * bl) / 0.95047
+    y = 0.2126729 * rl + 0.7151522 * gl + 0.0721750 * bl
+    z = (0.0193339 * rl + 0.1191920 * gl + 0.9503041 * bl) / 1.08883
+
+    def f(t: float) -> float:
+        if t > 0.008856:
+            return t ** (1.0 / 3.0)
+        return 7.787 * t + 16.0 / 116.0
+
+    L = 116.0 * f(y) - 16.0
+    a = 500.0 * (f(x) - f(y))
+    b_ = 200.0 * (f(y) - f(z))
+    return L, a, b_
+
+
+def closest_palette_index(
+    target_argb: str,
+    palette: list[str],
+) -> int | None:
+    """Find the palette index whose colour is perceptually closest.
+
+    Uses CIE L*a*b* Euclidean distance.  Returns ``None`` if palette
+    is empty.
+    """
+    if not palette:
+        return None
+    tr, tg, tb = parse_argb(target_argb)
+    tL, ta, tb_ = rgb_to_lab(tr, tg, tb)
+    best_idx = 0
+    best_dist = float("inf")
+    for idx, entry in enumerate(palette):
+        pr, pg, pb = parse_argb(entry)
+        pL, pa, pb2 = rgb_to_lab(pr, pg, pb)
+        dist = math.sqrt((tL - pL) ** 2 + (ta - pa) ** 2 + (tb_ - pb2) ** 2)
+        if dist < best_dist:
+            best_dist = dist
+            best_idx = idx
+    return best_idx
+
+
+# ── Track color ──────────────────────────────────────────────────────
+
+
+def set_track_color(
+    engine,
+    color_index: int,
+    track_names: list[str] | None = None,
+    track_ids: list[str] | None = None,
+    batch_job_id: str | None = None,
+    progress: int = 0,
+) -> dict:
+    """Set the color of one or more tracks by palette index.
+
+    Either *track_names* or *track_ids* must be provided.
+    Returns the raw response dict.
+    """
+    body: dict[str, Any] = {"color_index": color_index}
+    if track_names:
+        body["track_names"] = track_names
+    if track_ids:
+        body["track_ids"] = track_ids
+    return run_command(
+        engine, "CId_SetTrackColor", body,
+        batch_job_id=batch_job_id, progress=progress)

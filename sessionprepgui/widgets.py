@@ -542,9 +542,11 @@ class ColorGridPanel(QWidget):
     COLUMNS = 23
 
     def __init__(self, colors: list[dict[str, str]] | None = None,
-                 cell_height: int = 22, parent=None):
+                 cell_height: int = 22, stretch_vertical: bool = False,
+                 parent=None):
         super().__init__(parent)
         self._cell_height = cell_height
+        self._stretch_vertical = stretch_vertical
         self._layout = QGridLayout(self)
         self._layout.setContentsMargins(4, 4, 4, 4)
         self._layout.setSpacing(1)
@@ -561,15 +563,28 @@ class ColorGridPanel(QWidget):
 
     def _populate(self, colors: list[dict[str, str]]):
         from PySide6.QtWidgets import QSizePolicy
+        num_rows = 0
         for i, entry in enumerate(colors):
             name = entry.get("name", "")
             argb = entry.get("argb", "#ff888888")
             row, col = divmod(i, self.COLUMNS)
+            num_rows = max(num_rows, row + 1)
             cell = _ColorCell(name, argb, parent=self)
-            cell.setFixedHeight(self._cell_height)
-            cell.setMinimumWidth(20)
-            cell.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            if self._stretch_vertical:
+                # Override _ColorCell's setFixedSize — allow dynamic sizing
+                cell.setMinimumSize(20, self._cell_height)
+                cell.setMaximumSize(16777215, 16777215)  # QWIDGETSIZE_MAX
+                cell.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            else:
+                cell.setFixedHeight(self._cell_height)
+                cell.setMinimumWidth(20)
+                cell.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             cell.setCursor(Qt.PointingHandCursor)
             cell.clicked.connect(
                 lambda _checked=False, idx=i: self.colorClicked.emit(idx))
             self._layout.addWidget(cell, row, col)
+        if self._stretch_vertical:
+            for r in range(num_rows):
+                self._layout.setRowStretch(r, 1)
+            for c in range(self.COLUMNS):
+                self._layout.setColumnStretch(c, 1)
