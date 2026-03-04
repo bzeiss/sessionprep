@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -48,6 +49,11 @@ class ProToolsUtilsWindow(QDialog):
 
         header.addStretch()
 
+        self._on_top_cb = QCheckBox("Always on Top")
+        self._on_top_cb.setStyleSheet("color: #aaa; font-size: 8pt;")
+        self._on_top_cb.toggled.connect(self._toggle_on_top)
+        header.addWidget(self._on_top_cb)
+
         self._connect_btn = QPushButton("Connect")
         self._connect_btn.clicked.connect(self._toggle_connection)
         header.addWidget(self._connect_btn)
@@ -64,6 +70,15 @@ class ProToolsUtilsWindow(QDialog):
         self._tabs.addTab(self._color_tool, "Color Picker")
 
     # ── Connection management ────────────────────────────────────────
+
+    def _toggle_on_top(self, checked: bool):
+        was_visible = self.isVisible()
+        if checked:
+            self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+        else:
+            self.setWindowFlags(self.windowFlags() & ~Qt.WindowStaysOnTopHint)
+        if was_visible:
+            self.show()
 
     def _toggle_connection(self):
         if self._engine is not None:
