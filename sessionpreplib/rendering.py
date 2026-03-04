@@ -80,17 +80,22 @@ def build_diagnostic_summary(
         det = _det_map.get(det_id)
         return bool(det and getattr(det, "_report_as", "default") == "skip")
 
-    def _routed_bucket(det_id: str, default_bucket: list):
+    def _routed_bucket(det_id: str, actual_severity: Severity):
         """Return the target group list for *det_id*, or None if skipped."""
         det = _det_map.get(det_id)
-        if not det:
-            return default_bucket
-        ra = getattr(det, "_report_as", "default")
-        if ra == "skip":
+        if det and getattr(det, "_report_as", "default") == "skip":
             return None
-        if ra == "default":
-            return default_bucket
-        return _buckets.get(ra, default_bucket)
+
+        if det and hasattr(det, "effective_severity"):
+            eff = det.effective_severity(DetectorResult(det_id, actual_severity, "", {}))
+        else:
+            eff = actual_severity
+
+        if eff is None:
+            return None
+
+        sev_val = eff.value if hasattr(eff, "value") else str(eff)
+        return _buckets.get(sev_val, info_groups)
 
     # --- Format consistency (session-level) ---
     format_mismatch_items = []
@@ -100,9 +105,11 @@ def build_diagnostic_summary(
         most_common_sr = session.config.get("_most_common_sr")
         most_common_bd = session.config.get("_most_common_bd")
 
+        actual_fmt_sev = Severity.PROBLEM
         for r in format_results:
-            if r.severity != Severity.PROBLEM:
+            if r.severity == Severity.CLEAN:
                 continue
+            actual_fmt_sev = r.severity
             fname = r.data.get("filename", "")
             reasons = r.data.get("mismatch_reasons", [])
             details = ", ".join(reasons) if reasons else "mismatch"
@@ -125,7 +132,7 @@ def build_diagnostic_summary(
         if format_summary:
             mismatch_title = f"Format mismatches. Deviations from {format_summary}"
 
-        fmt_bucket = _routed_bucket("format_consistency", problems_groups)
+        fmt_bucket = _routed_bucket("format_consistency", actual_fmt_sev)
         if fmt_bucket is not None:
             add_group(fmt_bucket, mismatch_title, "request corrected exports",
                       format_mismatch_items)
@@ -146,9 +153,11 @@ def build_diagnostic_summary(
         most_common_len = session.config.get("_most_common_len")
         most_common_len_fmt = session.config.get("_most_common_len_fmt")
 
+        actual_len_sev = Severity.PROBLEM
         for r in length_results:
-            if r.severity != Severity.PROBLEM:
+            if r.severity == Severity.CLEAN:
                 continue
+            actual_len_sev = r.severity
             fname = r.data.get("filename", "")
             actual_samples = r.data.get("actual_samples")
             actual_fmt = r.data.get("actual_duration_fmt", "")
@@ -175,7 +184,7 @@ def build_diagnostic_summary(
         if length_summary:
             length_mismatch_title = f"Length mismatches. Deviations from {length_summary}"
 
-        len_bucket = _routed_bucket("length_consistency", problems_groups)
+        len_bucket = _routed_bucket("length_consistency", actual_len_sev)
         if len_bucket is not None:
             add_group(len_bucket, length_mismatch_title, "request aligned exports",
                       length_mismatch_items)
@@ -324,28 +333,39 @@ def build_diagnostic_summary(
                         issue_names.add(t.filename)
 
     # Build groups — route to buckets based on report_as overrides
-    # Each tuple: (det_id, default_bucket, title, hint, items)
+    # Each tuple: (det_id, title, hint, items)
     _det_groups = [
-        ("clipping",          problems_groups,   "Digital clipping",
+        ("clipping",          "Digital clipping",
          "request reprint / check limiting", clipped_items),
-        ("dc_offset",         attention_groups,  "DC offset",
+        ("dc_offset",         "DC offset",
          "consider DC removal", dc_items),
-        ("stereo_compat",     info_groups,       "Stereo compatibility",
+        ("stereo_compat",     "Stereo compatibility",
          None, stereo_compat_items),
-        ("dual_mono",         info_groups,       "Dual-mono (identical L/R)",
+        ("dual_mono",         "Dual-mono (identical L/R)",
          None, dual_mono_items),
-        ("silence",           attention_groups,  "Silent files",
+        ("silence",           "Silent files",
          "confirm intentional", silent_items),
-        ("one_sided_silence", attention_groups,  "One-sided silence",
+        ("one_sided_silence", "One-sided silence",
          "check stereo export / channel routing", one_sided_items),
-        ("subsonic",          attention_groups,  "Subsonic content",
+        ("subsonic",          "Subsonic content",
          f"consider HPF ~{float(session.config.get('subsonic_hz', 30.0)):g} Hz",
          subsonic_items),
-        ("tail_exceedance",   attention_groups,  "Tail regions exceeded anchor",
+        ("tail_exceedance",   "Tail regions exceeded anchor",
          "check for section-based riding", tail_items),
     ]
-    for det_id, default_bucket, title, hint, items in _det_groups:
-        bucket = _routed_bucket(det_id, default_bucket)
+    for det_id, title, hint, items in _det_groups:
+        if not items:
+            continue
+
+        # Find actual severity emitted by this detector
+        actual_sev = Severity.INFO
+        for t in ok_tracks:
+            dr = t.detector_results.get(det_id)
+            if dr and dr.severity != Severity.CLEAN:
+                actual_sev = dr.severity
+                break
+
+        bucket = _routed_bucket(det_id, actual_sev)
         if bucket is not None:
             add_group(bucket, title, hint, items)
 

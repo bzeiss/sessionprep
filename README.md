@@ -105,10 +105,10 @@ sessionprep /path/to/tracks -x       # analyze + process (writes to processed/)
 
 Download from the releases page:
 
-| Executable | Description |
-|------------|-------------|
+| Executable        | Description                                                  |
+|-------------------|--------------------------------------------------------------|
 | `sessionprep-gui` | GUI application (interactive analysis + waveform + playback) |
-| `sessionprep` | Command-line tool (scripting, batch workflows, CI) |
+| `sessionprep`     | Command-line tool (scripting, batch workflows, CI)           |
 
 ### From source
 
@@ -145,11 +145,11 @@ distribution instructions.
 
 SessionPrep operates in three phases:
 
-| Phase | Name | What happens | When |
-|-------|------|-------------|------|
-| **1** | Track Layout | Define how source tracks map to output files: channel routing, reordering, splitting, merging. Drag-and-drop between input/output trees with visual insert-position indicator. Optional recursive subfolder scanning. Output written to `sp_01_tracklayout/`. | GUI Phase 1 (always available) |
-| **2** | Analysis & Preparation | Format checks, clipping, DC offset, stereo compatibility, silence, subsonic, peak/RMS measurement, classification, tail exceedance. Bimodal normalization (clip gain adjustment) via Prepare. Output written to `sp_02_prepared/`. | GUI Phase 2 / CLI |
-| **3** | DAW Transfer | Transfer tracks into DAW session with per-track naming and folder assignment. Duplicate entries for multi-track scenarios (same clip on different tracks). Fader offsets applied automatically (Pro Tools via PTSL, DAWproject via file generation). | GUI Phase 3 |
+| Phase | Name                   | What happens                                                                                                                                                                                                                                                                                                                                                                                                              | When                           |
+|-------|------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------|
+| **1** | Track Layout           | Define how source tracks map to output files: channel routing, reordering, splitting, merging. Automatically optimizes layouts based on Phase 1 diagnostics (e.g. dropping silent files, extracting active channels from dual-mono and one-sided silence). Drag-and-drop between input/output trees with visual insert-position indicator. Optional recursive subfolder scanning. Output written to `sp_01_tracklayout/`. | GUI Phase 1 (always available) |
+| **2** | Analysis & Preparation | Format checks, clipping, DC offset, stereo compatibility, silence, subsonic, peak/RMS measurement, classification, tail exceedance. Bimodal normalization (clip gain adjustment) via Prepare. Output written to `sp_02_prepared/`.                                                                                                                                                                                        | GUI Phase 2 / CLI              |
+| **3** | DAW Transfer           | Transfer tracks into DAW session with per-track naming and folder assignment. Duplicate entries for multi-track scenarios (same clip on different tracks). Fader offsets applied automatically (Pro Tools via PTSL, DAWproject via file generation). Support for unattended batch processing of multiple songs.                                                                                                           | GUI Phase 3                    |
 
 
 ### Diagnostic categories
@@ -236,13 +236,13 @@ multiple groups a warning is printed.
 
 ## Documentation
 
-| Document | Contents |
-|----------|----------|
-| [README.md](README.md) | This file — overview, installation, quick start, usage |
-| [REFERENCE.md](REFERENCE.md) | Detector reference, analysis metrics, processing details |
-| [TECHNICAL.md](TECHNICAL.md) | Audio engineering background, normalization theory, signal chain |
-| [DEVELOPMENT.md](DEVELOPMENT.md) | Development setup, building, library architecture |
-| [TODO.md](TODO.md) | Backlog and planned features |
+| Document                         | Contents                                                         |
+|----------------------------------|------------------------------------------------------------------|
+| [README.md](README.md)           | This file — overview, installation, quick start, usage           |
+| [REFERENCE.md](REFERENCE.md)     | Detector reference, analysis metrics, processing details         |
+| [TECHNICAL.md](TECHNICAL.md)     | Audio engineering background, normalization theory, signal chain |
+| [DEVELOPMENT.md](DEVELOPMENT.md) | Development setup, building, library architecture                |
+| [TODO.md](TODO.md)               | Backlog and planned features                                     |
 
 ---
 

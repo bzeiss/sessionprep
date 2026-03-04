@@ -3,13 +3,14 @@ from __future__ import annotations
 from collections import Counter
 
 from ..detector import SessionDetector
-from ..models import DetectorResult, Severity, SessionContext
+from ..models import DetectorResult, Severity, SessionContext, LifecyclePhase
 
 
 class FormatConsistencyDetector(SessionDetector):
     id = "format_consistency"
     name = "Session Format Consistency"
     shorthand = "FC"
+    phase = LifecyclePhase.PHASE1
 
     @classmethod
     def html_help(cls) -> str:

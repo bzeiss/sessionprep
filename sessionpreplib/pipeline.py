@@ -19,6 +19,7 @@ from .models import (
     Severity,
     TrackContext,
     SessionContext,
+    LifecyclePhase,
 )
 from .detector import TrackDetector, SessionDetector
 from .processor import AudioProcessor
@@ -33,7 +34,7 @@ from .utils import (
 
 
 class Pipeline:
-    def __init__(
+    def __init__(  # pylint: disable=too-many-positional-arguments
         self,
         detectors: list,
         audio_processors: list[AudioProcessor] | None = None,
@@ -98,12 +99,12 @@ class Pipeline:
     # Phase 1: Analyze (run all detectors)
     # ------------------------------------------------------------------
 
-    def _analyze_track(self, track: TrackContext, idx: int, total: int):
+    def _analyze_track(self, track: TrackContext, idx: int, total: int, detectors: list[TrackDetector]):
         """Run all track-level detectors for a single track (thread-safe)."""
         self._emit("track.analyze_start", filename=track.filename,
                    index=idx, total=total)
         t_track_start = time.perf_counter()
-        for det in self.track_detectors:
+        for det in detectors:
             try:
                 self._emit("detector.start", detector_id=det.id,
                            filename=track.filename)
@@ -128,12 +129,11 @@ class Pipeline:
         self._emit("track.analyze_complete", filename=track.filename,
                    index=idx, total=total)
 
-    def analyze(self, session: SessionContext) -> SessionContext:
-        """Run all track-level and session-level detectors.
+    def _run_analysis_phase(self, session: SessionContext, phase: LifecyclePhase) -> SessionContext:
+        """Run track-level and session-level detectors matching the specified phase."""
+        track_dets = [d for d in self.track_detectors if getattr(d, 'phase', LifecyclePhase.PHASE2) == phase]
+        session_dets = [d for d in self.session_detectors if getattr(d, 'phase', LifecyclePhase.PHASE2) == phase]
 
-        Track-level detectors run in parallel across files using a thread pool.
-        Session-level detectors run sequentially after all tracks complete.
-        """
         total = len(session.tracks)
         ok_items = [
             (idx, track)
@@ -146,7 +146,7 @@ class Pipeline:
         workers = min(self.max_workers, n) if ok_items else 1
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
-                pool.submit(self._analyze_track, track, idx, total): track
+                pool.submit(self._analyze_track, track, idx, total, track_dets): track
                 for idx, track in ok_items
             }
             for future in as_completed(futures):
@@ -158,12 +158,12 @@ class Pipeline:
                                index=0, total=total)
         dt_phase = (time.perf_counter() - t_phase) * 1000
         if n:
-            dbg(f"analyze phase (track detectors): {n} tracks in "
+            dbg(f"analyze {phase.value} (track detectors): {n} tracks in "
                 f"{dt_phase:.1f} ms ({dt_phase / n:.1f} ms/track avg)")
 
         # Session-level detectors
         track_map = {t.filename: t for t in session.tracks}
-        for det in self.session_detectors:
+        for det in session_dets:
             try:
                 self._emit("session_detector.start", detector_id=det.id)
                 t0 = time.perf_counter()
@@ -188,10 +188,18 @@ class Pipeline:
                     )
                 ]
 
-        # Store configured detector instances on the session for render-time access
+        # Ensure the overall session.detectors always has all detectors
+        # required for GUI overlay generation, independent of which phase ran
         session.detectors = self.track_detectors + self.session_detectors
-
         return session
+
+    def analyze_phase1(self, session: SessionContext) -> SessionContext:
+        """Run structural/formatting detectors for track layout and validation."""
+        return self._run_analysis_phase(session, LifecyclePhase.PHASE1)
+
+    def analyze_phase2(self, session: SessionContext) -> SessionContext:
+        """Run acoustic and DSP-based detectors."""
+        return self._run_analysis_phase(session, LifecyclePhase.PHASE2)
 
     # ------------------------------------------------------------------
     # Phase 2: Plan (run audio processors, compute gains)

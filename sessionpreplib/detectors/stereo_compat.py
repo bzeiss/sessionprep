@@ -4,7 +4,7 @@ import math
 
 import numpy as np
 
-from ..config import ParamSpec
+from ..models import ParamSpec
 from ..detector import TrackDetector
 from ..models import DetectorResult, IssueLocation, Severity, TrackContext
 from ..audio import is_silent, windowed_stereo_correlation
@@ -268,7 +268,7 @@ class StereoCompatDetector(TrackDetector):
     # Windowed analysis helper
     # ------------------------------------------------------------------
 
-    def _windowed_analysis(
+    def _windowed_analysis(  # pylint: disable=too-many-positional-arguments
         self,
         track: TrackContext,
         win_results: list[tuple[int, int, float, float]],

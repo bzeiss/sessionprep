@@ -13,6 +13,7 @@ from sessionpreplib.detectors import default_detectors
 from sessionpreplib.processors import default_processors
 from sessionpreplib.rendering import build_diagnostic_summary
 from sessionpreplib.events import EventBus
+from sessionpreplib.models import LifecyclePhase
 
 
 class DawCheckWorker(QThread):
@@ -20,8 +21,8 @@ class DawCheckWorker(QThread):
 
     result = Signal(bool, str)  # (ok, message)
 
-    def __init__(self, processor: DawProcessor):
-        super().__init__()
+    def __init__(self, processor: DawProcessor, parent=None):
+        super().__init__(parent)
         self._processor = processor
 
     def run(self):
@@ -35,16 +36,27 @@ class DawCheckWorker(QThread):
 class DawFetchWorker(QThread):
     """Runs DawProcessor.fetch() off the main thread."""
 
+    progress = Signal(str)              # status text
+    progress_value = Signal(int, int)   # (current, total)
     result = Signal(bool, str, object)  # (ok, message, session_or_none)
 
-    def __init__(self, processor: DawProcessor, session):
-        super().__init__()
+    def __init__(self, processor: DawProcessor, session, parent=None):
+        super().__init__(parent)
         self._processor = processor
         self._session = session
 
+    def _on_progress(self, current: int, total: int, message: str):
+        self.progress.emit(message)
+        self.progress_value.emit(current, total)
+
     def run(self):
         try:
-            session = self._processor.fetch(self._session)
+            # Provide the progress callback if the processor supports it
+            try:
+                session = self._processor.fetch(self._session, progress_cb=self._on_progress)
+            except TypeError:
+                # Fallback for processors that don't support progress_cb yet
+                session = self._processor.fetch(self._session)
             self.result.emit(True, "Fetch complete", session)
         except Exception as e:
             self.result.emit(False, str(e), None)
@@ -57,11 +69,12 @@ class DawTransferWorker(QThread):
     progress_value = Signal(int, int)   # (current, total)
     result = Signal(bool, str, object)  # (ok, message, results_list)
 
-    def __init__(self, processor: DawProcessor, session, output_path: str):
-        super().__init__()
+    def __init__(self, processor: DawProcessor, session, output_path: str, parent=None, close_session: bool = True):
+        super().__init__(parent)
         self._processor = processor
         self._session = session
         self._output_path = output_path
+        self._close_session = close_session
 
     def _on_progress(self, current: int, total: int, message: str):
         self.progress.emit(message)
@@ -70,7 +83,7 @@ class DawTransferWorker(QThread):
     def run(self):
         try:
             results = self._processor.transfer(
-                self._session, self._output_path, progress_cb=self._on_progress)
+                self._session, self._output_path, progress_cb=self._on_progress, close_when_done=self._close_session)
             failures = [r for r in results if not r.success]
             if failures:
                 msg = f"Transfer done: {len(results) - len(failures)}/{len(results)} OK"
@@ -79,6 +92,130 @@ class DawTransferWorker(QThread):
             self.result.emit(True, msg, results)
         except Exception as e:
             self.result.emit(False, str(e), None)
+
+
+class Phase1AnalyzeWorker(QThread):
+    """Runs Phase 1 (Structural & Format) pipeline analysis in a background thread."""
+
+    progress = Signal(str)                # descriptive text
+    progress_value = Signal(int, int)     # (current_step, total_steps)
+    track_analyzed = Signal(str, object)  # (filename, track) after detectors
+    finished = Signal(object)             # (session)
+    error = Signal(str)
+
+    def __init__(self, session_context: object, config: dict):
+        super().__init__()
+        self.session_context = session_context
+        self.config = config
+
+    def run(self):
+        try:
+            event_bus = EventBus()
+
+            # Use the already loaded session
+            session = self.session_context
+
+            if not session.tracks:
+                self.error.emit("No audio files found in session.")
+                return
+
+            self.progress.emit("Building pipeline\u2026")
+            detectors = default_detectors()
+            pipeline = Pipeline(
+                detectors=detectors,
+                config=self.config,
+                event_bus=event_bus,
+            )
+
+            # Calculate total progress steps for Phase 1
+            ok_tracks = [t for t in session.tracks if t.status == "OK"]
+            num_ok = len(ok_tracks)
+
+            p1_track_dets = [d for d in pipeline.track_detectors if getattr(d, 'phase', LifecyclePhase.PHASE2) == LifecyclePhase.PHASE1]
+            p1_sess_dets = [d for d in pipeline.session_detectors if getattr(d, 'phase', LifecyclePhase.PHASE2) == LifecyclePhase.PHASE1]
+
+            num_track_det = len(p1_track_dets)
+            num_session_det = len(p1_sess_dets)
+
+            # Load audio data first, since lightweight discovery doesn't load it
+            if num_ok > 0 and ok_tracks[0].audio_data is None:
+                from sessionpreplib.audio import load_track
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                import os
+
+                self.progress.emit("Loading audio data\u2026")
+                self.progress_value.emit(0, num_ok)
+
+                with ThreadPoolExecutor(max_workers=min(os.cpu_count() or 4, 8)) as pool:
+                    futures = {
+                        pool.submit(load_track, t.filepath): t
+                        for t in ok_tracks
+                    }
+                    loaded = 0
+                    for future in as_completed(futures):
+                        t = futures[future]
+                        try:
+                            res = future.result()
+                            t.audio_data = res.audio_data
+                            # Preserve metadata since it might be updated
+                            t.total_samples = res.total_samples
+                            t.samplerate = res.samplerate
+                            # VERY IMPORTANT: clear cache in case `get_peak()` was called
+                            # while audio_data was None, so it doesn't stay 0.0 forever.
+                            t._cache.clear()
+                        except Exception as e:
+                            t.status = "ERROR"
+                            t.error = str(e)
+                        loaded += 1
+                        self.progress_value.emit(loaded, num_ok)
+
+            # Re-filter OK tracks after loading (some might have failed)
+            ok_tracks = [t for t in session.tracks if t.status == "OK"]
+            num_ok = len(ok_tracks)
+
+            total_steps = (
+                num_ok * num_track_det
+                + num_session_det
+            )
+            self._step = 0
+            self._total = max(total_steps, 1)
+            self._step_lock = threading.Lock()
+
+            # Track map for emitting track objects
+            track_map = {t.filename: t for t in session.tracks}
+
+            # Subscribe to pipeline events
+            def on_detector_complete(detector_id, filename, **_kw):
+                with self._step_lock:
+                    self._step += 1
+                    step = self._step
+                self.progress.emit(f"Checking {filename} \u2014 {detector_id}")
+                self.progress_value.emit(step, self._total)
+
+            def on_session_detector_complete(detector_id, **_kw):
+                with self._step_lock:
+                    self._step += 1
+                    step = self._step
+                self.progress.emit(f"Session check \u2014 {detector_id}")
+                self.progress_value.emit(step, self._total)
+
+            def on_track_analyze_complete(filename, **_kw):
+                track = track_map.get(filename)
+                if track:
+                    self.track_analyzed.emit(filename, track)
+
+            event_bus.subscribe("detector.complete", on_detector_complete)
+            event_bus.subscribe("session_detector.complete", on_session_detector_complete)
+            event_bus.subscribe("track.analyze_complete", on_track_analyze_complete)
+
+            # Phase 1: Analyze
+            self.progress.emit("Validating Layout\u2026")
+            self.progress_value.emit(0, self._total)
+            session = pipeline.analyze_phase1(session)
+
+            self.finished.emit(session)
+        except Exception as e:
+            self.error.emit(str(e))
 
 
 class AnalyzeWorker(QThread):
@@ -122,8 +259,8 @@ class AnalyzeWorker(QThread):
             # Calculate total progress steps
             ok_tracks = [t for t in session.tracks if t.status == "OK"]
             num_ok = len(ok_tracks)
-            num_track_det = len(pipeline.track_detectors)
-            num_session_det = len(pipeline.session_detectors)
+            num_track_det = len([d for d in pipeline.track_detectors if getattr(d, 'phase', LifecyclePhase.PHASE2) == LifecyclePhase.PHASE2])
+            num_session_det = len([d for d in pipeline.session_detectors if getattr(d, 'phase', LifecyclePhase.PHASE2) == LifecyclePhase.PHASE2])
             num_proc = len(pipeline.audio_processors)
             total_steps = (
                 num_ok * num_track_det      # analyze: per-track detectors
@@ -176,10 +313,10 @@ class AnalyzeWorker(QThread):
             event_bus.subscribe("processor.complete", on_processor_complete)
             event_bus.subscribe("track.plan_complete", on_track_plan_complete)
 
-            # Phase 1: Analyze (per-track detectors run in parallel)
-            self.progress.emit("Analyzing\u2026")
+            # Phase 2: Analyze (per-track detectors run in parallel)
+            self.progress.emit("Analyzing Content\u2026")
             self.progress_value.emit(0, self._total)
-            session = pipeline.analyze(session)
+            session = pipeline.analyze_phase2(session)
 
             # Phase 2: Plan (per-track processors run in parallel)
             self.progress.emit("Planning\u2026")
@@ -316,26 +453,50 @@ class TopoMultiAudioWorker(QThread):
             import soundfile as sf
 
             track_arrays = []   # list of 2-D arrays (samples, ch)
-            track_names = []    # display names for labels
             track_ch_counts = []
+            track_labels_list = []
             sr = 44100
 
+            from sessionprepgui.waveform.panel import WaveformPanel
+
             if self._side == "input":
-                for filepath, name, _n_ch in self._items:
+                for item in self._items:
                     if self._cancelled:
                         return
+                    filepath = item[0]
+                    name = item[1]
+                    channels_to_keep = item[2] if len(item) > 2 else None
+
                     data, file_sr = sf.read(filepath, dtype='float64')
                     sr = file_sr
                     if data.ndim == 1:
                         data = data.reshape(-1, 1)
+
+                    if channels_to_keep is not None:
+                        data = data[:, channels_to_keep]
+                        ch_labels = [f"{name} Ch{c}" for c in channels_to_keep]
+                    else:
+                        n_ch = data.shape[1]
+                        ch_labels = []
+                        names = WaveformPanel._CHANNEL_LABELS.get(n_ch)
+                        for c in range(n_ch):
+                            if names and c < len(names):
+                                ch_labels.append(f"{name} {names[c]}")
+                            else:
+                                ch_labels.append(f"{name} Ch{c}")
+
                     track_arrays.append(data)
-                    track_names.append(name)
                     track_ch_counts.append(data.shape[1])
+                    track_labels_list.append(ch_labels)
             else:  # output
                 from sessionpreplib.topology import resolve_entry_audio
-                for entry, name in self._items:
+                for item in self._items:
                     if self._cancelled:
                         return
+                    entry = item[0]
+                    name = item[1]
+                    channels_to_keep = item[2] if len(item) > 2 else None
+
                     # Load source audio for this entry
                     track_audio: dict[str, tuple] = {}
                     for src in entry.sources:
@@ -345,12 +506,27 @@ class TopoMultiAudioWorker(QThread):
                         data, file_sr = sf.read(path, dtype='float64')
                         track_audio[src.input_filename] = (data, file_sr)
                         sr = file_sr
+                    
                     resolved = resolve_entry_audio(entry, track_audio)
                     if resolved.ndim == 1:
                         resolved = resolved.reshape(-1, 1)
+
+                    if channels_to_keep is not None:
+                        resolved = resolved[:, channels_to_keep]
+                        ch_labels = [f"{name} Ch{c}" for c in channels_to_keep]
+                    else:
+                        n_ch = resolved.shape[1]
+                        ch_labels = []
+                        names = WaveformPanel._CHANNEL_LABELS.get(n_ch)
+                        for c in range(n_ch):
+                            if names and c < len(names):
+                                ch_labels.append(f"{name} {names[c]}")
+                            else:
+                                ch_labels.append(f"{name} Ch{c}")
+
                     track_arrays.append(resolved)
-                    track_names.append(name)
                     track_ch_counts.append(resolved.shape[1])
+                    track_labels_list.append(ch_labels)
 
             if self._cancelled or not track_arrays:
                 return
@@ -381,18 +557,9 @@ class TopoMultiAudioWorker(QThread):
                 display_audio = display_audio[:, 0]
 
             # --- Channel labels ---
-            from sessionprepgui.waveform.panel import WaveformPanel
             labels = []
-            ch_idx = 0
-            for i, name in enumerate(track_names):
-                n_ch = track_ch_counts[i]
-                for c in range(n_ch):
-                    ch_labels = WaveformPanel._CHANNEL_LABELS.get(n_ch)
-                    if ch_labels and c < len(ch_labels):
-                        labels.append(f"{name} {ch_labels[c]}")
-                    else:
-                        labels.append(f"{name} Ch{c}")
-                    ch_idx += 1
+            for lst in track_labels_list:
+                labels.extend(lst)
 
             self.finished.emit(display_audio, playback, sr, labels)
         except Exception as exc:

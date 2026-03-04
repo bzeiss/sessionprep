@@ -1,0 +1,30 @@
+[MASTER]
+ignore=CVS
+ignore-patterns=
+persistent=yes
+load-plugins=
+jobs=1
+unsafe-load-any-extension=no
+extension-pkg-allow-list=PySide6
+
+[MESSAGES CONTROL]
+disable=raw-checker-failed,bad-inline-option,locally-disabled,file-ignored,suppressed-message,useless-suppression,deprecated-pragma,use-symbolic-message-instead,missing-docstring,too-many-instance-attributes,too-many-public-methods,too-many-statements,too-many-arguments,too-many-locals,too-many-branches,too-many-return-statements,protected-access,duplicate-code,fixme,broad-exception-caught,no-member,invalid-name,import-outside-toplevel,redefined-outer-name,reimported,attribute-defined-outside-init,too-many-nested-blocks,unused-argument,unused-variable,try-except-raise,multiple-statements,unused-import,line-too-long
+
+[REPORTS]
+output-format=text
+reports=no
+evaluation=10.0 - ((float(5 * error + warning + refactor + convention) / statement) * 10)
+
+[FORMAT]
+max-line-length=120
+ignore-long-lines=^\s*(# )?<?https?://\S+>?$
+single-line-if-stmt=no
+max-module-lines=1000
+indent-string='    '
+indent-after-paren=4
+
+[BASIC]
+good-names=i,j,k,ex,Run,_,x,y,fs,ch,db,tc,pt,dp,sz,df,ok,L,tL,pL,ta,pa,tb_,pb2,tr,tg,tb,pr,pg,pb,e,c
+bad-names=foo,bar,baz,toto,tutu,tata
+name-group=
+include-naming-hint=no

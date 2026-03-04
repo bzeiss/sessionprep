@@ -1,0 +1,16 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Pylint: Run Workspace",
+            "type": "shell",
+            "command": "uv run pylint sessionpreplib sessionprepgui sessionprep.py sessionprep-gui.py",
+            "problemMatcher": "$pylint",
+            "presentation": {
+                "reveal": "silent",
+                "panel": "shared",
+                "clear": true
+            }
+        }
+    ]
+}

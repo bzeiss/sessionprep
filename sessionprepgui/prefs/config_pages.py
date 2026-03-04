@@ -27,6 +27,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..widgets import ColorPickerButton
+
 from .param_form import (
     _build_param_page,
     _color_swatch_icon,
@@ -58,9 +60,12 @@ class GroupsTableWidget(QWidget):
 
     groups_changed = Signal()
 
-    def __init__(self, color_provider: ColorProvider, parent=None):
+    def __init__(self, color_provider: ColorProvider,
+                 all_colors_provider: Callable[[], list[dict[str, str]]] | None = None,
+                 parent=None):
         super().__init__(parent)
         self._color_provider = color_provider
+        self._all_colors_provider = all_colors_provider
         self._init_ui()
 
     # ── UI setup ──────────────────────────────────────────────────────
@@ -138,20 +143,19 @@ class GroupsTableWidget(QWidget):
                  gain_linked: bool, daw_target: str = "",
                  match_method: str = "contains",
                  match_pattern: str = ""):
+        # pylint: disable=too-many-positional-arguments
         name_item = QTableWidgetItem(name)
         self._table.setItem(row, 0, name_item)
 
-        color_names, argb_lookup = self._color_provider()
-        color_combo = QComboBox()
-        color_combo.setIconSize(QSize(16, 16))
-        for cn in color_names:
-            argb = argb_lookup(cn)
-            icon = _color_swatch_icon(argb) if argb else QIcon()
-            color_combo.addItem(icon, cn)
-        ci = color_combo.findText(color)
-        if ci >= 0:
-            color_combo.setCurrentIndex(ci)
-        self._table.setCellWidget(row, 1, color_combo)
+        if self._all_colors_provider:
+            colors = self._all_colors_provider()
+        else:
+            color_names, argb_lookup = self._color_provider()
+            colors = [{"name": cn, "argb": argb_lookup(cn) or "#ff888888"}
+                      for cn in color_names]
+        color_picker = ColorPickerButton(colors, self._table)
+        color_picker.setCurrentColor(color)
+        self._table.setCellWidget(row, 1, color_picker)
 
         chk = QCheckBox()
         chk.setChecked(gain_linked)
@@ -186,8 +190,8 @@ class GroupsTableWidget(QWidget):
             name = name_item.text().strip()
             if not name:
                 continue
-            color_combo = self._table.cellWidget(row, 1)
-            color = color_combo.currentText() if color_combo else ""
+            color_picker = self._table.cellWidget(row, 1)
+            color = color_picker.currentColor() if color_picker else ""
             chk_container = self._table.cellWidget(row, 2)
             gain_linked = False
             if chk_container:
@@ -210,7 +214,7 @@ class GroupsTableWidget(QWidget):
     def _read_groups_visual_order(self) -> list[dict]:
         vh = self._table.verticalHeader()
         n = self._table.rowCount()
-        visual_to_logical = sorted(range(n), key=lambda i: vh.visualIndex(i))
+        visual_to_logical = sorted(range(n), key=vh.visualIndex)
         groups: list[dict] = []
         for logical in visual_to_logical:
             name_item = self._table.item(logical, 0)
@@ -220,7 +224,7 @@ class GroupsTableWidget(QWidget):
             if not name:
                 continue
             cc = self._table.cellWidget(logical, 1)
-            color = cc.currentText() if cc else ""
+            color = cc.currentColor() if cc else ""
             chk_c = self._table.cellWidget(logical, 2)
             gl = False
             if chk_c:
@@ -237,6 +241,34 @@ class GroupsTableWidget(QWidget):
                            "gain_linked": gl, "daw_target": dt,
                            "match_method": mm, "match_pattern": mp})
         return groups
+
+    # ── Live color refresh ────────────────────────────────────────────
+
+    def refresh_colors(self):
+        """Rebuild all ColorPickerButton widgets with fresh color data."""
+        if self._all_colors_provider:
+            colors = self._all_colors_provider()
+        else:
+            color_names, argb_lookup = self._color_provider()
+            colors = [{"name": cn, "argb": argb_lookup(cn) or "#ff888888"}
+                      for cn in color_names]
+        # Build lookup maps for resolving stale names
+        new_names = {c["name"] for c in colors if c["name"]}
+        argb_to_name = {c.get("argb", ""): c["name"]
+                        for c in colors if c["name"]}
+        for row in range(self._table.rowCount()):
+            old_picker = self._table.cellWidget(row, 1)
+            current = old_picker.currentColor() if old_picker else ""
+            # If the assigned name no longer exists, try ARGB fallback
+            if current and current not in new_names and old_picker:
+                old_argb = old_picker._argb_map.get(current)
+                if old_argb and old_argb in argb_to_name:
+                    current = argb_to_name[old_argb]
+                else:
+                    current = ""
+            new_picker = ColorPickerButton(colors, self._table)
+            new_picker.setCurrentColor(current)
+            self._table.setCellWidget(row, 1, new_picker)
 
     # ── Name dedup ────────────────────────────────────────────────────
 
@@ -478,6 +510,91 @@ class DawProjectTemplatesWidget(QWidget):
 
 
 # ---------------------------------------------------------------------------
+# ProToolsTemplatesWidget
+# ---------------------------------------------------------------------------
+
+class ProToolsTemplatesWidget(QWidget):
+    """Editable table of Pro Tools mix templates."""
+
+    templates_changed = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        layout.addWidget(QLabel("<b>Pro Tools Templates</b>"))
+
+        self._table = QTableWidget()
+        self._table.setColumnCount(2)
+        self._table.setHorizontalHeaderLabels(["Template Group", "Template Name"])
+        gh = self._table.horizontalHeader()
+        gh.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        gh.setSectionResizeMode(0, QHeaderView.Interactive)
+        gh.resizeSection(0, 150)
+        gh.setSectionResizeMode(1, QHeaderView.Stretch)
+        self._table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._table.setSelectionMode(QTableWidget.SingleSelection)
+        self._table.cellChanged.connect(lambda r, c: self.templates_changed.emit())
+
+        # Ensure the table is tall enough to show ~3 rows comfortably
+        self._table.setMinimumHeight(130)
+
+        layout.addWidget(self._table, 1)
+
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.setSpacing(6)
+        add_btn = QPushButton("Add")
+        add_btn.clicked.connect(self._on_add)
+        btn_row.addWidget(add_btn)
+        remove_btn = QPushButton("Remove")
+        remove_btn.clicked.connect(self._on_remove)
+        btn_row.addWidget(remove_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+    def set_templates(self, templates: list[dict]):
+        self._table.blockSignals(True)
+        self._table.setRowCount(0)
+        self._table.setRowCount(len(templates))
+        for row, tpl in enumerate(templates):
+            self._table.setItem(row, 0, QTableWidgetItem(tpl.get("group", "")))
+            self._table.setItem(row, 1, QTableWidgetItem(tpl.get("name", "")))
+        self._table.blockSignals(False)
+
+    def get_templates(self) -> list[dict]:
+        templates: list[dict] = []
+        for row in range(self._table.rowCount()):
+            group_item = self._table.item(row, 0)
+            group = group_item.text().strip() if group_item else ""
+            name_item = self._table.item(row, 1)
+            name = name_item.text().strip() if name_item else ""
+            if name or group:
+                templates.append({"group": group, "name": name})
+        return templates
+
+    def _on_add(self):
+        row = self._table.rowCount()
+        self._table.setRowCount(row + 1)
+        self._table.setItem(row, 0, QTableWidgetItem(""))
+        self._table.setItem(row, 1, QTableWidgetItem(""))
+        self._table.editItem(self._table.item(row, 0))
+        self.templates_changed.emit()
+
+    def _on_remove(self):
+        row = self._table.currentRow()
+        if row < 0:
+            return
+        self._table.removeRow(row)
+        self.templates_changed.emit()
+
+
+# ---------------------------------------------------------------------------
 # Shared config page builder / loader / reader
 # ---------------------------------------------------------------------------
 
@@ -489,17 +606,17 @@ def build_config_pages(
     *,
     on_processor_enabled: Callable | None = None,
     on_daw_config_changed: Callable | None = None,
-) -> DawProjectTemplatesWidget | None:
+) -> dict[str, QWidget]:
     """Build the common config tree pages (Analysis, Detectors, Processors, DAW Processors).
 
-    Returns the DawProjectTemplatesWidget if created, otherwise None.
+    Returns a dict mapping processor IDs to their custom widgets (e.g. dawproject, protools).
     """
     from sessionpreplib.config import ANALYSIS_PARAMS, PRESENTATION_PARAMS
     from sessionpreplib.detectors import default_detectors
     from sessionpreplib.processors import default_processors
     from sessionpreplib.daw_processors import default_daw_processors
 
-    dawproject_tpl_widget: DawProjectTemplatesWidget | None = None
+    daw_custom_widgets: dict[str, QWidget] = {}
 
     item = QTreeWidgetItem(tree, ["Analysis"])
     item.setFont(0, QFont("", -1, QFont.Bold))
@@ -571,27 +688,39 @@ def build_config_pages(
                 if key == enabled_key and isinstance(widget, QCheckBox):
                     widget.toggled.connect(on_daw_config_changed)
                     break
+
         if dp.id == "dawproject":
             tpl_widget = DawProjectTemplatesWidget()
             tpl_widget.set_templates(dp_sections.get(dp.id, {}).get("dawproject_templates", []))
-            dawproject_tpl_widget = tpl_widget
+            daw_custom_widgets["dawproject"] = tpl_widget
             if on_daw_config_changed is not None:
                 tpl_widget.templates_changed.connect(on_daw_config_changed)
             pg.layout().insertWidget(pg.layout().count() - 1, tpl_widget)
+        elif dp.id == "protools":
+            pt_widget = ProToolsTemplatesWidget()
+            pt_widget.set_templates(dp_sections.get(dp.id, {}).get("protools_templates", []))
+            daw_custom_widgets["protools"] = pt_widget
+            if on_daw_config_changed is not None:
+                pt_widget.templates_changed.connect(on_daw_config_changed)
+            pg.layout().insertWidget(3, pt_widget)
+
         register_page(child, pg)
 
-    return dawproject_tpl_widget
+    return daw_custom_widgets
 
 
 def load_config_widgets(
     widgets_dict: dict,
     preset: dict[str, Any],
-    dawproject_tpl_widget: DawProjectTemplatesWidget | None = None,
+    daw_custom_widgets: dict[str, QWidget] | None = None,
 ) -> None:
     """Load values from *preset* into widgets stored in *widgets_dict*."""
     from sessionpreplib.detectors import default_detectors
     from sessionpreplib.processors import default_processors
     from sessionpreplib.daw_processors import default_daw_processors
+
+    if daw_custom_widgets is None:
+        daw_custom_widgets = {}
 
     for key, widget in widgets_dict.get("analysis", []):
         if key in preset.get("analysis", {}):
@@ -630,19 +759,25 @@ def load_config_widgets(
         for key, widget in widgets_dict[wkey]:
             if key in vals:
                 _set_widget_value(widget, vals[key])
-        if dp.id == "dawproject" and dawproject_tpl_widget is not None:
-            dawproject_tpl_widget.set_templates(vals.get("dawproject_templates", []))
+
+        if dp.id == "dawproject" and "dawproject" in daw_custom_widgets:
+            daw_custom_widgets["dawproject"].set_templates(vals.get("dawproject_templates", []))
+        elif dp.id == "protools" and "protools" in daw_custom_widgets:
+            daw_custom_widgets["protools"].set_templates(vals.get("protools_templates", []))
 
 
 def read_config_widgets(
     widgets_dict: dict,
-    dawproject_tpl_widget: DawProjectTemplatesWidget | None = None,
+    daw_custom_widgets: dict[str, QWidget] | None = None,
     fallback_daw_sections: dict[str, dict] | None = None,
 ) -> dict[str, Any]:
     """Read current widget values into a structured config dict."""
     from sessionpreplib.detectors import default_detectors
     from sessionpreplib.processors import default_processors
     from sessionpreplib.daw_processors import default_daw_processors
+
+    if daw_custom_widgets is None:
+        daw_custom_widgets = {}
 
     cfg: dict[str, Any] = {}
 
@@ -686,8 +821,12 @@ def read_config_widgets(
         section = {}
         for key, widget in widgets_dict[wkey]:
             section[key] = _read_widget(widget)
-        if dp.id == "dawproject" and dawproject_tpl_widget is not None:
-            section["dawproject_templates"] = dawproject_tpl_widget.get_templates()
+
+        if dp.id == "dawproject" and "dawproject" in daw_custom_widgets:
+            section["dawproject_templates"] = daw_custom_widgets["dawproject"].get_templates()
+        elif dp.id == "protools" and "protools" in daw_custom_widgets:
+            section["protools_templates"] = daw_custom_widgets["protools"].get_templates()
+
         if fallback_daw_sections:
             for gk, gv in fallback_daw_sections.get(dp.id, {}).items():
                 if gk not in section:

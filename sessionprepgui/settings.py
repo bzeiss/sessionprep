@@ -27,13 +27,12 @@ import copy
 import json
 import logging
 import os
-import platform
 from typing import Any
 
 from sessionpreplib.config import (
     PRESENTATION_PARAMS,
     build_structured_defaults,
-    flatten_structured_config,
+    get_app_dir,
     validate_structured_config,
 )
 from .theme import PT_DEFAULT_COLORS
@@ -46,9 +45,7 @@ CONFIG_FILENAME = "sessionprep.config.json"
 # Presentation defaults  (config-preset-scoped)
 # ---------------------------------------------------------------------------
 
-_PRESENTATION_DEFAULTS: dict[str, Any] = {
-    p.key: p.default for p in PRESENTATION_PARAMS
-}
+_PRESENTATION_DEFAULTS: dict[str, Any] = {p.key: p.default for p in PRESENTATION_PARAMS}
 
 # ---------------------------------------------------------------------------
 # Application defaults  (global, never per-session)
@@ -72,31 +69,164 @@ _APP_DEFAULTS: dict[str, Any] = {
 
 _DEFAULT_GROUPS: list[dict[str, Any]] = [
     # Drums
-    {"name": "Kick",    "color": "Guardsman Red",        "gain_linked": True,  "daw_target": "Kick", "match_method": "contains", "match_pattern": "kick,kik,kck,bd"},
-    {"name": "Snare",   "color": "Dodger Blue Light",    "gain_linked": True,  "daw_target": "Snare", "match_method": "contains", "match_pattern": "snare,snr"},
-    {"name": "Toms",    "color": "Tia Maria",            "gain_linked": True,  "daw_target": "Toms", "match_method": "contains", "match_pattern": "tom,floor tom"},
-    {"name": "OH",      "color": "Java",                 "gain_linked": True,  "daw_target": "OH", "match_method": "contains", "match_pattern": "oh,overhead,hh,hihat,hi-hat,hi hat,cymbal"},
-    {"name": "Room",    "color": "Purple",               "gain_linked": False, "daw_target": "Room", "match_method": "contains", "match_pattern": "room,rm,ambient"},
-    {"name": "Perc",    "color": "Corn Harvest",         "gain_linked": False, "daw_target": "Perc", "match_method": "contains", "match_pattern": "perc,shaker,tamb,conga,bongo"},
-    {"name": "Loops",   "color": "Cafe Royale Light",              "gain_linked": False, "daw_target": "Loops", "match_method": "contains", "match_pattern": "loop"},
+    {
+        "name": "Kick",
+        "color": "Guardsman Red",
+        "gain_linked": True,
+        "daw_target": "Kick",
+        "match_method": "contains",
+        "match_pattern": "kick,kik,kck,bd",
+    },
+    {
+        "name": "Snare",
+        "color": "Dodger Blue Light",
+        "gain_linked": True,
+        "daw_target": "Snare",
+        "match_method": "contains",
+        "match_pattern": "snare,snr",
+    },
+    {
+        "name": "Toms",
+        "color": "Tia Maria",
+        "gain_linked": True,
+        "daw_target": "Toms",
+        "match_method": "contains",
+        "match_pattern": "tom,floor tom",
+    },
+    {
+        "name": "OH",
+        "color": "Java",
+        "gain_linked": True,
+        "daw_target": "OH",
+        "match_method": "contains",
+        "match_pattern": "oh,overhead,hh,hihat,hi-hat,hi hat,cymbal",
+    },
+    {
+        "name": "Room",
+        "color": "Purple",
+        "gain_linked": False,
+        "daw_target": "Room",
+        "match_method": "contains",
+        "match_pattern": "room,rm,ambient",
+    },
+    {
+        "name": "Perc",
+        "color": "Corn Harvest",
+        "gain_linked": False,
+        "daw_target": "Perc",
+        "match_method": "contains",
+        "match_pattern": "perc,shaker,tamb,conga,bongo",
+    },
+    {
+        "name": "Loops",
+        "color": "Cafe Royale Light",
+        "gain_linked": False,
+        "daw_target": "Loops",
+        "match_method": "contains",
+        "match_pattern": "loop",
+    },
     # Bass
-    {"name": "Bass",    "color": "Christi",              "gain_linked": False, "daw_target": "Bass", "match_method": "contains", "match_pattern": "bass,bas"},
+    {
+        "name": "Bass",
+        "color": "Christi",
+        "gain_linked": False,
+        "daw_target": "Bass",
+        "match_method": "contains",
+        "match_pattern": "bass,bas",
+    },
     # Guitars
-    {"name": "E.Gtr",   "color": "Pizza",               "gain_linked": False, "daw_target": "E.Gtr", "match_method": "contains", "match_pattern": "e.gtr,egtr,elecgtr,elec gtr,electric guitar,dist gtr"},
-    {"name": "A.Gtr",   "color": "Lima Dark",            "gain_linked": False, "daw_target": "A.Gtr", "match_method": "contains", "match_pattern": "a.gtr,agtr,acoustic gtr,ac gtr,acoustic guitar,nylon"},
+    {
+        "name": "E.Gtr",
+        "color": "Pizza",
+        "gain_linked": False,
+        "daw_target": "E.Gtr",
+        "match_method": "contains",
+        "match_pattern": "e.gtr,egtr,elecgtr,elec gtr,electric guitar,dist gtr",
+    },
+    {
+        "name": "A.Gtr",
+        "color": "Lima Dark",
+        "gain_linked": False,
+        "daw_target": "A.Gtr",
+        "match_method": "contains",
+        "match_pattern": "a.gtr,agtr,acoustic gtr,ac gtr,acoustic guitar,nylon",
+    },
     # Keys & Synths
-    {"name": "Keys",    "color": "Malachite",            "gain_linked": False, "daw_target": "Keys", "match_method": "contains", "match_pattern": "keys,piano,pno,organ,rhodes,wurli"},
-    {"name": "Synths",  "color": "Electric Violet Light", "gain_linked": False, "daw_target": "Synths", "match_method": "contains", "match_pattern": "synth,moog"},
-    {"name": "Leads",   "color": "Electric Violet Dark",       "gain_linked": False, "daw_target": "Leads", "match_method": "contains", "match_pattern": "lead"},
+    {
+        "name": "Keys",
+        "color": "Malachite",
+        "gain_linked": False,
+        "daw_target": "Keys",
+        "match_method": "contains",
+        "match_pattern": "keys,piano,pno,organ,rhodes,wurli",
+    },
+    {
+        "name": "Synths",
+        "color": "Electric Violet Light",
+        "gain_linked": False,
+        "daw_target": "Synths",
+        "match_method": "contains",
+        "match_pattern": "synth,moog",
+    },
+    {
+        "name": "Leads",
+        "color": "Electric Violet Dark",
+        "gain_linked": False,
+        "daw_target": "Leads",
+        "match_method": "contains",
+        "match_pattern": "lead",
+    },
     # Strings & Pads
-    {"name": "Strings", "color": "Eastern Blue",         "gain_linked": False, "daw_target": "Strings", "match_method": "contains", "match_pattern": "string,violin,viola,cello,fiddle"},
-    {"name": "Pads",    "color": "Flirt",                "gain_linked": False, "daw_target": "Pads", "match_method": "contains", "match_pattern": "pad"},
-    {"name": "Brass",   "color": "Milano Red",           "gain_linked": False, "daw_target": "Brass", "match_method": "contains", "match_pattern": "brass,trumpet,trombone,sax,horn"},
+    {
+        "name": "Strings",
+        "color": "Eastern Blue",
+        "gain_linked": False,
+        "daw_target": "Strings",
+        "match_method": "contains",
+        "match_pattern": "string,violin,viola,cello,fiddle",
+    },
+    {
+        "name": "Pads",
+        "color": "Flirt",
+        "gain_linked": False,
+        "daw_target": "Pads",
+        "match_method": "contains",
+        "match_pattern": "pad",
+    },
+    {
+        "name": "Brass",
+        "color": "Milano Red",
+        "gain_linked": False,
+        "daw_target": "Brass",
+        "match_method": "contains",
+        "match_pattern": "brass,trumpet,trombone,sax,horn",
+    },
     # Vocals
-    {"name": "VOX",     "color": "Dodger Blue Dark",     "gain_linked": False, "daw_target": "VOX", "match_method": "contains", "match_pattern": "vox,vocal,lead voc,main voc,voice,leadvox"},
-    {"name": "BGs",     "color": "Matisse",              "gain_linked": False, "daw_target": "BGs", "match_method": "contains", "match_pattern": "bg vox,backingvox,bgv,backing,harmony,choir,bg,backingvox"},
+    {
+        "name": "VOX",
+        "color": "Dodger Blue Dark",
+        "gain_linked": False,
+        "daw_target": "VOX",
+        "match_method": "contains",
+        "match_pattern": "vox,vocal,lead voc,main voc,voice,leadvox",
+    },
+    {
+        "name": "BGs",
+        "color": "Matisse",
+        "gain_linked": False,
+        "daw_target": "BGs",
+        "match_method": "contains",
+        "match_pattern": "bg vox,backingvox,bgv,backing,harmony,choir,bg,backingvox",
+    },
     # Effects
-    {"name": "FX",      "color": "Lipstick",             "gain_linked": False, "daw_target": "FX", "match_method": "contains", "match_pattern": "fx,sfx,effect"},
+    {
+        "name": "FX",
+        "color": "Lipstick",
+        "gain_linked": False,
+        "daw_target": "FX",
+        "match_method": "contains",
+        "match_pattern": "fx,sfx,effect",
+    },
 ]
 
 
@@ -145,36 +275,16 @@ def resolve_config_preset(
 # Path helpers
 # ---------------------------------------------------------------------------
 
-def _config_dir() -> str:
-    """Return the OS-specific configuration directory for SessionPrep."""
-    system = platform.system()
-    if system == "Windows":
-        base = os.environ.get("APPDATA")
-        if not base:
-            base = os.path.expanduser("~")
-        return os.path.join(base, "sessionprep")
-    elif system == "Darwin":
-        return os.path.join(
-            os.path.expanduser("~"),
-            "Library",
-            "Application Support",
-            "sessionprep",
-        )
-    else:  # Linux / BSD / …
-        base = os.environ.get("XDG_CONFIG_HOME")
-        if not base:
-            base = os.path.join(os.path.expanduser("~"), ".config")
-        return os.path.join(base, "sessionprep")
-
 
 def config_path() -> str:
     """Return the full path to the GUI config file."""
-    return os.path.join(_config_dir(), CONFIG_FILENAME)
+    return os.path.join(get_app_dir(), CONFIG_FILENAME)
 
 
 # ---------------------------------------------------------------------------
 # Load / Save
 # ---------------------------------------------------------------------------
+
 
 def load_config() -> dict[str, Any]:
     """Load the four-section GUI config, creating it with defaults if needed.
@@ -204,8 +314,9 @@ def load_config() -> dict[str, Any]:
         return copy.deepcopy(defaults)
 
     if not isinstance(data, dict):
-        log.warning("Config root is %s, expected object — recreating",
-                     type(data).__name__)
+        log.warning(
+            "Config root is %s, expected object — recreating", type(data).__name__
+        )
         _backup_corrupt(path)
         save_config(defaults)
         return copy.deepcopy(defaults)
@@ -228,8 +339,9 @@ def load_config() -> dict[str, Any]:
         errors = validate_structured_config(preset)
         if errors:
             msgs = "; ".join(e.message for e in errors)
-            log.warning("Config preset %r validation failed (%s) — resetting",
-                         name, msgs)
+            log.warning(
+                "Config preset %r validation failed (%s) — resetting", name, msgs
+            )
             valid = False
             break
 
@@ -237,8 +349,7 @@ def load_config() -> dict[str, Any]:
         _backup_corrupt(path)
         # Keep app settings and colors, reset presets to defaults
         defaults["app"] = copy.deepcopy(merged.get("app", _APP_DEFAULTS))
-        defaults["colors"] = copy.deepcopy(
-            merged.get("colors", PT_DEFAULT_COLORS))
+        defaults["colors"] = copy.deepcopy(merged.get("colors", PT_DEFAULT_COLORS))
         save_config(defaults)
         return copy.deepcopy(defaults)
 
@@ -268,6 +379,7 @@ def save_config(config: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _merge_structured(
     defaults: dict[str, Any],

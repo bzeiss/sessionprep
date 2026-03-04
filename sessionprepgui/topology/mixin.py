@@ -6,6 +6,7 @@ import os
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QDialog,
     QDialogButtonBox,
@@ -18,15 +19,16 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QToolBar,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from ..widgets import ProgressPanel
-
 from sessionpreplib.topology import build_default_topology
 from sessionpreplib.utils import protools_sort_key
 
+from ..widgets import ProgressPanel
 from ..theme import COLORS
 from ..tracks.table_widgets import _PHASE_TOPOLOGY, _PHASE_ANALYSIS, _PHASE_SETUP
 from ..waveform import WaveformPanel
@@ -34,9 +36,10 @@ from ..waveform import WaveformPanel
 from .input_tree import InputTree
 from .output_tree import OutputTree
 from . import operations as ops
+from .dialogs import add_output_tracks_dialog
 
 
-class TopologyMixin:
+class TopologyMixin:  # pylint: disable=too-few-public-methods
     """Mixin that adds the Track Layout tab to the main window.
 
     Expects the host class to provide:
@@ -79,10 +82,18 @@ class TopologyMixin:
 
         toolbar.addSeparator()
 
+        self._topo_reanalyze_action = QAction("Reanalyze", self)
+        self._topo_reanalyze_action.setToolTip(
+            "Rescan the current folder for new or changed files")
+        self._topo_reanalyze_action.triggered.connect(self._on_topo_reanalyze)
+        self._topo_reanalyze_action.setEnabled(False)
+        toolbar.addAction(self._topo_reanalyze_action)
+
         self._topo_reset_action = QAction("Reset to Default", self)
         self._topo_reset_action.setToolTip(
             "Rebuild the default passthrough topology from input tracks")
         self._topo_reset_action.triggered.connect(self._on_topo_reset)
+        self._topo_reset_action.setEnabled(False)
         toolbar.addAction(self._topo_reset_action)
 
         self._topo_add_output_action = QAction("Add Output", self)
@@ -113,13 +124,13 @@ class TopologyMixin:
         collapse_action = QAction("Collapse All", self)
         collapse_action.setToolTip("Collapse all output tree nodes")
         collapse_action.triggered.connect(
-            lambda: self._topo_output_tree.collapseAll())
+            lambda *_: self._topo_output_tree.collapseAll())
         toolbar.addAction(collapse_action)
 
         expand_action = QAction("Expand All", self)
         expand_action.setToolTip("Expand all output tree nodes")
         expand_action.triggered.connect(
-            lambda: self._topo_output_tree.expandAll())
+            lambda *_: self._topo_output_tree.expandAll())
         toolbar.addAction(expand_action)
 
         toolbar.addSeparator()
@@ -183,6 +194,10 @@ class TopologyMixin:
             lambda sel, desel: self._on_topo_selection_changed("input"))
         self._topo_output_tree.selectionModel().selectionChanged.connect(
             lambda sel, desel: self._on_topo_selection_changed("output"))
+
+        # Synchronized scrolling
+        self._syncing_scroll = False
+        self._topo_input_tree.verticalScrollBar().valueChanged.connect(self._on_input_scroll)
 
         # Waveform preview panel (starts collapsed)
         self._topo_wf_panel = WaveformPanel(analysis_mode=False)
@@ -412,114 +427,19 @@ class TopologyMixin:
         if not self._topo_topology:
             return
 
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Add Output Track(s)")
-        dlg.setMinimumWidth(520)
-        outer = QVBoxLayout(dlg)
-        outer.setSpacing(8)
-        outer.setContentsMargins(12, 12, 12, 10)
-
-        # Inline row: Create [n] new [ch]-ch tracks  Name: [____]
-        row = QHBoxLayout()
-        row.setSpacing(6)
-
-        lbl_style = f"color: {COLORS['dim']};"
-        create_lbl = QLabel("Create")
-        create_lbl.setStyleSheet(lbl_style)
-        row.addWidget(create_lbl)
-
-        count_spin = QSpinBox()
-        count_spin.setRange(1, 99)
-        count_spin.setValue(1)
-        count_spin.setFixedWidth(52)
-        row.addWidget(count_spin)
-
-        new_lbl = QLabel("new")
-        new_lbl.setStyleSheet(lbl_style)
-        row.addWidget(new_lbl)
-
-        ch_spin = QSpinBox()
-        ch_spin.setRange(1, 64)
-        ch_spin.setValue(2)
-        ch_spin.setFixedWidth(52)
-        row.addWidget(ch_spin)
-
-        ch_lbl = QLabel("-ch track(s)")
-        ch_lbl.setStyleSheet(lbl_style)
-        row.addWidget(ch_lbl)
-
-        row.addSpacing(12)
-
-        name_lbl = QLabel("Name:")
-        name_lbl.setStyleSheet(lbl_style)
-        row.addWidget(name_lbl)
-
-        name_edit = QLineEdit("new_track.wav")
-        name_edit.selectAll()
-        name_edit.setMinimumWidth(160)
-        row.addWidget(name_edit, 1)
-
-        outer.addLayout(row)
-
-        # Live preview
-        preview = QLabel()
-        preview.setStyleSheet(
-            f"color: {COLORS['dim']}; font-style: italic; font-size: 11px;"
-            "padding: 2px 0;")
-        preview.setWordWrap(True)
-        outer.addWidget(preview)
-
-        def _update_preview():
-            stem_raw = name_edit.text().strip() or "new_track.wav"
-            dot = stem_raw.rfind(".")
-            if dot > 0:
-                s, e = stem_raw[:dot], stem_raw[dot:]
-            else:
-                s, e = stem_raw, ".wav"
-            n = count_spin.value()
-            ch = ch_spin.value()
-            if n == 1:
-                preview.setText(f"\u2192 {s}{e}  ({ch} ch)")
-            else:
-                names = ", ".join(
-                    f"{s}_{i + 1}{e}" for i in range(min(n, 3)))
-                if n > 3:
-                    names += f", \u2026 ({n} total)"
-                preview.setText(f"\u2192 {names}  ({ch} ch each)")
-
-        name_edit.textChanged.connect(lambda: _update_preview())
-        count_spin.valueChanged.connect(lambda: _update_preview())
-        ch_spin.valueChanged.connect(lambda: _update_preview())
-        _update_preview()
-
-        # Buttons
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(dlg.accept)
-        buttons.rejected.connect(dlg.reject)
-        outer.addWidget(buttons)
-        name_edit.setFocus()
-
-        if dlg.exec() != QDialog.Accepted:
-            return
-        base_name = name_edit.text().strip()
-        if not base_name:
+        tracks = add_output_tracks_dialog(self, self._topo_topology, COLORS)
+        if not tracks:
             return
 
-        # Split stem and extension
-        dot = base_name.rfind(".")
-        if dot > 0:
-            stem, ext = base_name[:dot], base_name[dot:]
-        else:
-            stem, ext = base_name, ".wav"
+        for name_hint, n_channels in tracks:
+            # Result already has extension, but ops.unique_output_name splits again
+            parts = name_hint.rpartition(".")
+            stem = parts[0] or parts[2]
+            ext = f".{parts[2]}" if parts[0] else ".wav"
 
-        n_tracks = count_spin.value()
-        n_channels = ch_spin.value()
-        for i in range(n_tracks):
-            suffix = f"_{i + 1}" if n_tracks > 1 else ""
-            fname = ops.unique_output_name(
-                self._topo_topology, f"{stem}{suffix}", ext)
+            fname = ops.unique_output_name(self._topo_topology, stem, ext)
             ops.new_output_file(self._topo_topology, fname, n_channels)
+
         self._topo_changed()
 
     # ── Input tree context menu ───────────────────────────────────────
@@ -543,6 +463,12 @@ class TopologyMixin:
         )
 
         menu = QMenu(self)
+
+        act_open_folder = menu.addAction("Open Folder")
+        act_open_folder.triggered.connect(
+            lambda checked, fn=filename: self._open_folder_for_file(fn)
+        )
+        menu.addSeparator()
 
         if is_excluded:
             act = menu.addAction("Include in Session")
@@ -599,6 +525,28 @@ class TopologyMixin:
         if menu.actions() and global_pos is not None:
             menu.exec(global_pos)
 
+    def _open_folder_for_file(self, filename: str):
+        if not self._source_dir:
+            return
+
+        import sys
+        import subprocess
+        import os
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+
+        filepath = os.path.join(self._source_dir, filename)
+        if not os.path.exists(filepath):
+            return
+
+        if sys.platform == "win32":
+            subprocess.Popen(["explorer", "/select,", os.path.normpath(filepath)])
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", filepath])
+        else:
+            dirpath = os.path.dirname(filepath)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(dirpath))
+
     def _input_action(self, op_fn, filename: str):
         """Call an operations function that takes (topo, track_map, filename)."""
         topo = self._topo_topology
@@ -628,6 +576,42 @@ class TopologyMixin:
             return
         ops.exclude_input(topo, filename)
         self._topo_changed()
+
+    # ── Synchronized scrolling ────────────────────────────────────────
+
+    def _get_item_at_center(self, tree: QTreeWidget) -> QTreeWidgetItem | None:
+        """Find the item currently in the vertical center of the viewport."""
+        viewport = tree.viewport()
+        center_y = viewport.height() // 2
+        # Use itemAt to find what's rendered at that physical pixel
+        item = tree.itemAt(viewport.width() // 2, center_y)
+        return item
+
+    @Slot()
+    def _on_input_scroll(self):
+        """When input scrolled, attempt to center the corresponding output."""
+        if self._syncing_scroll or not self._topo_topology:
+            return
+            
+        item = self._get_item_at_center(self._topo_input_tree)
+        if not item:
+            return
+            
+        data = item.data(0, Qt.UserRole)
+        input_filename = None
+        if data and data[0] == "file":
+            input_filename = data[1]
+        elif data and data[0] == "channel":
+            input_filename = data[1]
+
+        if not input_filename:
+            return
+
+        target_item = self._topo_output_tree.find_item_for_source(input_filename)
+        if target_item:
+            self._syncing_scroll = True
+            self._topo_output_tree.scrollToItem(target_item, QAbstractItemView.PositionAtCenter)
+            self._syncing_scroll = False
 
     # ── Cross-tree exclusive selection ────────────────────────────────
 
@@ -719,15 +703,15 @@ class TopologyMixin:
         if not file_items and not channel_items:
             return
 
+        if channel_items and not file_items:
+            self._topo_load_multi_input(None, channel_items)
+            return
+
         if len(file_items) == 1 and not channel_items:
             data = file_items[0].data(0, Qt.UserRole)
             self._topo_load_input_waveform(data[1])
-        elif len(file_items) > 1:
-            self._topo_load_multi_input(file_items)
-        elif channel_items:
-            # Single channel selected — load full file then show one channel
-            data = channel_items[0].data(0, Qt.UserRole)
-            self._topo_load_input_waveform(data[1])
+        else:
+            self._topo_load_multi_input(file_items, channel_items)
 
     def _topo_load_input_waveform(self, filename: str):
         """Load waveform for a single input file."""
@@ -772,14 +756,14 @@ class TopologyMixin:
 
     # ── Multi-track input loading ─────────────────────────────────────
 
-    def _topo_load_multi_input(self, file_items):
-        """Load and stack waveforms for multiple input files."""
+    def _topo_load_multi_input(self, file_items, channel_items=None):
+        """Load and stack waveforms for multiple input files or channels."""
         self._topo_cancel_workers()
         self._on_topo_stop()
 
         track_map = self._topo_track_map()
         items = []
-        for fi in file_items:
+        for fi in (file_items or []):
             data = fi.data(0, Qt.UserRole)
             if not data or data[0] != "file":
                 continue
@@ -787,7 +771,22 @@ class TopologyMixin:
             track = track_map.get(filename)
             if track:
                 stem = os.path.splitext(filename)[0]
-                items.append((track.filepath, stem, track.channels))
+                items.append((track.filepath, stem, None))
+
+        ch_map = {}
+        for ci in (channel_items or []):
+            data = ci.data(0, Qt.UserRole)
+            if not data or data[0] != "channel":
+                continue
+            filename = data[1]
+            source_ch = data[2]
+            ch_map.setdefault(filename, []).append(source_ch)
+
+        for filename, channels in ch_map.items():
+            track = track_map.get(filename)
+            if track:
+                stem = os.path.splitext(filename)[0]
+                items.append((track.filepath, stem, sorted(channels)))
         if not items:
             return
 
@@ -811,14 +810,15 @@ class TopologyMixin:
         if not file_items and not channel_items:
             return
 
+        if channel_items and not file_items:
+            self._topo_load_multi_output(None, channel_items)
+            return
+
         if len(file_items) == 1 and not channel_items:
             data = file_items[0].data(0, Qt.UserRole)
             self._topo_load_output_waveform(data[1])
-        elif len(file_items) > 1:
-            self._topo_load_multi_output(file_items)
-        elif channel_items:
-            data = channel_items[0].data(0, Qt.UserRole)
-            self._topo_load_output_waveform(data[1])
+        else:
+            self._topo_load_multi_output(file_items, channel_items)
 
     def _topo_load_output_waveform(self, output_filename: str):
         """Resolve and display waveform for an output entry."""
@@ -861,7 +861,7 @@ class TopologyMixin:
 
     # ── Multi-track output loading ────────────────────────────────────
 
-    def _topo_load_multi_output(self, file_items):
+    def _topo_load_multi_output(self, file_items, channel_items=None):
         """Load and stack waveforms for multiple output entries."""
         self._topo_cancel_workers()
         self._on_topo_stop()
@@ -871,7 +871,7 @@ class TopologyMixin:
             return
 
         items = []
-        for fi in file_items:
+        for fi in (file_items or []):
             data = fi.data(0, Qt.UserRole)
             if not data or data[0] != "file":
                 continue
@@ -880,7 +880,23 @@ class TopologyMixin:
                           if e.output_filename == filename), None)
             if entry:
                 stem = os.path.splitext(filename)[0]
-                items.append((entry, stem))
+                items.append((entry, stem, None))
+
+        ch_map = {}
+        for ci in (channel_items or []):
+            data = ci.data(0, Qt.UserRole)
+            if not data or data[0] != "channel":
+                continue
+            out_fn = data[1]
+            target_ch = data[2]
+            ch_map.setdefault(out_fn, []).append(target_ch)
+
+        for out_fn, channels in ch_map.items():
+            entry = next((e for e in topo.entries
+                          if e.output_filename == out_fn), None)
+            if entry:
+                stem = os.path.splitext(out_fn)[0]
+                items.append((entry, stem, sorted(channels)))
         if not items:
             return
 

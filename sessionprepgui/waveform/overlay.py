@@ -36,7 +36,7 @@ def draw_issue_overlays(
     num_channels: int,
     mel_view_min: float,
     mel_view_max: float,
-):
+):  # pylint: disable=too-many-positional-arguments
     """Draw detector issue overlays.  Works in both waveform and spectrogram modes."""
     if not issues or not enabled_overlays:
         return
@@ -103,7 +103,7 @@ def draw_time_scale(
     view_start: int,
     view_end: int,
     samplerate: int,
-):
+):  # pylint: disable=too-many-positional-arguments
     """Draw horizontal time axis with adaptive tick labels below the waveform."""
     if samplerate <= 0 or draw_w <= 0:
         return

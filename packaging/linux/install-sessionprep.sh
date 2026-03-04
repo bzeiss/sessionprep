@@ -16,8 +16,11 @@ set -euo pipefail
 # Constants — filenames and the placeholder in the bundled .desktop template
 # ---------------------------------------------------------------------------
 
-readonly CLI_BIN="sessionprep"
-readonly GUI_BIN="sessionprep-gui"
+readonly DIST_DIR="sessionprep.dist"
+readonly CLI_BIN="sessionprep-linux-x64"
+readonly GUI_BIN="sessionprep-gui-linux-x64"
+readonly CLI_CMD="sessionprep"
+readonly GUI_CMD="sessionprep-gui"
 readonly ICON_FILE="sessionprep.png"
 readonly DESKTOP_FILE="sessionprep.desktop"
 readonly DESKTOP_EXEC_PLACEHOLDER="Exec=/usr/local/bin/sessionprep-gui"
@@ -39,8 +42,8 @@ die() {
 # Check that all source files are present next to this script.
 validate_sources() {
     local missing=0
-    for f in "$CLI_BIN" "$GUI_BIN" "$ICON_FILE" "$DESKTOP_FILE"; do
-        if [ ! -f "$SCRIPT_DIR/$f" ]; then
+    for f in "$DIST_DIR" "$ICON_FILE" "$DESKTOP_FILE"; do
+        if [ ! -e "$SCRIPT_DIR/$f" ]; then
             echo "  Missing source file: $SCRIPT_DIR/$f" >&2
             missing=1
         fi
@@ -86,6 +89,7 @@ INSTALL_DIR="${INSTALL_DIR:-$HOME/.local}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 BIN_DIR="$INSTALL_DIR/bin"
+LIB_DIR="$INSTALL_DIR/lib/sessionprep"
 PIXMAPS_DIR="$INSTALL_DIR/share/pixmaps"
 APPS_DIR="$INSTALL_DIR/share/applications"
 
@@ -99,16 +103,22 @@ do_install() {
 
     echo "Installing SessionPrep to $INSTALL_DIR ..."
 
-    mkdir -p "$BIN_DIR" "$APPS_DIR" "$PIXMAPS_DIR"
+    mkdir -p "$BIN_DIR" "$APPS_DIR" "$PIXMAPS_DIR" "$LIB_DIR"
 
-    install -m 755 "$SCRIPT_DIR/$CLI_BIN"   "$BIN_DIR/$CLI_BIN"
-    install -m 755 "$SCRIPT_DIR/$GUI_BIN"   "$BIN_DIR/$GUI_BIN"
+    # Copy distribution folders contents into a flat directory
+    rm -rf "$LIB_DIR"/*
+    cp -R "$SCRIPT_DIR/$DIST_DIR"/* "$LIB_DIR/"
+
+    # Symlink executables into PATH
+    ln -sf "$LIB_DIR/$CLI_BIN" "$BIN_DIR/$CLI_CMD"
+    ln -sf "$LIB_DIR/$GUI_BIN" "$BIN_DIR/$GUI_CMD"
+
     install -m 644 "$SCRIPT_DIR/$ICON_FILE" "$PIXMAPS_DIR/$ICON_FILE"
 
     # Write .desktop atomically: generate into a temp file, then move into place.
     local tmp_desktop
     tmp_desktop="$(mktemp "$APPS_DIR/.sessionprep.desktop.XXXXXX")"
-    sed "s|$DESKTOP_EXEC_PLACEHOLDER|Exec=$BIN_DIR/$GUI_BIN|g" \
+    sed "s|$DESKTOP_EXEC_PLACEHOLDER|Exec=$BIN_DIR/$GUI_CMD|g" \
         "$SCRIPT_DIR/$DESKTOP_FILE" > "$tmp_desktop"
     chmod 644 "$tmp_desktop"
     mv "$tmp_desktop" "$APPS_DIR/$DESKTOP_FILE"
@@ -120,8 +130,8 @@ do_install() {
 
     echo ""
     echo "Done."
-    echo "  CLI: $BIN_DIR/$CLI_BIN"
-    echo "  GUI: $BIN_DIR/$GUI_BIN"
+    echo "  CLI: $BIN_DIR/$CLI_CMD"
+    echo "  GUI: $BIN_DIR/$GUI_CMD"
     echo ""
     check_path
 }
@@ -138,17 +148,23 @@ do_uninstall() {
     local found
     found=0
     for f in \
-        "$BIN_DIR/$CLI_BIN" \
-        "$BIN_DIR/$GUI_BIN" \
+        "$BIN_DIR/$CLI_CMD" \
+        "$BIN_DIR/$GUI_CMD" \
         "$PIXMAPS_DIR/$ICON_FILE" \
         "$APPS_DIR/$DESKTOP_FILE"
     do
-        if [ -f "$f" ]; then
+        if [ -f "$f" ] || [ -L "$f" ]; then
             rm -f "$f"
             echo "  Removed: $f"
             found=1
         fi
     done
+
+    if [ -d "$LIB_DIR" ]; then
+        rm -rf "$LIB_DIR"
+        echo "  Removed: $LIB_DIR"
+        found=1
+    fi
 
     if [ "$found" -eq 0 ]; then
         echo "  Nothing found to remove in $INSTALL_DIR."

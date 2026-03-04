@@ -152,6 +152,7 @@ class WaveformRenderer:
 
     def draw_db_guide(self, painter: QPainter, ctx: WaveformRenderCtx,
                       nch: int, lane_h: float, my: float):
+        # pylint: disable=too-many-positional-arguments
         """Draw dBFS readout labels at mouse y position (called from paintEvent)."""
         mouse_ch = int(my / lane_h) if lane_h > 0 else 0
         mouse_ch = max(0, min(mouse_ch, nch - 1))
@@ -628,10 +629,9 @@ class WaveformRenderer:
                     tail_max = float(wm_slice[n_use:].max())
                     result[-1] = np.sqrt(max(float(result[-1]) ** 2, tail_max))
                 return result
-            else:
-                local = np.clip(local_wm[:-1] - first, 0,
-                                max(n_slice - 1, 0)).astype(np.intp)
-                return np.sqrt(np.maximum(wm_slice[local], 0.0))
+            local = np.clip(local_wm[:-1] - first, 0,
+                            max(n_slice - 1, 0)).astype(np.intp)
+            return np.sqrt(np.maximum(wm_slice[local], 0.0))
 
         self._rms_envelope = [_downsample(wm, wm_offset) for wm in ch_wms]
         self._rms_combined = _downsample(combined_wm, wm_offset)

@@ -80,7 +80,7 @@ def generate_report(
         "FADER POSITIONS (Set these in your DAW to restore original balance)",
         "-" * 80,
         "",
-        "{:<40} {:>12} {:>12}".format("TRACK", "FADER", "TYPE"),
+        f"{'TRACK':<40} {'FADER':>12} {'TYPE':>12}",
         "-" * 80,
     ])
 
@@ -90,10 +90,8 @@ def generate_report(
         pr = _get_primary_processor_result(t)
         fader = pr.data.get("fader_offset", 0) if pr else 0
         classification = pr.classification if pr else "Unknown"
-        fader_str = "{:+.1f} dB".format(fader)
-        lines.append("{:<40} {:>12} {:>12}".format(
-            t.filename[:38], fader_str, classification
-        ))
+        fader_str = f"{fader:+.1f} dB"
+        lines.append(f"{t.filename[:38]:<40} {fader_str:>12} {classification:>12}")
 
     # Tail report
     rms_anchor = config.get("rms_anchor", "percentile")
@@ -146,15 +144,9 @@ def generate_report(
             any_tail_reported = True
             for i, reg in enumerate(regions, start=1):
                 lines.append(
-                    "  {:>2}. {} - {} | samples {}-{} | max +{:.2f} dB (RMS {:.2f} dBFS)".format(
-                        i,
-                        reg["start_time"],
-                        reg["end_time"],
-                        reg["start_sample"],
-                        reg["end_sample"],
-                        reg["max_exceed_db"],
-                        reg["max_rms_db"],
-                    )
+                    f"  {i:>2}. {reg['start_time']} - {reg['end_time']} | "
+                    f"samples {reg['start_sample']}-{reg['end_sample']} | "
+                    f"max +{reg['max_exceed_db']:.2f} dB (RMS {reg['max_rms_db']:.2f} dBFS)"
                 )
             lines.append("")
 
@@ -169,9 +161,7 @@ def generate_report(
         "FILE OVERVIEW",
         "-" * 80,
         "",
-        "{:<25} {:>8} {:>8} {:>10}".format(
-            "TRACK", "SR(kHz)", "BIT", "DUR"
-        ),
+        f"{'TRACK':<25} {'SR(kHz)':>8} {'BIT':>8} {'DUR':>10}",
         "-" * 80,
     ])
 
@@ -183,12 +173,7 @@ def generate_report(
 
         sr_khz = f"{t.samplerate/1000:.1f}"
         dur_fmt = format_duration(t.total_samples, t.samplerate)
-        lines.append("{:<25} {:>8} {:>8} {:>10}".format(
-            t.filename[:23],
-            sr_khz,
-            t.bitdepth,
-            dur_fmt,
-        ))
+        lines.append(f"{t.filename[:23]:<25} {sr_khz:>8} {t.bitdepth:>8} {dur_fmt:>10}")
 
     if errors:
         lines.extend([

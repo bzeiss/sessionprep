@@ -1,3 +1,4 @@
+# pylint: disable=cyclic-import
 from .bimodal_normalize import BimodalNormalizeProcessor
 
 

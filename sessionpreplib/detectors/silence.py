@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..detector import TrackDetector
-from ..models import DetectorResult, IssueLocation, Severity, TrackContext
+from ..models import DetectorResult, IssueLocation, Severity, TrackContext, LifecyclePhase
 from ..audio import get_peak
 
 
@@ -10,6 +10,7 @@ class SilenceDetector(TrackDetector):
     name = "Silent Files"
     shorthand = "SI"
     depends_on = []
+    phase = LifecyclePhase.PHASE1
 
     @classmethod
     def html_help(cls) -> str:
@@ -36,7 +37,10 @@ class SilenceDetector(TrackDetector):
                 detector_id=self.id,
                 severity=Severity.ATTENTION,
                 summary="silent",
-                data={"is_silent": True},
+                data={
+                    "is_silent": True,
+                    "topology_action": "drop",
+                },
                 hint="confirm intentional",
                 issues=[IssueLocation(
                     sample_start=0,

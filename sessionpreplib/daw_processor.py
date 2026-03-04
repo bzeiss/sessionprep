@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from .config import ParamSpec
+from .models import ParamSpec
 from .models import DawCommand, DawCommandResult, SessionContext
 
 
@@ -39,7 +39,7 @@ class DawProcessor(ABC):
 
     @classmethod
     def config_params(cls) -> list[ParamSpec]:
-        """Base returns the enabled toggle. Subclasses call super() + [...]."""
+        """Base returns the enabled toggle and project dir. Subclasses call super() + [...]."""
         return [
             ParamSpec(
                 key=f"{cls.id}_enabled",
@@ -51,17 +51,34 @@ class DawProcessor(ABC):
                     "in the toolbar. Disable if you never use this DAW."
                 ),
             ),
+            ParamSpec(
+                key=f"{cls.id}_project_dir",
+                type=str,
+                default="",
+                label="Project directory",
+                description=(
+                    f"Directory where newly created {cls.name} projects are saved. "
+                    "Leave empty to prompt for a location each time."
+                ),
+                widget_hint="path_picker_folder",
+            ),
         ]
 
     def configure(self, config: dict[str, Any]) -> None:
         """Read config values. Subclasses should call super().configure(config)."""
         self._enabled: bool = config.get(f"{self.id}_enabled", True)
         self._connected: bool = False
+        self._project_dir: str = config.get(f"{type(self).id}_project_dir", "")
 
     @property
     def enabled(self) -> bool:
         """Whether this processor is available for selection."""
         return self._enabled
+
+    @property
+    def project_dir(self) -> str:
+        """The directory where new projects should be created."""
+        return self._project_dir
 
     @property
     def connected(self) -> bool:
@@ -76,7 +93,6 @@ class DawProcessor(ABC):
         this checks the connection.  For file-based DAWs (DAWProject)
         this might validate the output path.
         """
-        ...
 
     @abstractmethod
     def fetch(self, session: SessionContext) -> SessionContext:
@@ -86,7 +102,6 @@ class DawProcessor(ABC):
         (routing folders, track list, colors, etc.).  The GUI can
         then display this data in the Session Setup panel.
         """
-        ...
 
     def resolve_output_path(
         self,
@@ -118,6 +133,7 @@ class DawProcessor(ABC):
         session: SessionContext,
         output_path: str,
         progress_cb=None,
+        close_when_done: bool = True,
     ) -> list[DawCommandResult]:
         """Initial full push of session data to the DAW.
 
@@ -135,7 +151,6 @@ class DawProcessor(ABC):
 
         Returns the list of DawCommandResult for this batch.
         """
-        ...
 
     @abstractmethod
     def sync(self, session: SessionContext) -> list[DawCommandResult]:
@@ -145,7 +160,6 @@ class DawProcessor(ABC):
         transfer() (in session.daw_state[self.id]) and sends only the
         deltas.  Same internal dispatch as transfer().
         """
-        ...
 
     @abstractmethod
     def execute_commands(
@@ -160,4 +174,3 @@ class DawProcessor(ABC):
 
         Results are appended to session.daw_command_log.
         """
-        ...

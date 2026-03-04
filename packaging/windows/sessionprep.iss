@@ -1,7 +1,7 @@
 ; SessionPrep Windows Installer (Inno Setup 6)
 ;
 ; Build from repo root:
-;   ISCC /DAPP_VERSION=x.y.z /DDIST_DIR=dist_nuitka packaging\windows\sessionprep.iss
+;   ISCC /DAPP_VERSION=x.y.z /DDIST_DIR=dist_nuitka /DARCH_SUFFIX=win-x64 packaging\windows\sessionprep.iss
 
 ; ---------------------------------------------------------------------------
 ; Defines
@@ -13,12 +13,15 @@
 #ifndef DIST_DIR
   #define DIST_DIR "dist_nuitka"
 #endif
+#ifndef ARCH_SUFFIX
+  #define ARCH_SUFFIX "win-x64"
+#endif
 
 #define AppName         "SessionPrep"
 #define AppPublisher    "Benjamin Zeiss"
 #define AppPublisherURL "https://github.com/bzeiss/sessionprep"
-#define AppExe          "sessionprep-gui-win-x64.exe"
-#define AppCli          "sessionprep-win-x64.exe"
+#define AppExe          "sessionprep-gui-" + ARCH_SUFFIX + ".exe"
+#define AppCli          "sessionprep-" + ARCH_SUFFIX + ".exe"
 #define AppIconSrc      "..\..\sessionprepgui\res\sessionprep.ico"
 
 ; ---------------------------------------------------------------------------
@@ -37,7 +40,7 @@ DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 
 OutputDir=..\..\{#DIST_DIR}
-OutputBaseFilename={#AppName}-{#APP_VERSION}-setup
+OutputBaseFilename=sessionprep-{#APP_VERSION}-{#ARCH_SUFFIX}-setup
 
 SetupIconFile={#AppIconSrc}
 UninstallDisplayIcon={app}\sessionprep.ico
@@ -79,15 +82,11 @@ Name: "addtopath"; \
 ; ---------------------------------------------------------------------------
 
 [Files]
-; GUI executable
-Source: "..\..\{#DIST_DIR}\{#AppExe}"; \
-  DestDir: "{app}"; \
-  Flags: ignoreversion
+; GUI standalone directory
+Source: "..\..\{#DIST_DIR}\sessionprep-gui.dist\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 
-; CLI executable
-Source: "..\..\{#DIST_DIR}\{#AppCli}"; \
-  DestDir: "{app}"; \
-  Flags: ignoreversion
+; CLI standalone directory
+Source: "..\..\{#DIST_DIR}\sessionprep.dist\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 
 ; Icon (used by the uninstaller entry and shortcuts)
 Source: "{#AppIconSrc}"; \

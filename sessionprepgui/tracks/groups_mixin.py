@@ -28,10 +28,10 @@ from ..prefs.param_form import _argb_to_qcolor
 from ..settings import build_defaults, save_config
 from .table_widgets import _SortableItem
 from ..theme import COLORS, PT_DEFAULT_COLORS
-from ..widgets import BatchComboBox
+from ..widgets import BatchComboBox, ColorPickerButton
 
 
-class GroupsMixin:
+class GroupsMixin:  # pylint: disable=too-few-public-methods
     """Group management: groups tab, colors, group column, auto-group, linked levels.
 
     Mixed into ``SessionPrepWindow`` — not meant to be used standalone.
@@ -170,21 +170,16 @@ class GroupsMixin:
                             gain_linked: bool, daw_target: str = "",
                             match_method: str = "contains",
                             match_pattern: str = ""):
+        # pylint: disable=too-many-positional-arguments
         """Populate one row in the session-local groups table."""
         name_item = QTableWidgetItem(name)
         self._groups_tab_table.setItem(row, 0, name_item)
 
-        # Color dropdown with swatch icons
-        color_combo = QComboBox()
-        color_combo.setIconSize(QSize(16, 16))
-        for cn in self._color_names_from_config():
-            argb = self._color_argb_by_name(cn)
-            icon = self._color_swatch_icon(argb) if argb else QIcon()
-            color_combo.addItem(icon, cn)
-        ci = color_combo.findText(color)
-        if ci >= 0:
-            color_combo.setCurrentIndex(ci)
-        self._groups_tab_table.setCellWidget(row, 1, color_combo)
+        # Color picker button with grid popup
+        colors = self._config.get("colors", PT_DEFAULT_COLORS)
+        color_picker = ColorPickerButton(colors, self._groups_tab_table)
+        color_picker.setCurrentColor(color)
+        self._groups_tab_table.setCellWidget(row, 1, color_picker)
 
         # Gain-linked checkbox (centered)
         chk = QCheckBox()
@@ -240,8 +235,8 @@ class GroupsMixin:
             name = name_item.text().strip()
             if not name:
                 continue
-            color_combo = self._groups_tab_table.cellWidget(row, 1)
-            color = color_combo.currentText() if color_combo else ""
+            color_picker = self._groups_tab_table.cellWidget(row, 1)
+            color = color_picker.currentColor() if color_picker else ""
             chk_container = self._groups_tab_table.cellWidget(row, 2)
             gain_linked = False
             if chk_container:
@@ -369,7 +364,7 @@ class GroupsMixin:
         vh = table.verticalHeader()
         n = table.rowCount()
         # Build visual order → logical index mapping
-        visual_to_logical = sorted(range(n), key=lambda i: vh.visualIndex(i))
+        visual_to_logical = sorted(range(n), key=vh.visualIndex)
         ordered: list[dict] = []
         for log_idx in visual_to_logical:
             name_item = table.item(log_idx, 0)
@@ -379,7 +374,7 @@ class GroupsMixin:
             if not name:
                 continue
             cc = table.cellWidget(log_idx, 1)
-            color = cc.currentText() if cc else ""
+            color = cc.currentColor() if cc else ""
             chk_c = table.cellWidget(log_idx, 2)
             gl = False
             if chk_c:

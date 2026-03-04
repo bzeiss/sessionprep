@@ -22,7 +22,7 @@ class LengthConsistencyDetector(SessionDetector):
             "<br/><br/>"
             "<b>Results</b><br/>"
             "<b>OK</b> – File length matches the session's most common length.<br/>"
-            "<b>PROBLEM</b> – Length differs (reported with sample count and duration)."
+            "<b>INFO</b> – Length differs (reported with sample count and duration)."
             "<br/><br/>"
             "<b>Interpretation</b><br/>"
             "In a well-prepared session all stems should have the same length "
@@ -77,7 +77,7 @@ class LengthConsistencyDetector(SessionDetector):
                 eq_fmt = format_duration(int(eq), int(most_common_sr))
                 results.append(DetectorResult(
                     detector_id=self.id,
-                    severity=Severity.PROBLEM,
+                    severity=Severity.INFO,
                     summary=f"length mismatch ({int(eq)} samples / {eq_fmt})",
                     data={
                         "expected_samples": int(most_common_len),

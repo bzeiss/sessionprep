@@ -13,7 +13,7 @@ from PySide6.QtCore import QByteArray, QMimeData, QPoint, Qt, Signal
 from PySide6.QtGui import QColor, QDrag, QPixmap
 from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QTreeWidget, QTreeWidgetItem
 
-from ..theme import COLORS, FILE_COLOR_OK
+from ..theme import COLORS, FILE_COLOR_OK, FILE_COLOR_ERROR, FILE_COLOR_WARNING
 from .operations import channel_label, used_channels
 
 if TYPE_CHECKING:
@@ -46,14 +46,17 @@ class InputTree(QTreeWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._source_dir: str | None = None
 
         self.setColumnCount(5)
         self.setHeaderLabels(["File", "Ch", "SR", "Bit", "Duration"])
         self.header().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         h = self.header()
-        h.setSectionResizeMode(COL_NAME, QHeaderView.Stretch)
+        h.setSectionsMovable(True)
+        h.setSectionResizeMode(COL_NAME, QHeaderView.Interactive)
+        self.setColumnWidth(COL_NAME, 380)
         for col in (COL_CH, COL_SR, COL_BIT, COL_DUR):
-            h.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+            h.setSectionResizeMode(col, QHeaderView.Interactive)
 
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -66,6 +69,9 @@ class InputTree(QTreeWidget):
 
         self.itemSelectionChanged.connect(self._enforce_single_level)
         self._enforcing = False
+
+    def set_source_dir(self, path: str | None):
+        self._source_dir = path
 
     # ------------------------------------------------------------------
     # Single-level selection
@@ -128,10 +134,25 @@ class InputTree(QTreeWidget):
                 for ch in range(track.channels)
             )
 
-            file_color = _DIM if all_used else FILE_COLOR_OK
+            # Check for Phase 1 detector warnings/suggestions
+            p1_warnings = []
+            for det_id, res in track.detector_results.items():
+                if res.severity and res.severity.name != "CLEAN":
+                    p1_warnings.append(res.summary)
+
+            if p1_warnings:
+                file_color = FILE_COLOR_WARNING
+            else:
+                file_color = _DIM if all_used else FILE_COLOR_OK
 
             file_item = QTreeWidgetItem()
-            file_item.setText(COL_NAME, track.filename)
+
+            display_name = track.filename
+            if p1_warnings:
+                display_name += f"  [{', '.join(p1_warnings)}]"
+                file_item.setToolTip(COL_NAME, "\\n".join(p1_warnings))
+
+            file_item.setText(COL_NAME, display_name)
             file_item.setForeground(COL_NAME, file_color)
             file_item.setText(COL_CH, str(track.channels))
             file_item.setForeground(COL_CH, _DIM)
@@ -218,15 +239,29 @@ class InputTree(QTreeWidget):
         self.verticalScrollBar().setValue(state.get("scroll", 0))
 
     # ------------------------------------------------------------------
+    # Search
+    # ------------------------------------------------------------------
+
+    def find_item(self, filename: str) -> QTreeWidgetItem | None:
+        """Find the top-level file item matching `filename`."""
+        for i in range(self.topLevelItemCount()):
+            item = self.topLevelItem(i)
+            data = item.data(COL_NAME, Qt.UserRole)
+            if data and data[0] == "file" and data[1] == filename:
+                return item
+        return None
+
+    # ------------------------------------------------------------------
     # Drag support
     # ------------------------------------------------------------------
 
     def mimeTypes(self):
-        return [MIME_CHANNEL]
+        return [MIME_CHANNEL, "text/uri-list"]
 
     def mimeData(self, items):
-        """Encode dragged items as JSON list of channel descriptors."""
+        """Encode dragged items as JSON list of channel descriptors, and text/uri-list."""
         payload = []
+        filenames = set()
         for item in items:
             data = item.data(COL_NAME, Qt.UserRole)
             if not data:
@@ -238,8 +273,10 @@ class InputTree(QTreeWidget):
                     "source_channel": ch,
                     "drag_type": "channel",
                 })
+                filenames.add(filename)
             elif data[0] == "file":
                 _, filename = data
+                filenames.add(filename)
                 # Encode all channels of this file
                 for i in range(item.childCount()):
                     child = item.child(i)
@@ -250,12 +287,22 @@ class InputTree(QTreeWidget):
                             "source_channel": cd[2],
                             "drag_type": "file",
                         })
-        if not payload:
+        if not payload and not filenames:
             return None
 
         mime = QMimeData()
-        mime.setData(MIME_CHANNEL,
-                     QByteArray(json.dumps(payload).encode("utf-8")))
+
+        if payload:
+            mime.setData(MIME_CHANNEL,
+                         QByteArray(json.dumps(payload).encode("utf-8")))
+
+        if filenames and self._source_dir:
+            import os
+            from PySide6.QtCore import QUrl
+            urls = [QUrl.fromLocalFile(os.path.join(self._source_dir, f))
+                    for f in filenames]
+            mime.setUrls(urls)
+
         return mime
 
     def startDrag(self, supportedActions):

@@ -28,7 +28,7 @@ def matches_keywords(filename: str, keywords: list[str]) -> bool:
         # Exact match mode: keyword ending with '$'
         if kw_lower.endswith('$'):
             exact_pattern = kw_lower[:-1]  # Remove the '$'
-            if fname_lower == exact_pattern or fname_lower == exact_pattern + '.wav':
+            if fname_lower in (exact_pattern, exact_pattern + '.wav'):
                 return True
         # Glob pattern mode: contains * or ?
         elif '*' in kw_lower or '?' in kw_lower:

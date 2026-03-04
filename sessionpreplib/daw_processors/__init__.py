@@ -20,16 +20,16 @@ def create_runtime_daw_processors(
 ) -> list[DawProcessor]:
     """Create configured processor instances for runtime use.
 
-    ProTools always yields a single instance.  DAWProject expands
-    into one instance per configured template.  Processors that are
-    disabled via their ``*_enabled`` config key are excluded.
+    Both Pro Tools and DAWProject expand into one instance per configured
+    template. Processors that are disabled via their ``*_enabled`` config 
+    key are excluded.
     """
     processors: list[DawProcessor] = []
 
-    pt = ProToolsDawProcessor()
-    pt.configure(flat_config)
-    if pt.enabled:
-        processors.append(pt)
+    for inst in ProToolsDawProcessor.create_instances(flat_config):
+        inst.configure(flat_config)
+        if inst.enabled:
+            processors.append(inst)
 
     for inst in DawProjectDawProcessor.create_instances(flat_config):
         inst.configure(flat_config)

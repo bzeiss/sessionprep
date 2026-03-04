@@ -48,14 +48,6 @@
     GUI panel, DAWproject/PTSL/JSON export.
     ```
 
-### Visual Feedback in Setup Table
-
-  - priority: high
-    ```md
-    Show processed vs original file status in setup table (badges/tooltips).
-    Currently no visual indication of which file will be transferred.
-    ```
-
 ### Unit Tests — Detectors
 
   - priority: high
@@ -96,14 +88,6 @@
     ```md
     Rollback last transfer/sync batch using DawCommand.undo_params.
     Data model ready; execution not implemented.
-    ```
-
-### ProTools sync()
-
-  - priority: high
-    ```md
-    Incremental delta push — currently raises NotImplementedError.
-    Compare current session state against transfer() snapshot; send only changes.
     ```
 
 ### GUI DAW Tools Panel
@@ -314,9 +298,9 @@
 
 ## In Development
 
+## Done
+
 ### InnoSetup Installer
 
   - defaultExpanded: false
-
-## Done
 

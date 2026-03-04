@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 """Analysis mixin: open/save/load session, analyze, prepare, session config tab."""
 
 from __future__ import annotations
@@ -42,10 +43,10 @@ from ..tracks.table_widgets import (
     _PHASE_ANALYSIS, _PHASE_TOPOLOGY, _PHASE_SETUP,
 )
 from ..theme import COLORS, FILE_COLOR_OK, FILE_COLOR_ERROR
-from .worker import AnalyzeWorker, PrepareWorker
+from .worker import AnalyzeWorker, PrepareWorker, Phase1AnalyzeWorker
 
 
-class AnalysisMixin:
+class AnalysisMixin:  # pylint: disable=too-few-public-methods
     """Session lifecycle: open, save, load, analyze, prepare, session config tab.
 
     Mixed into ``SessionPrepWindow`` — not meant to be used standalone.
@@ -112,7 +113,7 @@ class AnalysisMixin:
             idx = self._session_stack.addWidget(page)
             self._session_page_index[id(tree_item)] = idx
 
-        self._session_dawproject_templates_widget = build_config_pages(
+        self._session_daw_custom_widgets = build_config_pages(
             self._session_tree,
             self._active_preset(),
             self._session_widgets,
@@ -152,13 +153,13 @@ class AnalysisMixin:
         """Inner loader — sets widget values without triggering column refresh."""
         load_config_widgets(
             self._session_widgets, preset,
-            self._session_dawproject_templates_widget)
+            self._session_daw_custom_widgets)
 
     def _read_session_config(self) -> dict[str, Any]:
         """Read current session widget values into a structured config dict."""
         return read_config_widgets(
             self._session_widgets,
-            self._session_dawproject_templates_widget,
+            self._session_daw_custom_widgets,
             fallback_daw_sections=self._active_preset().get(
                 "daw_processors", {}),
         )
@@ -181,29 +182,75 @@ class AnalysisMixin:
 
     # ── Slots: file / analysis ────────────────────────────────────────────
 
-    @Slot()
-    def _on_open_path(self):
-        start_dir = self._config.get("app", {}).get("default_project_dir", "") or ""
-        path = QFileDialog.getExistingDirectory(
-            self, "Select Session Directory", start_dir,
-            QFileDialog.ShowDirsOnly,
-        )
-        if not path:
-            return
+    def _cancel_worker(self, worker_attr: str) -> None:
+        """Safely detach and cancel a background worker to avoid QThread GC destruction."""
+        worker = getattr(self, worker_attr, None)
+        if worker is not None:
+            if hasattr(worker, "isRunning") and worker.isRunning():
+                # Disconnect all signals so it stops updating UI
+                try:
+                    worker.disconnect()
+                except RuntimeError:
+                    pass
+                worker.requestInterruption()
+                # Maintain python reference until it finishes so it doesn't get GC'd
+                if not hasattr(self, "_zombie_workers"):
+                    self._zombie_workers = set()
+                self._zombie_workers.add(worker)
 
+                # Cleanup reference once finished
+                def _cleanup(*args, w=worker):
+                    if hasattr(self, "_zombie_workers"):
+                        self._zombie_workers.discard(w)
+
+                if hasattr(worker, "finished"):
+                    worker.finished.connect(_cleanup)
+                if hasattr(worker, "error"):
+                    worker.error.connect(_cleanup)
+            setattr(self, worker_attr, None)
+
+    def _clear_workspace(self):
+        """Clear the UI and reset session state."""
         self._on_stop()
-        self._source_dir = path
-        self._topology_dir = None
-        self._track_table.set_source_dir(path)
+        self._cancel_worker("_p1_worker")
+        self._cancel_worker("_worker")
+        self._cancel_worker("_batch_reanalyze_worker")
+        self._cancel_worker("_prepare_worker")
         self._session = None
         self._summary = None
         self._current_track = None
+        self._topology_dir = None
+        self._source_dir = None
+        self._topo_source_tracks = []
+        self._topo_topology = None
 
-        # Reset UI
+        if getattr(self, "_topo_input_tree", None) is not None:
+            self._topo_input_tree.clear()
+            self._topo_input_tree.set_source_dir(None)
+        if getattr(self, "_topo_output_tree", None) is not None:
+            self._topo_output_tree.clear()
+        if getattr(self, "_topo_status_label", None) is not None:
+            self._topo_status_label.clear()
+        if getattr(self, "_topo_apply_action", None) is not None:
+            self._topo_apply_action.setEnabled(False)
+
+        if getattr(self, "_analyze_action", None) is not None:
+            self._analyze_action.setEnabled(False)
+        if getattr(self, "_topo_reanalyze_action", None) is not None:
+            self._topo_reanalyze_action.setEnabled(False)
+        if getattr(self, "_topo_reset_action", None) is not None:
+            self._topo_reset_action.setEnabled(False)
+        if getattr(self, "_save_session_action", None) is not None:
+            self._save_session_action.setEnabled(False)
+
+        if getattr(self, "_waveform", None) is not None:
+            self._waveform.set_audio(None, 44100)
+
         self._phase_tabs.setCurrentIndex(_PHASE_TOPOLOGY)
         self._phase_tabs.setTabEnabled(_PHASE_ANALYSIS, False)
         self._phase_tabs.setTabEnabled(_PHASE_SETUP, False)
         self._track_table.setRowCount(0)
+        self._track_table.set_source_dir(None)
         self._setup_table.setRowCount(0)
         self._summary_view.clear()
         self._file_report.clear()
@@ -215,11 +262,36 @@ class AnalysisMixin:
         self._detail_tabs.setTabEnabled(_TAB_SESSION, False)
         self._detail_tabs.setCurrentIndex(_TAB_SUMMARY)
         self._right_stack.setCurrentIndex(_PAGE_TABS)
-        self._session_config = None  # reset session overrides for new directory
+        self._session_config = None
         self._session_groups = []
         self._groups_tab_table.setRowCount(0)
         self._folder_tree.clear()
-        self._setup_right_stack.setCurrentIndex(0)  # placeholder page
+        self._setup_right_stack.setCurrentIndex(0)
+        self._project_name_edit.clear()
+        self.setWindowTitle("SessionPrep")
+
+    @Slot()
+    def _on_open_path(self):
+        start_dir = self._config.get("app", {}).get("default_project_dir", "") or ""
+        path = QFileDialog.getExistingDirectory(
+            self, "Select Session Directory", start_dir,
+            QFileDialog.ShowDirsOnly,
+        )
+        if not path:
+            return
+
+        self._load_directory(path)
+
+    @Slot()
+    def _on_topo_reanalyze(self):
+        if self._source_dir:
+            self._load_directory(self._source_dir)
+
+    def _load_directory(self, path: str):
+        self._clear_workspace()
+        self._source_dir = path
+        self._track_table.set_source_dir(path)
+        self._topo_input_tree.set_source_dir(path)
 
         app_cfg = self._config.get("app", {})
         skip_folders = {
@@ -253,21 +325,59 @@ class AnalysisMixin:
         # Preserve original source tracks for Phase 1 topology input table
         self._topo_source_tracks = list(tracks)
 
-        # Phase 1 topology stored separately from session so Prepare
-        # doesn't confuse original-source references with Phase 1 outputs.
-        self._topo_topology = build_default_topology(tracks)
+        # Phase 1 topology will be built intelligently after analysis finishes.
+        self._topo_topology = None
 
         # Create session with discovered tracks (no topology on session)
         self._session = SessionContext(tracks=tracks, config={})
 
-        # Populate Phase 1 topology tables
+        self._run_phase1_analysis()
+
+    def _run_phase1_analysis(self):
+        """Asynchronously run Phase 1 format and structural checks on newly loaded tracks."""
+        self._analyze_action.setEnabled(False)
+        if getattr(self, "_topo_apply_action", None):
+            self._topo_apply_action.setEnabled(False)
+
+        self._progress_label.setText("Analyzing Format & Layout\u2026")
+        self._right_stack.setCurrentIndex(_PAGE_PROGRESS)
+        self._progress_bar.setRange(0, 0)
+
+        config = self._flat_config()
+        config["_source_dir"] = self._source_dir
+
+        self._p1_worker = Phase1AnalyzeWorker(self._session, config)
+        self._p1_worker.progress.connect(self._on_worker_progress)
+        self._p1_worker.progress_value.connect(self._on_worker_progress_value)
+        self._p1_worker.finished.connect(self._on_phase1_done)
+        self._p1_worker.error.connect(self._on_analyze_error)
+        self._p1_worker.start()
+
+    @Slot(object)
+    def _on_phase1_done(self, session):
+        self._session = session
+        if self._p1_worker is not None:
+            self._p1_worker.deleteLater()
+            self._p1_worker = None
+
+        # Rebuild topology intelligently using Phase 1 results
+        self._topo_topology = build_default_topology(session.tracks)
+
+        # Populate Phase 1 topology tables using Phase 1 output issues
         self._populate_topology_tab()
 
         self._analyze_action.setEnabled(True)
+        if getattr(self, "_topo_reanalyze_action", None) is not None:
+            self._topo_reanalyze_action.setEnabled(True)
+        if getattr(self, "_topo_reset_action", None) is not None:
+            self._topo_reset_action.setEnabled(True)
+
         self._status_bar.showMessage(
-            f"Discovered {len(tracks)} file(s) from {path} — "
-            "edit topology, then click Apply"
+            f"Discovered {len(session.tracks)} file(s) from {self._source_dir} \u2014 "
+            "review layout, then click Apply"
         )
+        self._right_stack.setCurrentIndex(_PAGE_TABS)
+        self._save_session_action.setEnabled(True)
         self.setWindowTitle("SessionPrep")
 
     @Slot()
@@ -282,28 +392,48 @@ class AnalysisMixin:
         )
         if not path:
             return
+
         try:
-            _save_session_file(path, {
-                "source_dir": self._source_dir,
-                "active_config_preset": self._active_config_preset_name,
-                "session_config": self._session_config,
-                "session_groups": self._session_groups,
-                "daw_state": self._session.daw_state,
-                "tracks": self._session.tracks,
-                "topology": self._topo_topology,
-                "transfer_manifest": self._session.transfer_manifest,
-                "topology_applied": self._topology_dir is not None,
-                "prepare_state": self._session.prepare_state,
-                "base_transfer_manifest": self._session.base_transfer_manifest,
-                "use_processed": self._use_processed_cb.isChecked(),
-                "recursive_scan": self._recursive_scan,
-            })
+            state = self._capture_session_state()
+            _save_session_file(path, state)
             self._status_bar.showMessage(f"Session saved to {path}")
         except Exception as exc:
             QMessageBox.critical(
                 self, "Save Session Failed",
                 f"Could not save session:\n\n{exc}",
             )
+
+    def _capture_session_state(self) -> dict:
+        """Capture the current session state into a dictionary."""
+        # Ensure we capture all active edits from the session settings widgets
+        if not getattr(self, "_loading_session_widgets", False):
+            self._session_config = self._read_session_config()
+
+        # Ensure project name is synced from widget
+        if self._session:
+            self._session.project_name = self._project_name_edit.text().strip()
+
+        active_dp_id = getattr(self, "_active_daw_processor", None)
+        active_dp_id = active_dp_id.id if active_dp_id else None
+
+        return {
+            "source_dir": self._source_dir,
+            "active_config_preset": self._active_config_preset_name,
+            "session_config": self._session_config,
+            "session_groups": self._session_groups,
+            "daw_state": self._session.daw_state if self._session else {},
+            "active_daw_processor_id": active_dp_id,
+            "tracks": self._session.tracks if self._session else [],
+            "output_tracks": getattr(self._session, "output_tracks", []) if self._session else [],
+            "topology": self._topo_topology,
+            "transfer_manifest": self._session.transfer_manifest if self._session else [],
+            "topology_applied": self._topology_dir is not None,
+            "prepare_state": self._session.prepare_state if self._session else "none",
+            "base_transfer_manifest": self._session.base_transfer_manifest if self._session else [],
+            "use_processed": self._use_processed_cb.isChecked(),
+            "recursive_scan": self._recursive_scan,
+            "project_name": self._session.project_name if self._session else "",
+        }
 
     @Slot()
     def _on_load_session(self):
@@ -326,6 +456,10 @@ class AnalysisMixin:
             )
             return
 
+        self._restore_session_state(data)
+
+    def _restore_session_state(self, data: dict):
+        """Restore session state from a dictionary."""
         source_dir = data["source_dir"]
         if not os.path.isdir(source_dir):
             QMessageBox.warning(
@@ -336,9 +470,8 @@ class AnalysisMixin:
             return
 
         # ── Reset UI (same as _on_open_path but without auto-analyze) ────────
-        self._on_stop()
+        self._clear_workspace()
         self._source_dir = source_dir
-        self._topology_dir = None
         self._track_table.set_source_dir(source_dir)
 
         # Re-discover original source tracks for Phase 1 topology input table
@@ -364,32 +497,18 @@ class AnalysisMixin:
         self._topo_source_tracks = source_tracks
         self._topo_topology = data.get("topology")
 
-        self._session = None
-        self._summary = None
-        self._current_track = None
-
-        self._phase_tabs.setCurrentIndex(_PHASE_TOPOLOGY)
-        self._phase_tabs.setTabEnabled(_PHASE_ANALYSIS, False)
-        self._phase_tabs.setTabEnabled(_PHASE_SETUP, False)
-        self._track_table.setRowCount(0)
-        self._setup_table.setRowCount(0)
-        self._summary_view.clear()
-        self._file_report.clear()
-        self._wf_container.setVisible(False)
-        self._play_btn.setEnabled(False)
-        self._stop_btn.setEnabled(False)
-        self._detail_tabs.setTabEnabled(_TAB_FILE, False)
-        self._detail_tabs.setTabEnabled(_TAB_GROUPS, False)
-        self._detail_tabs.setTabEnabled(_TAB_SESSION, False)
-        self._detail_tabs.setCurrentIndex(_TAB_SUMMARY)
-        self._right_stack.setCurrentIndex(_PAGE_TABS)
-        self._groups_tab_table.setRowCount(0)
-
         # ── Restore session-level state ───────────────────────────────────────
         preset_name = data.get("active_config_preset", "Default")
         self._active_config_preset_name = preset_name
         self._session_config = data.get("session_config")
         self._session_groups = data.get("session_groups", [])
+
+        if self._session_config:
+            self._load_session_widgets(self._session_config)
+
+        # Ensure the DAW processors and combo reflect the newly loaded session config
+        self._configure_daw_processors()
+        self._populate_daw_combo()
 
         # ── Reconstruct SessionContext from saved tracks ──────────────────────
         from sessionpreplib.models import SessionContext
@@ -438,9 +557,16 @@ class AnalysisMixin:
             prepare_state=data.get("prepare_state", "none"),
             transfer_manifest=data.get("transfer_manifest", []),
             base_transfer_manifest=data.get("base_transfer_manifest", []),
+            project_name=data.get("project_name", ""),
         )
 
         self._session = session
+
+        # Restore project name widget
+        self._project_name_edit.blockSignals(True)
+        self._project_name_edit.setText(session.project_name)
+        self._project_name_edit.blockSignals(False)
+
         self._summary = build_diagnostic_summary(session)
 
         # ── Populate file list in track table ─────────────────────────────────
@@ -470,17 +596,15 @@ class AnalysisMixin:
             if os.path.isdir(topo_dir):
                 self._topology_dir = topo_dir
 
-        # ── Reconstruct output_tracks from topology + disk ───────────────
-        # output_tracks are not persisted in the session file, but the DAW
-        # transfer needs them for file paths.  Rebuild from topology entries
-        # and the files that exist on disk.
-        if self._topology_dir and self._topo_topology:
+        # ── Restore or reconstruct output_tracks ───────────────
+        if data.get("output_tracks"):
+            session.output_tracks = data["output_tracks"]
+        elif self._topology_dir and self._topo_topology:
             import soundfile as sf
             prep_folder = self._config.get("app", {}).get(
                 "phase2_output_folder", "sp_02_prepared")
             prep_dir = os.path.join(source_dir, prep_folder)
-            # Build group lookup from transfer manifest so output_tracks
-            # carry the group for folder-tree coloring and DAW transfer.
+            # Build group lookup from transfer manifest
             manifest_group: dict[str, str | None] = {
                 e.output_filename: e.group
                 for e in session.transfer_manifest
@@ -534,6 +658,17 @@ class AnalysisMixin:
             session.config["_use_processed"] = True
             self._use_processed_cb.setChecked(True)
         self._update_use_processed_action()
+
+        # ── Restore active DAW processor ──────────────────────────────────────
+        active_daw_id = data.get("active_daw_processor_id")
+        if active_daw_id:
+            for i in range(self._daw_combo.count()):
+                idx = self._daw_combo.itemData(i)
+                if idx is not None and idx < len(self._daw_processors):
+                    if self._daw_processors[idx].id == active_daw_id:
+                        self._daw_combo.setCurrentIndex(i)
+                        break
+
         self._update_daw_lifecycle_buttons()
         # Show folder tree if daw_state already has assignments
         if has_manifest and self._active_daw_processor:
@@ -750,11 +885,17 @@ class AnalysisMixin:
         if self._session and self._session.topology and not self._topo_topology:
             self._topo_topology = self._session.topology
 
+        # Preserve project name across analysis runs
+        current_project_name = self._project_name_edit.text().strip()
+        session.project_name = current_project_name
+
         self._session = session
         self._summary = summary
         self._analyze_action.setEnabled(True)
         self._track_table.setVisible(True)
-        self._worker = None
+        if self._worker is not None:
+            self._worker.deleteLater()
+            self._worker = None
 
         if not self._session_groups:
             # First analysis — load from Default group preset
@@ -834,7 +975,9 @@ class AnalysisMixin:
     def _on_analyze_error(self, message: str):
         self._analyze_action.setEnabled(True)
         self._track_table.setVisible(True)
-        self._worker = None
+        if self._worker is not None:
+            self._worker.deleteLater()
+            self._worker = None
 
         from ..helpers import esc
 
@@ -895,7 +1038,9 @@ class AnalysisMixin:
 
     @Slot()
     def _on_prepare_done(self):
-        self._prepare_worker = None
+        if self._prepare_worker is not None:
+            self._prepare_worker.deleteLater()
+            self._prepare_worker = None
         self._update_prepare_button()
         self._update_use_processed_action()
 
@@ -929,7 +1074,9 @@ class AnalysisMixin:
 
     @Slot(str)
     def _on_prepare_error(self, message: str):
-        self._prepare_worker = None
+        if self._prepare_worker is not None:
+            self._prepare_worker.deleteLater()
+            self._prepare_worker = None
         self._prepare_action.setEnabled(True)
         self._prepare_progress.fail(message)
         self._status_bar.showMessage(f"Prepare failed: {message}")

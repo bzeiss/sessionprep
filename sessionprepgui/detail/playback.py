@@ -42,6 +42,7 @@ class PlaybackController(QObject):
 
     def play(self, audio_data, samplerate: int, start_sample: int = 0,
              mode: str = "as_is", channel: int | None = None):
+        # pylint: disable=too-many-positional-arguments
         """Start playback from the given sample position.
 
         Parameters

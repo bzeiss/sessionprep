@@ -8,7 +8,7 @@ list references input files and specifies per-channel routing with gain.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .models import TrackContext
@@ -72,11 +72,40 @@ def sum_to_mono(source_channels: int) -> list[ChannelRoute]:
 # ---------------------------------------------------------------------------
 
 def build_default_topology(tracks: list[TrackContext]) -> TopologyMapping:
-    """All-passthrough: each OK input track maps 1:1, preserving all channels."""
+    """Intelligent topology builder consulting Phase 1 detector results."""
     entries: list[TopologyEntry] = []
     for track in tracks:
         if track.status != "OK":
             continue
+            
+        # Consult detector results if any component has a topology recommendation
+        action = None
+        action_ch = 0
+        
+        if track.detector_results:
+            for res in track.detector_results.values():
+                act = res.data.get("topology_action")
+                if act:
+                    action = act
+                    if act == "extract_channel":
+                        action_ch = res.data.get("topology_channel", 0)
+                    if act == "drop":
+                        break  # 'drop' is highest priority, stop checking others
+                    
+        if action == "drop":
+            continue
+            
+        if action == "extract_channel":
+            entries.append(TopologyEntry(
+                output_filename=track.filename,
+                output_channels=1,
+                sources=[TopologySource(
+                    input_filename=track.filename,
+                    routes=extract_channel(action_ch),
+                )],
+            ))
+            continue
+
         entries.append(TopologyEntry(
             output_filename=track.filename,
             output_channels=track.channels,
@@ -120,8 +149,7 @@ def resolve_entry_audio(
     for src in entry.sources:
         audio, _sr = track_audio[src.input_filename]
         n = audio.shape[0]
-        if n > max_samples:
-            max_samples = n
+        max_samples = max(max_samples, n)
 
     if max_samples == 0:
         if entry.output_channels == 1:

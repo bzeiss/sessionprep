@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 # ---------------------------------------------------------------------------
 
 @runtime_checkable
-class ParamSpec(Protocol):
+class ParamSpec(Protocol):  # pylint: disable=too-few-public-methods
     key: str
     label: str
     type: type

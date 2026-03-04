@@ -36,7 +36,7 @@ from sessionpreplib.topology import (
 # Version & migration table
 # ---------------------------------------------------------------------------
 
-CURRENT_VERSION: int = 4
+CURRENT_VERSION: int = 6
 
 # Each entry upgrades from key-version to key+1.
 _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
@@ -55,6 +55,16 @@ _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
         **d,
         "recursive_scan": False,
         "version": 4,
+    },
+    4: lambda d: {
+        **d,
+        "project_name": "",
+        "version": 5,
+    },
+    5: lambda d: {
+        **d,
+        "output_tracks": {},
+        "version": 6,
     },
 }
 
@@ -165,7 +175,7 @@ def _make_json_safe(obj: Any) -> Any:
         return [_make_json_safe(v) for v in obj]
     if isinstance(obj, float):
         # Handle inf / nan
-        if obj != obj or obj == float("inf") or obj == float("-inf"):
+        if obj != obj or obj == float("inf") or obj == float("-inf"):  # pylint: disable=comparison-with-itself
             return None
         return obj
     if hasattr(obj, "value"):  # Enum
@@ -219,6 +229,45 @@ def _deserialize_track(filename: str, source_dir: str, d: dict) -> TrackContext:
         duration_sec=d.get("duration_sec", 0.0),
         status=status,
     )
+    track.group = d.get("group")
+    track.classification_override = d.get("classification_override")
+    track.rms_anchor_override = d.get("rms_anchor_override")
+    track.processor_skip = set(d.get("processor_skip", []))
+    track.detector_results = {
+        k: _deser_detector_result(v)
+        for k, v in d.get("detector_results", {}).items()
+    }
+    track.processor_results = {
+        k: _deser_processor_result(v)
+        for k, v in d.get("processor_results", {}).items()
+    }
+    return track
+
+
+def _serialize_output_track(track: TrackContext) -> dict:
+    d = _serialize_track(track)
+    d["filepath"] = track.filepath
+    d["processed_filepath"] = track.processed_filepath
+    return d
+
+
+def _deserialize_output_track(filename: str, d: dict) -> TrackContext:
+    filepath = d.get("filepath", filename)
+    status = d.get("status", "OK")
+
+    track = TrackContext(
+        filename=filename,
+        filepath=filepath,
+        audio_data=None,
+        samplerate=d.get("samplerate", 0),
+        channels=d.get("channels", 0),
+        total_samples=d.get("total_samples", 0),
+        bitdepth=d.get("bitdepth", ""),
+        subtype=d.get("subtype", ""),
+        duration_sec=d.get("duration_sec", 0.0),
+        status=status,
+    )
+    track.processed_filepath = d.get("processed_filepath")
     track.group = d.get("group")
     track.classification_override = d.get("classification_override")
     track.rms_anchor_override = d.get("rms_anchor_override")
@@ -326,15 +375,11 @@ def _deser_transfer_entry(d: dict) -> TransferEntry:
 # Public API
 # ---------------------------------------------------------------------------
 
-def save_session(path: str, data: dict) -> None:
-    """Serialise *data* to a ``.spsession`` JSON file at *path*.
-
-    *data* is the raw dict assembled by the mainwindow (already plain-Python
-    types except for ``TrackContext`` objects under ``"tracks"``).
-    """
-    payload: dict[str, Any] = {
+def serialize_session_state(data: dict) -> dict:
+    """Serialise a raw session state dict to a JSON-safe dict."""
+    return {
         "version": CURRENT_VERSION,
-        "source_dir": data["source_dir"],
+        "source_dir": data.get("source_dir", ""),
         "active_config_preset": data.get("active_config_preset", "Default"),
         "session_config": data.get("session_config"),
         "session_groups": data.get("session_groups", []),
@@ -342,6 +387,10 @@ def save_session(path: str, data: dict) -> None:
         "tracks": {
             track.filename: _serialize_track(track)
             for track in data.get("tracks", [])
+        },
+        "output_tracks": {
+            track.filename: _serialize_output_track(track)
+            for track in data.get("output_tracks", [])
         },
         "topology": _ser_topology(data.get("topology")),
         "transfer_manifest": [
@@ -356,37 +405,24 @@ def save_session(path: str, data: dict) -> None:
         ],
         "use_processed": data.get("use_processed", False),
         "recursive_scan": data.get("recursive_scan", False),
+        "project_name": data.get("project_name", ""),
+        "active_daw_processor_id": data.get("active_daw_processor_id"),
     }
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh, indent=2, ensure_ascii=False)
 
-
-def load_session(path: str) -> dict:
-    """Load and migrate a ``.spsession`` file.
-
-    Returns a plain dict with keys:
-    - ``source_dir`` (str)
-    - ``active_config_preset`` (str)
-    - ``session_config`` (dict | None)
-    - ``session_groups`` (list)
-    - ``daw_state`` (dict)
-    - ``tracks`` (list[TrackContext]) — audio_data is None; filepath validated
-
-    Raises ``ValueError`` on version mismatch or missing required fields.
-    Raises ``json.JSONDecodeError`` / ``OSError`` on file errors.
-    """
-    with open(path, "r", encoding="utf-8") as fh:
-        raw = json.load(fh)
-
+def deserialize_session_state(raw: dict) -> dict:
+    """Deserialize a JSON-safe dict back into a session state dict."""
     raw = _migrate(raw)
 
     source_dir = raw.get("source_dir", "")
-    if not source_dir:
-        raise ValueError("Session file is missing 'source_dir'.")
 
     tracks = [
         _deserialize_track(fname, source_dir, tdata)
         for fname, tdata in raw.get("tracks", {}).items()
+    ]
+
+    output_tracks = [
+        _deserialize_output_track(fname, tdata)
+        for fname, tdata in raw.get("output_tracks", {}).items()
     ]
 
     topology = _deser_topology(raw.get("topology"))
@@ -402,6 +438,7 @@ def load_session(path: str) -> dict:
         "session_groups": raw.get("session_groups", []),
         "daw_state": raw.get("daw_state", {}),
         "tracks": tracks,
+        "output_tracks": output_tracks,
         "topology": topology,
         "transfer_manifest": transfer_manifest,
         "topology_applied": raw.get("topology_applied", False),
@@ -412,4 +449,40 @@ def load_session(path: str) -> dict:
         ],
         "use_processed": raw.get("use_processed", False),
         "recursive_scan": raw.get("recursive_scan", False),
+        "project_name": raw.get("project_name", ""),
+        "active_daw_processor_id": raw.get("active_daw_processor_id"),
     }
+
+def save_session(path: str, data: dict) -> None:
+    """Serialise *data* to a ``.spsession`` JSON file at *path*.
+
+    *data* is the raw dict assembled by the mainwindow (already plain-Python
+    types except for ``TrackContext`` objects under ``"tracks"``).
+    """
+    payload = serialize_session_state(data)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2, ensure_ascii=False)
+
+
+def load_session(path: str) -> dict:
+    """Load and migrate a ``.spsession`` file.
+
+    Returns a plain dict with keys:
+    - ``source_dir`` (str)
+    - ``active_config_preset`` (str)
+    - ``session_config`` (dict | None)
+    - ``session_groups`` (list)
+    - ``daw_state`` (dict)
+    - ``tracks`` (list[TrackContext]) — audio_data is None; filepath validated
+    - ``project_name`` (str)
+
+    Raises ``ValueError`` on version mismatch or missing required fields.
+    Raises ``json.JSONDecodeError`` / ``OSError`` on file errors.
+    """
+    with open(path, "r", encoding="utf-8") as fh:
+        raw = json.load(fh)
+
+    if not raw.get("source_dir"):
+        raise ValueError("Session file is missing 'source_dir'.")
+
+    return deserialize_session_state(raw)

@@ -3,14 +3,10 @@ name = "sessionprep"
 dynamic = ["version"]
 description = "Batch audio analyzer and normalizer for mix session preparation"
 readme = "README.md"
-license = {text = "GPL-3.0-or-later"}
+license = { text = "GPL-3.0-or-later" }
 requires-python = ">=3.13,<3.14"
 
-dependencies = [
-    "numpy>=1.26",
-    "soundfile>=0.12",
-    "scipy>=1.12",
-]
+dependencies = ["numpy>=1.26", "soundfile>=0.12", "scipy>=1.12"]
 
 [project.scripts]
 sessionprep = "sessionprep:process_files"
@@ -28,7 +24,12 @@ path = "sessionpreplib/_version.py"
 [tool.hatch.build.targets.wheel]
 packages = ["sessionpreplib", "sessionprepgui"]
 # Include the CLI script at the top level
-include = ["sessionpreplib/**", "sessionprepgui/**", "sessionprep.py", "sessionprep-gui.py"]
+include = [
+    "sessionpreplib/**",
+    "sessionprepgui/**",
+    "sessionprep.py",
+    "sessionprep-gui.py",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -39,7 +40,10 @@ cli = ["rich>=13.0"]
 gui = [
     "PySide6>=6.10.2",
     "sounddevice>=0.5.5",
-    "py-ptsl>=600.2.0",
+    # FIXME: grpcio has no ARM64 Windows wheel and cannot be compiled from
+    # source with MSVC on ARM64 (grpc/grpc#39362, grpc/grpc#39624).
+    # Remove the platform_machine marker once grpcio publishes win_arm64 wheels.
+    "py-ptsl>=600.2.0; platform_machine != 'ARM64'",
     "dawproject @ git+https://github.com/roex-audio/dawproject-py.git@70e65aeb7b260cfec3871ca89ca8d80022c44496",
 ]
 
@@ -53,4 +57,5 @@ dev = [
     "zstandard>=0.25.0",
     "rich>=13.0",
     "patchelf>=0.17.2.4; sys_platform != 'win32'",
+    "pylint>=4.0.5",
 ]

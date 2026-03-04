@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 
-from .config import ParamSpec
+from .models import ParamSpec
 from .models import ProcessorResult, TrackContext
 
 
@@ -84,7 +84,6 @@ class AudioProcessor(ABC):
         Does NOT mutate audio_data. Returns a ProcessorResult.
         Used in both dry-run and execute mode.
         """
-        ...
 
     def render_html(self, result: ProcessorResult, track: TrackContext | None = None,
                     *, verbose: bool = False) -> str:
@@ -118,4 +117,3 @@ class AudioProcessor(ABC):
         Returns the modified audio array.
         Only called in execute mode.
         """
-        ...

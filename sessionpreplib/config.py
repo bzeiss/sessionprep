@@ -2,21 +2,50 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 from dataclasses import dataclass
 from typing import Any
+
+from .models import ParamSpec
 
 PRESET_SCHEMA_VERSION = "1.0"
 
 # Keys that are internal/CLI-only and should not be saved in presets
 _INTERNAL_KEYS = {
-    "execute", "overwrite", "output_folder", "backup",
-    "report", "json", "_source_dir",
+    "execute",
+    "overwrite",
+    "output_folder",
+    "backup",
+    "report",
+    "json",
+    "_source_dir",
 }
+
+
+def get_app_dir() -> str:
+    """Return the OS-specific configuration directory for SessionPrep."""
+    system = platform.system()
+    if system == "Windows":
+        base = os.environ.get("APPDATA")
+        if not base:
+            base = os.path.expanduser("~")
+        return os.path.join(base, "sessionprep")
+    if system == "Darwin":
+        return os.path.join(
+            os.path.expanduser("~"),
+            "Library",
+            "Application Support",
+            "sessionprep",
+        )
+    # Linux / BSD / …
+    base = os.environ.get("XDG_CONFIG_HOME")
+    if not base:
+        base = os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.join(base, "sessionprep")
 
 
 class ConfigError(Exception):
     """Raised when configuration validation fails."""
-    pass
 
 
 @dataclass
@@ -28,33 +57,10 @@ class ConfigFieldError:
         value:   The offending value.
         message: Human-readable explanation of what is wrong.
     """
+
     key: str
     value: Any
     message: str
-
-
-@dataclass(frozen=True)
-class ParamSpec:
-    """Declarative specification for a single configuration parameter.
-
-    Used by detectors, processors, and the shared analysis / session
-    sections to describe their parameters — including type, default,
-    valid range, allowed values, and human-readable labels.
-    """
-    key: str
-    type: type | tuple              # expected Python type(s)
-    default: Any
-    label: str                       # short UI label
-    description: str = ""            # longer tooltip / help text
-    min: float | int | None = None   # inclusive lower bound (unless min_exclusive)
-    max: float | int | None = None   # inclusive upper bound (unless max_exclusive)
-    min_exclusive: bool = False
-    max_exclusive: bool = False
-    choices: list | None = None      # allowed string values
-    item_type: type | None = None    # element type for list fields
-    nullable: bool = False           # True if None is valid
-    presentation_only: bool = False  # True → changing this key never requires re-analysis
-    widget_hint: str | None = None   # rendering hint for the GUI widget factory (never read by the library)
 
 
 def default_config() -> dict[str, Any]:
@@ -104,7 +110,12 @@ def merge_configs(*configs: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for cfg in configs:
         for k, v in cfg.items():
-            if k in _LIST_KEYS and k in result and isinstance(result[k], list) and isinstance(v, list):
+            if (
+                k in _LIST_KEYS
+                and k in result
+                and isinstance(result[k], list)
+                and isinstance(v, list)
+            ):
                 result[k] = result[k] + v
             else:
                 result[k] = v
@@ -122,19 +133,25 @@ def load_preset(path: str) -> dict[str, Any]:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except json.JSONDecodeError as e:
-        raise ConfigError(f"Invalid JSON in preset file {path}: {e}")
+        raise ConfigError(f"Invalid JSON in preset file {path}: {e}") from e
     except OSError as e:
-        raise ConfigError(f"Cannot read preset file {path}: {e}")
+        raise ConfigError(f"Cannot read preset file {path}: {e}") from e
 
     if not isinstance(data, dict):
-        raise ConfigError(f"Preset file must contain a JSON object, got {type(data).__name__}")
+        raise ConfigError(
+            f"Preset file must contain a JSON object, got {type(data).__name__}"
+        )
 
     # Strip metadata keys — they are informational, not config
-    preset = {k: v for k, v in data.items() if k not in ("schema_version", "_description")}
+    preset = {
+        k: v for k, v in data.items() if k not in ("schema_version", "_description")
+    }
     return preset
 
 
-def save_preset(config: dict[str, Any], path: str, *, description: str | None = None) -> None:
+def save_preset(
+    config: dict[str, Any], path: str, *, description: str | None = None
+) -> None:
     """
     Save a config dict as a JSON preset file.
     Internal/CLI-only keys are excluded automatically.
@@ -165,18 +182,25 @@ def save_preset(config: dict[str, Any], path: str, *, description: str | None = 
 
 ANALYSIS_PARAMS: list[ParamSpec] = [
     ParamSpec(
-        key="window", type=int, default=400, min=1,
+        key="window",
+        type=int,
+        default=400,
+        min=1,
         label="RMS window size (ms)",
         description="Momentary-loudness window used for RMS analysis.",
     ),
     ParamSpec(
-        key="stereo_mode", type=str, default="avg",
+        key="stereo_mode",
+        type=str,
+        default="avg",
         choices=["avg", "sum"],
         label="Stereo RMS mode",
         description="How left/right channels are combined for RMS.",
     ),
     ParamSpec(
-        key="rms_anchor", type=str, default="percentile",
+        key="rms_anchor",
+        type=str,
+        default="percentile",
         choices=["percentile", "max"],
         label="RMS anchor strategy",
         description=(
@@ -190,8 +214,13 @@ ANALYSIS_PARAMS: list[ParamSpec] = [
         ),
     ),
     ParamSpec(
-        key="rms_percentile", type=(int, float), default=95.0,
-        min=0.0, max=100.0, min_exclusive=True, max_exclusive=True,
+        key="rms_percentile",
+        type=(int, float),
+        default=95.0,
+        min=0.0,
+        max=100.0,
+        min_exclusive=True,
+        max_exclusive=True,
         label="RMS percentile",
         description=(
             "Which percentile of the gated RMS window distribution to use as "
@@ -203,7 +232,10 @@ ANALYSIS_PARAMS: list[ParamSpec] = [
         ),
     ),
     ParamSpec(
-        key="gate_relative_db", type=(int, float), default=40.0, min=0.0,
+        key="gate_relative_db",
+        type=(int, float),
+        default=40.0,
+        min=0.0,
         label="Relative gate (dB)",
         description=(
             "RMS windows more than this many dB below the loudest window are "
@@ -215,7 +247,9 @@ ANALYSIS_PARAMS: list[ParamSpec] = [
         ),
     ),
     ParamSpec(
-        key="dbfs_convention", type=str, default="standard",
+        key="dbfs_convention",
+        type=str,
+        default="standard",
         choices=["standard", "aes17"],
         label="dBFS convention",
         description=(
@@ -225,7 +259,9 @@ ANALYSIS_PARAMS: list[ParamSpec] = [
     ),
     # -- Global processing defaults ------------------------------------------
     ParamSpec(
-        key="fader_headroom_db", type=(int, float), default=8.0,
+        key="fader_headroom_db",
+        type=(int, float),
+        default=8.0,
         min=0.0,
         label="Fader headroom (dB)",
         description=(
@@ -244,7 +280,9 @@ ANALYSIS_PARAMS: list[ParamSpec] = [
 
 PRESENTATION_PARAMS: list[ParamSpec] = [
     ParamSpec(
-        key="show_clean_detectors", type=bool, default=False,
+        key="show_clean_detectors",
+        type=bool,
+        default=False,
         presentation_only=True,
         label="Show clean detector results",
         description=(
@@ -260,6 +298,7 @@ PRESENTATION_PARAMS: list[ParamSpec] = [
 # ---------------------------------------------------------------------------
 # Validation  (ParamSpec-driven)
 # ---------------------------------------------------------------------------
+
 
 def validate_param_values(
     params: list[ParamSpec],
@@ -283,76 +322,103 @@ def validate_param_values(
         if value is None:
             if spec.nullable:
                 continue
-            errors.append(ConfigFieldError(
-                spec.key, value,
-                f"{spec.label} must not be empty.",
-            ))
+            errors.append(
+                ConfigFieldError(
+                    spec.key,
+                    value,
+                    f"{spec.label} must not be empty.",
+                )
+            )
             continue
 
         # -- type (bool ⊄ int guard) --
         expected = spec.type
         if expected is not bool and isinstance(value, bool):
-            errors.append(ConfigFieldError(
-                spec.key, value,
-                f"{spec.label} must be {_type_label(expected)}, got boolean.",
-            ))
+            errors.append(
+                ConfigFieldError(
+                    spec.key,
+                    value,
+                    f"{spec.label} must be {_type_label(expected)}, got boolean.",
+                )
+            )
             continue
         if not isinstance(value, expected):
-            errors.append(ConfigFieldError(
-                spec.key, value,
-                f"{spec.label} must be {_type_label(expected)}, "
-                f"got {type(value).__name__}.",
-            ))
+            errors.append(
+                ConfigFieldError(
+                    spec.key,
+                    value,
+                    f"{spec.label} must be {_type_label(expected)}, "
+                    f"got {type(value).__name__}.",
+                )
+            )
             continue
 
         # -- choices --
         if spec.choices is not None and value not in spec.choices:
             opts = ", ".join(repr(c) for c in spec.choices)
-            errors.append(ConfigFieldError(
-                spec.key, value,
-                f"{spec.label} must be one of {opts}.",
-            ))
+            errors.append(
+                ConfigFieldError(
+                    spec.key,
+                    value,
+                    f"{spec.label} must be one of {opts}.",
+                )
+            )
             continue
 
         # -- numeric range --
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             if spec.min is not None:
                 if spec.min_exclusive and value <= spec.min:
-                    errors.append(ConfigFieldError(
-                        spec.key, value,
-                        f"{spec.label} must be greater than {spec.min}.",
-                    ))
+                    errors.append(
+                        ConfigFieldError(
+                            spec.key,
+                            value,
+                            f"{spec.label} must be greater than {spec.min}.",
+                        )
+                    )
                     continue
                 if not spec.min_exclusive and value < spec.min:
-                    errors.append(ConfigFieldError(
-                        spec.key, value,
-                        f"{spec.label} must be at least {spec.min}.",
-                    ))
+                    errors.append(
+                        ConfigFieldError(
+                            spec.key,
+                            value,
+                            f"{spec.label} must be at least {spec.min}.",
+                        )
+                    )
                     continue
             if spec.max is not None:
                 if spec.max_exclusive and value >= spec.max:
-                    errors.append(ConfigFieldError(
-                        spec.key, value,
-                        f"{spec.label} must be less than {spec.max}.",
-                    ))
+                    errors.append(
+                        ConfigFieldError(
+                            spec.key,
+                            value,
+                            f"{spec.label} must be less than {spec.max}.",
+                        )
+                    )
                     continue
                 if not spec.max_exclusive and value > spec.max:
-                    errors.append(ConfigFieldError(
-                        spec.key, value,
-                        f"{spec.label} must be at most {spec.max}.",
-                    ))
+                    errors.append(
+                        ConfigFieldError(
+                            spec.key,
+                            value,
+                            f"{spec.label} must be at most {spec.max}.",
+                        )
+                    )
                     continue
 
         # -- list items --
         if spec.item_type is not None and isinstance(value, list):
             for i, item in enumerate(value):
                 if not isinstance(item, spec.item_type):
-                    errors.append(ConfigFieldError(
-                        spec.key, value,
-                        f"{spec.label}[{i}] must be "
-                        f"{spec.item_type.__name__}, "
-                        f"got {type(item).__name__}.",
-                    ))
+                    errors.append(
+                        ConfigFieldError(
+                            spec.key,
+                            value,
+                            f"{spec.label}[{i}] must be "
+                            f"{spec.item_type.__name__}, "
+                            f"got {type(item).__name__}.",
+                        )
+                    )
                     break
 
     return errors
@@ -403,6 +469,7 @@ def validate_config(config: dict[str, Any]) -> None:
 # Structured config  (GUI config file format)
 # ---------------------------------------------------------------------------
 
+
 def build_structured_defaults() -> dict[str, Any]:
     """Build a structured config dict with all defaults, organized by section.
 
@@ -448,8 +515,11 @@ def build_structured_defaults() -> dict[str, Any]:
         # DAWProject: include templates list default
         if dp.id == "dawproject":
             structured["daw_processors"].setdefault(dp.id, {})
-            structured["daw_processors"][dp.id].setdefault(
-                "dawproject_templates", [])
+            structured["daw_processors"][dp.id].setdefault("dawproject_templates", [])
+        # Pro Tools: include templates list default
+        elif dp.id == "protools":
+            structured["daw_processors"].setdefault(dp.id, {})
+            structured["daw_processors"][dp.id].setdefault("protools_templates", [])
 
     return structured
 
@@ -520,9 +590,12 @@ def validate_structured_config(
     errors: list[ConfigFieldError] = []
 
     # Analysis section
-    errors.extend(validate_param_values(
-        ANALYSIS_PARAMS, structured.get("analysis", {}),
-    ))
+    errors.extend(
+        validate_param_values(
+            ANALYSIS_PARAMS,
+            structured.get("analysis", {}),
+        )
+    )
 
     # Detector sections
     det_map = {d.id: d for d in default_detectors()}
@@ -532,9 +605,13 @@ def validate_structured_config(
         if det is None or not isinstance(section, dict):
             continue
         for err in validate_param_values(det.config_params(), section):
-            errors.append(ConfigFieldError(
-                f"detectors.{det_id}.{err.key}", err.value, err.message,
-            ))
+            errors.append(
+                ConfigFieldError(
+                    f"detectors.{det_id}.{err.key}",
+                    err.value,
+                    err.message,
+                )
+            )
 
     # Processor sections
     proc_map = {p.id: p for p in default_processors()}
@@ -544,9 +621,13 @@ def validate_structured_config(
         if proc is None or not isinstance(section, dict):
             continue
         for err in validate_param_values(proc.config_params(), section):
-            errors.append(ConfigFieldError(
-                f"processors.{proc_id}.{err.key}", err.value, err.message,
-            ))
+            errors.append(
+                ConfigFieldError(
+                    f"processors.{proc_id}.{err.key}",
+                    err.value,
+                    err.message,
+                )
+            )
 
     # DAW Processor sections
     dp_map = {dp.id: dp for dp in default_daw_processors()}
@@ -556,9 +637,13 @@ def validate_structured_config(
         if dp is None or not isinstance(section, dict):
             continue
         for err in validate_param_values(dp.config_params(), section):
-            errors.append(ConfigFieldError(
-                f"daw_processors.{dp_id}.{err.key}", err.value, err.message,
-            ))
+            errors.append(
+                ConfigFieldError(
+                    f"daw_processors.{dp_id}.{err.key}",
+                    err.value,
+                    err.message,
+                )
+            )
 
     return errors
 

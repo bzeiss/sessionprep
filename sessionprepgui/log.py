@@ -20,15 +20,17 @@ import os
 import sys
 import time
 
-_ENABLED: bool | None = None
+class _LogConfig:  # pylint: disable=too-few-public-methods
+    """Encapsulates the global debug logging configuration state."""
+    enabled: bool | None = None
 
-
-def _is_enabled() -> bool:
-    global _ENABLED
-    if _ENABLED is None:
-        val = os.environ.get("SP_DEBUG", "").strip().lower()
-        _ENABLED = val in ("1", "true")
-    return _ENABLED
+    @classmethod
+    def is_enabled(cls) -> bool:
+        """Check if SP_DEBUG is active, caching the result."""
+        if cls.enabled is None:
+            val = os.environ.get("SP_DEBUG", "").strip().lower()
+            cls.enabled = val in ("1", "true")
+        return cls.enabled
 
 
 def _caller_name() -> str:
@@ -57,7 +59,7 @@ def dbg(msg: str) -> None:
     Automatically detects the calling class or module name.
     Format: ``[HH:MM:SS.mmm ClassName] message``
     """
-    if not _is_enabled():
+    if not _LogConfig.is_enabled():
         return
     t = time.strftime("%H:%M:%S")
     ms = int((time.time() % 1) * 1000)

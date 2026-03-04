@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 """Output-tracks tree widget for Phase 1 topology.
 
 Editable QTreeWidget that displays topology output entries with channel
@@ -28,6 +29,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from sessionpreplib.topology import ChannelRoute, TopologySource
+
 from ..theme import COLORS, FILE_COLOR_OK
 from .input_tree import MIME_CHANNEL, COL_NAME, COL_CH, COL_SR, COL_BIT, COL_DUR
 from .operations import (
@@ -48,8 +51,6 @@ from .operations import (
     wire_channel,
     wire_file,
 )
-
-from sessionpreplib.topology import ChannelRoute, TopologySource
 
 if TYPE_CHECKING:
     from sessionpreplib.models import TrackContext
@@ -83,9 +84,11 @@ class OutputTree(QTreeWidget):
         self.setHeaderLabels(["File", "Ch", "SR", "Bit", "Duration"])
         self.header().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         h = self.header()
-        h.setSectionResizeMode(COL_NAME, QHeaderView.Stretch)
+        h.setSectionsMovable(True)
+        h.setSectionResizeMode(COL_NAME, QHeaderView.Interactive)
+        self.setColumnWidth(COL_NAME, 380)
         for col in (COL_CH, COL_SR, COL_BIT, COL_DUR):
-            h.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+            h.setSectionResizeMode(col, QHeaderView.Interactive)
 
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.itemDoubleClicked.connect(self._on_double_click)
@@ -430,6 +433,23 @@ class OutputTree(QTreeWidget):
                                              source_channel):
                         self._set_row_bg(src_item, hl)
 
+    def find_item_for_source(self, input_filename: str) -> QTreeWidgetItem | None:
+        """Return the first output item (file, channel, or source) referencing `input_filename`."""
+        for i in range(self.topLevelItemCount()):
+            fi = self.topLevelItem(i)
+            # Check the output file itself
+            if self._item_references(fi, input_filename, None):
+                return fi
+            for j in range(fi.childCount()):
+                ch_item = fi.child(j)
+                if self._item_references(ch_item, input_filename, None):
+                    return ch_item
+                for k in range(ch_item.childCount()):
+                    src_item = ch_item.child(k)
+                    if self._item_references(src_item, input_filename, None):
+                        return src_item
+        return None
+
     def clear_highlights(self) -> None:
         """Remove all usage-highlight backgrounds."""
         for i in range(self.topLevelItemCount()):
@@ -602,14 +622,17 @@ class OutputTree(QTreeWidget):
             self.viewport().update()
 
     def paintEvent(self, event):
-        super().paintEvent(event)
-        if self._insert_line_y is not None:
-            painter = QPainter(self.viewport())
-            pen = QPen(QColor(255, 255, 255, 200), 2)
-            painter.setPen(pen)
-            w = self.viewport().width()
-            painter.drawLine(0, self._insert_line_y, w, self._insert_line_y)
-            painter.end()
+        try:
+            super().paintEvent(event)
+            if self._insert_line_y is not None:
+                painter = QPainter(self.viewport())
+                pen = QPen(QColor(255, 255, 255, 200), 2)
+                painter.setPen(pen)
+                w = self.viewport().width()
+                painter.drawLine(0, self._insert_line_y, w, self._insert_line_y)
+                painter.end()
+        except KeyboardInterrupt:
+            pass
 
     # ------------------------------------------------------------------
     # Drop handling
@@ -701,7 +724,7 @@ class OutputTree(QTreeWidget):
             if int(event.position().y()) > mid:
                 to_ch += 1
             return to_fn, to_ch
-        elif target_data[0] == "file":
+        if target_data[0] == "file":
             to_fn = target_data[1]
             entry = next((e for e in self._topo.entries
                           if e.output_filename == to_fn), None)
@@ -738,7 +761,7 @@ class OutputTree(QTreeWidget):
 
         if from_fn == to_fn:
             # Same file — simple reorder
-            if from_ch == to_ch or from_ch + 1 == to_ch:
+            if to_ch in (from_ch, from_ch + 1):
                 event.ignore()
                 return
             # Adjust for the "insert before" semantic: if inserting after
@@ -1083,7 +1106,22 @@ class OutputTree(QTreeWidget):
     def _action_remove_output(self, output_filename: str):
         if not self._topo:
             return
-        remove_output(self._topo, output_filename)
+            
+        items = self.selectedItems()
+        selected_files = set()
+        for item in items:
+            data = item.data(COL_NAME, Qt.UserRole)
+            if data and data[0] == "file":
+                selected_files.add(data[1])
+                
+        if output_filename in selected_files:
+            # The clicked item is part of the selection; remove all selected files
+            for fn in selected_files:
+                remove_output(self._topo, fn)
+        else:
+            # The clicked item is NOT part of the selection; remove only it
+            remove_output(self._topo, output_filename)
+            
         self.topology_modified.emit()
 
     def _action_clear_channel(self, output_filename: str, target_ch: int):
