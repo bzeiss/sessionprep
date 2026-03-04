@@ -18,17 +18,17 @@ jobs:
             name: Linux arm64
             suffix: linux-arm64
           - os: macos-15
-            name: macOS Apple Silicon
+            name: macOS Apple arm64
             suffix: macos-arm64
           - os: macos-15-intel
-            name: macOS Intel
+            name: macOS x64
             suffix: macos-x64
           - os: windows-latest
             name: Windows x64
             suffix: win-x64
-          - os: windows-11-arm
-            name: Windows arm64
-            suffix: win-arm64
+    #          - os: windows-11-arm
+    #            name: Windows arm64
+    #            suffix: win-arm64
 
     steps:
       - uses: actions/checkout@v4
