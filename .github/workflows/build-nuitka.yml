@@ -20,7 +20,7 @@ jobs:
           - os: macos-15
             name: macOS Apple Silicon
             suffix: macos-arm64
-          - os: macos-15-large
+          - os: macos-15-intel
             name: macOS Intel
             suffix: macos-x64
           - os: windows-latest
@@ -75,12 +75,14 @@ jobs:
         if: matrix.suffix != 'win-arm64'
         run: uv sync --extra cli --extra gui
 
-      - name: Install Dependencies (ARM64 short cache)
+      - name: Install Dependencies (ARM64 — clang-cl)
         if: matrix.suffix == 'win-arm64'
         run: uv sync --extra cli --extra gui
         env:
-          # Shorten cache path on ARM64 to avoid MSVC C1083 with deeply
-          # nested grpcio source paths (no pre-built wheel available).
+          # Use clang-cl instead of MSVC cl.exe — handles long paths and
+          # ARM64 codegen better (grpcio has no pre-built wheel for ARM64).
+          CC: clang-cl
+          CXX: clang-cl
           UV_CACHE_DIR: C:\c
 
       - name: Disable Windows Defender for build directory
