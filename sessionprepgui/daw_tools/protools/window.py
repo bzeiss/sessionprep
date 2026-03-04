@@ -72,12 +72,18 @@ class ProToolsUtilsWindow(QDialog):
     # ── Connection management ────────────────────────────────────────
 
     def _toggle_on_top(self, checked: bool):
+        geo = self.geometry()
         was_visible = self.isVisible()
+        flags = self.windowFlags()
         if checked:
-            self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+            flags |= Qt.WindowStaysOnTopHint
         else:
-            self.setWindowFlags(self.windowFlags() & ~Qt.WindowStaysOnTopHint)
+            flags &= ~Qt.WindowStaysOnTopHint
+        # Ensure standard title-bar buttons survive the flag change
+        flags |= Qt.WindowCloseButtonHint | Qt.WindowMinMaxButtonsHint
+        self.setWindowFlags(flags)
         if was_visible:
+            self.setGeometry(geo)
             self.show()
 
     def _toggle_connection(self):
