@@ -97,7 +97,14 @@ jobs:
           sudo apt-get update -q && sudo apt-get install -y nfpm
 
           VERSION="${{ steps.version.outputs.ver }}"
-          export VERSION DIST_DIR=dist_nuitka
+          SUFFIX="${{ matrix.suffix }}"
+          # Map matrix suffix to nfpm arch (deb/rpm format)
+          case "$SUFFIX" in
+            linux-x64)   NFPM_ARCH=amd64 ;;
+            linux-arm64) NFPM_ARCH=arm64 ;;
+            *)           NFPM_ARCH=amd64 ;;
+          esac
+          export VERSION SUFFIX NFPM_ARCH DIST_DIR=dist_nuitka
 
           # Merge GUI dist into CLI dist so we have a single unified distribution directory
           # This prevents nfpm from throwing "content collision" errors
