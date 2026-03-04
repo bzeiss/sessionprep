@@ -167,4 +167,8 @@ jobs:
           name: sessionprep-${{ matrix.suffix }}
           path: |
             dist_nuitka/sessionprep-*.*
+            !dist_nuitka/sessionprep-*.build
+            !dist_nuitka/sessionprep-*.build/**
+            !dist_nuitka/sessionprep-*.dist
+            !dist_nuitka/sessionprep-*.dist/**
           if-no-files-found: error
