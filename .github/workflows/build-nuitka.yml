@@ -72,11 +72,16 @@ jobs:
           git config --system core.longpaths true
 
       - name: Install Dependencies
+        if: matrix.suffix != 'win-arm64'
+        run: uv sync --extra cli --extra gui
+
+      - name: Install Dependencies (ARM64 short cache)
+        if: matrix.suffix == 'win-arm64'
         run: uv sync --extra cli --extra gui
         env:
           # Shorten cache path on ARM64 to avoid MSVC C1083 with deeply
           # nested grpcio source paths (no pre-built wheel available).
-          UV_CACHE_DIR: ${{ matrix.suffix == 'win-arm64' && 'C:\c' || '' }}
+          UV_CACHE_DIR: C:\c
 
       - name: Disable Windows Defender for build directory
         if: runner.os == 'Windows'
