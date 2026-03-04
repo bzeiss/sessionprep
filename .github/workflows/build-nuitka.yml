@@ -64,8 +64,19 @@ jobs:
             ${{ runner.os }}-${{ matrix.suffix }}-nuitka-${{ hashFiles('**/uv.lock') }}-
             ${{ runner.os }}-${{ matrix.suffix }}-nuitka-
 
+      - name: Enable Windows Long Paths (ARM64 grpcio fix)
+        if: matrix.suffix == 'win-arm64'
+        shell: pwsh
+        run: |
+          reg add HKLM\SYSTEM\CurrentControlSet\Control\FileSystem /v LongPathsEnabled /t REG_DWORD /d 1 /f
+          git config --system core.longpaths true
+
       - name: Install Dependencies
         run: uv sync --extra cli --extra gui
+        env:
+          # Shorten cache path on ARM64 to avoid MSVC C1083 with deeply
+          # nested grpcio source paths (no pre-built wheel available).
+          UV_CACHE_DIR: ${{ matrix.suffix == 'win-arm64' && 'C:\c' || '' }}
 
       - name: Disable Windows Defender for build directory
         if: runner.os == 'Windows'
