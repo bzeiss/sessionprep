@@ -26,9 +26,9 @@ jobs:
           - os: windows-latest
             name: Windows x64
             suffix: win-x64
-    #          - os: windows-11-arm
-    #            name: Windows arm64
-    #            suffix: win-arm64
+          - os: windows-11-arm
+            name: Windows arm64
+            suffix: win-arm64
 
     steps:
       - uses: actions/checkout@v4
@@ -71,18 +71,27 @@ jobs:
           reg add HKLM\SYSTEM\CurrentControlSet\Control\FileSystem /v LongPathsEnabled /t REG_DWORD /d 1 /f
           git config --system core.longpaths true
 
+      - name: Install system OpenSSL & zlib (ARM64 grpcio build)
+        if: matrix.suffix == 'win-arm64'
+        shell: pwsh
+        run: |
+          vcpkg install openssl:arm64-windows zlib:arm64-windows
+          $root = "$env:VCPKG_INSTALLATION_ROOT\installed\arm64-windows"
+          echo "INCLUDE=$root\include;$env:INCLUDE" >> $env:GITHUB_ENV
+          echo "LIB=$root\lib;$env:LIB" >> $env:GITHUB_ENV
+
       - name: Install Dependencies
         if: matrix.suffix != 'win-arm64'
         run: uv sync --extra cli --extra gui
 
-      - name: Install Dependencies (ARM64 — clang-cl)
+      - name: Install Dependencies (ARM64 — system SSL)
         if: matrix.suffix == 'win-arm64'
         run: uv sync --extra cli --extra gui
         env:
-          # Use clang-cl instead of MSVC cl.exe — handles long paths and
-          # ARM64 codegen better (grpcio has no pre-built wheel for ARM64).
-          CC: clang-cl
-          CXX: clang-cl
+          # Bypass BoringSSL compilation (no ARM64 ASM support) —
+          # link against system OpenSSL/zlib from vcpkg instead.
+          GRPC_PYTHON_BUILD_SYSTEM_OPENSSL: "1"
+          GRPC_PYTHON_BUILD_SYSTEM_ZLIB: "1"
           UV_CACHE_DIR: C:\c
 
       - name: Disable Windows Defender for build directory
