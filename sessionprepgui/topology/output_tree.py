@@ -622,14 +622,17 @@ class OutputTree(QTreeWidget):
             self.viewport().update()
 
     def paintEvent(self, event):
-        super().paintEvent(event)
-        if self._insert_line_y is not None:
-            painter = QPainter(self.viewport())
-            pen = QPen(QColor(255, 255, 255, 200), 2)
-            painter.setPen(pen)
-            w = self.viewport().width()
-            painter.drawLine(0, self._insert_line_y, w, self._insert_line_y)
-            painter.end()
+        try:
+            super().paintEvent(event)
+            if self._insert_line_y is not None:
+                painter = QPainter(self.viewport())
+                pen = QPen(QColor(255, 255, 255, 200), 2)
+                painter.setPen(pen)
+                w = self.viewport().width()
+                painter.drawLine(0, self._insert_line_y, w, self._insert_line_y)
+                painter.end()
+        except KeyboardInterrupt:
+            pass
 
     # ------------------------------------------------------------------
     # Drop handling
