@@ -193,10 +193,12 @@ class Pipeline:
 
     def analyze_phase1(self, session: SessionContext) -> SessionContext:
         """Run structural/formatting detectors for track layout and validation."""
+        log.info("Pipeline: analyze phase1 (%d tracks)", len(session.tracks))
         return self._run_analysis_phase(session, LifecyclePhase.PHASE1)
 
     def analyze_phase2(self, session: SessionContext) -> SessionContext:
         """Run acoustic and DSP-based detectors."""
+        log.info("Pipeline: analyze phase2 (%d tracks)", len(session.tracks))
         return self._run_analysis_phase(session, LifecyclePhase.PHASE2)
 
     # ------------------------------------------------------------------
@@ -241,6 +243,7 @@ class Pipeline:
         Per-track processors run in parallel using a thread pool.
         Group levelling and fader offsets run after all tracks complete.
         """
+        log.info("Pipeline: plan (%d tracks)", len(session.tracks))
         total = len(session.tracks)
         ok_items = [
             (idx, track)
@@ -422,6 +425,7 @@ class Pipeline:
             The same session with ``output_tracks``, ``transfer_manifest``,
             and ``prepare_state`` updated.
         """
+        log.info("Pipeline: prepare (%d tracks) -> %s", len(session.tracks), output_dir)
         from .topology import (
             build_default_topology,
             resolve_entry_audio,

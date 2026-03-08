@@ -85,6 +85,9 @@ def setup_logging(level: int | None = None) -> None:
         sh.setFormatter(formatter)
         root.addHandler(sh)
 
+    # Visual separator so restarts are easy to find in long log files
+    root.info("===================================================================")
+
 
 def _level_from_env() -> int:
     """Determine log level from ``SP_LOG_LEVEL``."""

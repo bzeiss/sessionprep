@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import logging
 import os
+
+log = logging.getLogger(__name__)
 from typing import Any
 
 from PySide6.QtCore import Qt, Slot, QSize, QTimer
@@ -348,6 +351,7 @@ class DawMixin:  # pylint: disable=too-few-public-methods
     def _on_daw_fetch(self):
         if not self._active_daw_processor or not self._session:
             return
+        log.info("DAW fetch: %s", self._active_daw_processor.name)
         self._fetch_action.setEnabled(False)
         # Skip pre-flight connectivity check so template cache hits are instant
         self._do_daw_fetch()
@@ -456,6 +460,9 @@ class DawMixin:  # pylint: disable=too-few-public-methods
         import os
         if not self._active_daw_processor or not self._session:
             return
+        log.info("DAW transfer: %s (%d tracks)",
+                 self._active_daw_processor.name,
+                 len(self._session.transfer_manifest))
 
         # 1. Project Name Validation
         project_name = self._project_name_edit.text().strip()
@@ -595,9 +602,11 @@ class DawMixin:  # pylint: disable=too-few-public-methods
             worker.deleteLater()
         self._update_daw_lifecycle_buttons()
         if ok:
+            log.info("DAW transfer complete")
             self._transfer_progress.finish(message)
             self._status_bar.showMessage(message)
         else:
+            log.error("DAW transfer failed: %s", message)
             self._transfer_progress.fail(message)
             self._status_bar.showMessage(f"Transfer failed: {message}")
 

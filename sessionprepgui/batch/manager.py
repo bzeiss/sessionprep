@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 from PySide6.QtCore import QObject, Signal, Slot
 from sessionpreplib.models import SessionContext
@@ -41,6 +44,7 @@ class BatchManager(QObject):
     def start_batch(self, items: list[BatchItem]):
         if self._running or not items:
             return
+        log.info("Batch start: %d items", len(items))
 
         self._queue = items
         self._current_index = 0
