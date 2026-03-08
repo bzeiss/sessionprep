@@ -5,11 +5,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
 
-try:
-    from sessionprepgui.log import dbg
-except ImportError:
-    def dbg(msg: str) -> None:  # type: ignore[misc]
-        pass
+import logging
+
+log = logging.getLogger(__name__)
 
 import numpy as np
 
@@ -111,7 +109,7 @@ class Pipeline:
                 t0 = time.perf_counter()
                 result = det.analyze(track)
                 dt = (time.perf_counter() - t0) * 1000
-                dbg(f"detector {det.id} on {track.filename}: {dt:.1f} ms")
+                log.debug(f"detector {det.id} on {track.filename}: {dt:.1f} ms")
                 track.detector_results[det.id] = result
                 self._emit("detector.complete", detector_id=det.id,
                            filename=track.filename,
@@ -125,7 +123,7 @@ class Pipeline:
                     error=str(e),
                 )
         dt_track = (time.perf_counter() - t_track_start) * 1000
-        dbg(f"all detectors on {track.filename}: {dt_track:.1f} ms")
+        log.debug(f"all detectors on {track.filename}: {dt_track:.1f} ms")
         self._emit("track.analyze_complete", filename=track.filename,
                    index=idx, total=total)
 
@@ -158,7 +156,7 @@ class Pipeline:
                                index=0, total=total)
         dt_phase = (time.perf_counter() - t_phase) * 1000
         if n:
-            dbg(f"analyze {phase.value} (track detectors): {n} tracks in "
+            log.debug(f"analyze {phase.value} (track detectors): {n} tracks in "
                 f"{dt_phase:.1f} ms ({dt_phase / n:.1f} ms/track avg)")
 
         # Session-level detectors
@@ -169,7 +167,7 @@ class Pipeline:
                 t0 = time.perf_counter()
                 results = det.analyze(session)
                 dt = (time.perf_counter() - t0) * 1000
-                dbg(f"session detector {det.id}: {dt:.1f} ms")
+                log.debug(f"session detector {det.id}: {dt:.1f} ms")
                 session.config[f"_session_det_{det.id}"] = results
                 # Distribute per-track results back into each track
                 for result in results:
@@ -195,10 +193,12 @@ class Pipeline:
 
     def analyze_phase1(self, session: SessionContext) -> SessionContext:
         """Run structural/formatting detectors for track layout and validation."""
+        log.info("Pipeline: analyze phase1 (%d tracks)", len(session.tracks))
         return self._run_analysis_phase(session, LifecyclePhase.PHASE1)
 
     def analyze_phase2(self, session: SessionContext) -> SessionContext:
         """Run acoustic and DSP-based detectors."""
+        log.info("Pipeline: analyze phase2 (%d tracks)", len(session.tracks))
         return self._run_analysis_phase(session, LifecyclePhase.PHASE2)
 
     # ------------------------------------------------------------------
@@ -217,7 +217,7 @@ class Pipeline:
                 t0 = time.perf_counter()
                 result = proc.process(track)
                 dt = (time.perf_counter() - t0) * 1000
-                dbg(f"processor {proc.id} on {track.filename}: {dt:.1f} ms")
+                log.debug(f"processor {proc.id} on {track.filename}: {dt:.1f} ms")
                 track.processor_results[proc.id] = result
                 self._emit("processor.complete", processor_id=proc.id,
                            filename=track.filename)
@@ -230,7 +230,7 @@ class Pipeline:
                     error=str(e),
                 )
         dt_track = (time.perf_counter() - t_track_start) * 1000
-        dbg(f"all processors on {track.filename}: {dt_track:.1f} ms")
+        log.debug(f"all processors on {track.filename}: {dt_track:.1f} ms")
         self._emit("track.plan_complete", filename=track.filename,
                    index=idx, total=total)
 
@@ -243,6 +243,7 @@ class Pipeline:
         Per-track processors run in parallel using a thread pool.
         Group levelling and fader offsets run after all tracks complete.
         """
+        log.info("Pipeline: plan (%d tracks)", len(session.tracks))
         total = len(session.tracks)
         ok_items = [
             (idx, track)
@@ -267,20 +268,20 @@ class Pipeline:
                                index=0, total=total)
         dt_phase = (time.perf_counter() - t_phase) * 1000
         if n:
-            dbg(f"plan phase (processors): {n} tracks in "
+            log.debug(f"plan phase (processors): {n} tracks in "
                 f"{dt_phase:.1f} ms ({dt_phase / n:.1f} ms/track avg)")
 
         # --- Group gain levelling ---
         t0 = time.perf_counter()
         self._apply_group_levels(session)
         dt = (time.perf_counter() - t0) * 1000
-        dbg(f"group levelling: {dt:.1f} ms")
+        log.debug(f"group levelling: {dt:.1f} ms")
 
         # --- Fader offsets ---
         t0 = time.perf_counter()
         self._compute_fader_offsets(session)
         dt = (time.perf_counter() - t0) * 1000
-        dbg(f"fader offsets: {dt:.1f} ms")
+        log.debug(f"fader offsets: {dt:.1f} ms")
 
         # Store configured processor instances on the session for render-time access
         session.processors = list(self.audio_processors)
@@ -364,7 +365,7 @@ class Pipeline:
                             pr.data["fader_rebalance_shift"] = rebalance_shift
             session.config[f"_fader_rebalance_{proc.id}"] = rebalance_shift
             if rebalance_shift != 0.0:
-                dbg(f"fader rebalance ({proc.id}): shifted {rebalance_shift:+.1f} dB "
+                log.debug(f"fader rebalance ({proc.id}): shifted {rebalance_shift:+.1f} dB "
                     f"(ceiling {ceiling}, headroom {headroom})")
 
             # Anchor-track adjustment (user-selected anchor)
@@ -424,6 +425,7 @@ class Pipeline:
             The same session with ``output_tracks``, ``transfer_manifest``,
             and ``prepare_state`` updated.
         """
+        log.info("Pipeline: prepare (%d tracks) -> %s", len(session.tracks), output_dir)
         from .topology import (
             build_default_topology,
             resolve_entry_audio,

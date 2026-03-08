@@ -13,11 +13,9 @@ import math
 import os
 from typing import Any
 
-try:
-    from sessionprepgui.log import dbg
-except ImportError:
-    def dbg(msg: str) -> None:  # type: ignore[misc]
-        pass
+import logging
+
+log = logging.getLogger(__name__)
 
 
 # ── Low-level request / response ─────────────────────────────────────
@@ -292,10 +290,10 @@ def create_batch_job(engine, name: str, description: str,
                 "cancel_on_failure": False,
             }})
         job_id = (resp or {}).get("id")
-        dbg(f"Batch job created: {job_id}")
+        log.debug(f"Batch job created: {job_id}")
         return job_id
     except Exception as exc:
-        dbg(f"Batch job creation failed: {exc}")
+        log.debug(f"Batch job creation failed: {exc}")
         return None
 
 
@@ -305,9 +303,9 @@ def complete_batch_job(engine, batch_job_id: str) -> None:
     try:
         run_command(engine, pt.CommandId.CId_CompleteBatchJob,
                     {"id": batch_job_id})
-        dbg("Batch job completed")
+        log.debug("Batch job completed")
     except Exception as exc:
-        dbg(f"CompleteBatchJob failed: {exc}")
+        log.debug(f"CompleteBatchJob failed: {exc}")
 
 
 def cancel_batch_job(engine, batch_job_id: str) -> None:
@@ -332,7 +330,7 @@ def batch_import_audio(
     Returns the raw response dict (caller parses clip IDs).
     """
     from ptsl import PTSL_pb2 as pt
-    dbg(f"batch_import_audio: {len(filepaths)} files")
+    log.debug(f"batch_import_audio: {len(filepaths)} files")
     return run_command(
         engine, pt.CommandId.CId_ImportAudioToClipList,
         {"file_list": filepaths},
@@ -477,7 +475,7 @@ def set_track_volume(
     Requires Pro Tools 2025.10+.
     """
     from ptsl import PTSL_pb2 as pt
-    dbg(f"set_track_volume: id={track_id}, value={volume_db}")
+    log.debug(f"set_track_volume: id={track_id}, value={volume_db}")
     try:
         run_command(
             engine, pt.CommandId.CId_SetTrackControlBreakpoints,
@@ -497,7 +495,7 @@ def set_track_volume(
             },
             batch_job_id=batch_job_id, progress=progress)
     except Exception as e:
-        dbg(f"Error in set_track_volume ({track_id}, {volume_db}): {e}")
+        log.debug(f"Error in set_track_volume ({track_id}, {volume_db}): {e}")
         raise
 
 
@@ -520,7 +518,7 @@ def set_track_volume_by_trackname(
     Requires Pro Tools 2025.10+.
     """
     from ptsl import PTSL_pb2 as pt
-    dbg(f"set_track_volume_by_trackname: name={track_name}, value={volume}")
+    log.debug(f"set_track_volume_by_trackname: name={track_name}, value={volume}")
     try:
         run_command(
             engine, pt.CommandId.CId_SetTrackControlBreakpoints,
@@ -540,7 +538,7 @@ def set_track_volume_by_trackname(
             },
             batch_job_id=batch_job_id, progress=progress)
     except Exception as e:
-        dbg(f"Error in set_track_volume_by_trackname ({track_name}, {volume}): {e}")
+        log.debug(f"Error in set_track_volume_by_trackname ({track_name}, {volume}): {e}")
         raise
 
 

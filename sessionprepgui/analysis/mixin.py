@@ -3,6 +3,10 @@
 
 from __future__ import annotations
 
+import logging
+
+log = logging.getLogger(__name__)
+
 import copy
 import os
 from typing import Any
@@ -288,6 +292,7 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
             self._load_directory(self._source_dir)
 
     def _load_directory(self, path: str):
+        log.info("Open folder: %s", path)
         self._clear_workspace()
         self._source_dir = path
         self._track_table.set_source_dir(path)
@@ -385,6 +390,7 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
         """Save the current session state to a .spsession file."""
         if not self._session or not self._source_dir:
             return
+        log.info("Save session")
         default_path = os.path.join(self._source_dir, "session.spsession")
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Session", default_path,
@@ -447,6 +453,7 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
         if not path:
             return
 
+        log.info("Load session: %s", path)
         try:
             data = _load_session_file(path)
         except Exception as exc:
@@ -698,6 +705,7 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
 
         # Phase 2 analysis reads from sp_01_tracklayout/ if available
         analyze_dir = self._topology_dir or self._source_dir
+        log.info("Analyze: %s", analyze_dir)
 
         # Snapshot existing group assignments and user overrides so we can
         # restore them after re-analysis (filenames that survive are matched).
@@ -967,6 +975,7 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
         self._save_session_action.setEnabled(True)
 
         ok_count = sum(1 for t in session.tracks if t.status == "OK")
+        log.info("Analyze complete: %d/%d tracks OK", ok_count, len(session.tracks))
         self._status_bar.showMessage(
             f"Analysis complete: {ok_count}/{len(session.tracks)} tracks OK"
         )
@@ -999,6 +1008,7 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
             return
         if self._prepare_worker is not None:
             return  # already running
+        log.info("Prepare: %s", self._source_dir)
 
         output_folder = self._config.get("app", {}).get(
             "phase2_output_folder", "sp_02_prepared")
@@ -1023,7 +1033,7 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
         self._prepare_worker.progress.connect(self._on_prepare_progress)
         self._prepare_worker.progress_value.connect(
             self._on_prepare_progress_value)
-        self._prepare_worker.finished.connect(self._on_prepare_done)
+        self._prepare_worker.prepare_finished.connect(self._on_prepare_done)
         self._prepare_worker.error.connect(self._on_prepare_error)
         self._prepare_worker.start()
 
@@ -1068,12 +1078,14 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
             )
         else:
             msg = f"Prepare complete: {prepared} file(s) written"
+            log.info("Prepare complete: %d file(s)", prepared)
             self._prepare_progress.finish(msg)
             self._status_bar.showMessage(msg)
         self._populate_setup_table()
 
     @Slot(str)
     def _on_prepare_error(self, message: str):
+        log.error("Prepare failed: %s", message)
         if self._prepare_worker is not None:
             self._prepare_worker.deleteLater()
             self._prepare_worker = None

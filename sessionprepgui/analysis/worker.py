@@ -572,7 +572,7 @@ class PrepareWorker(QThread):
     progress = Signal(str)              # status text
     progress_value = Signal(int, int)   # (current, total)
     track_prepared = Signal(str)        # filename
-    finished = Signal()
+    prepare_finished = Signal()         # renamed: avoid shadowing QThread.finished
     error = Signal(str)
 
     def __init__(self, session, processors, output_dir: str):
@@ -600,7 +600,7 @@ class PrepareWorker(QThread):
                 self._output_dir,
                 progress_cb=self._on_progress,
             )
-            self.finished.emit()
+            self.prepare_finished.emit()
         except Exception as e:
             self.error.emit(str(e))
 
@@ -615,7 +615,7 @@ class TopologyApplyWorker(QThread):
 
     progress = Signal(str)
     progress_value = Signal(int, int)
-    finished = Signal()
+    apply_finished = Signal()           # renamed: avoid shadowing QThread.finished
     error = Signal(str)
 
     def __init__(self, session, output_dir: str, source_dir: str | None = None):
@@ -763,7 +763,7 @@ class TopologyApplyWorker(QThread):
 
             session.output_tracks = output_tracks
             session.config["_topology_apply_errors"] = errors
-            self.finished.emit()
+            self.apply_finished.emit()
 
         except Exception as e:
             self.error.emit(str(e))

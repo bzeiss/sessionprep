@@ -67,7 +67,10 @@ selected tracks at once — mirroring the Pro Tools convention for batch control
 changes.  Re-analysis runs asynchronously with a progress bar.
 
 On first launch it creates a `sessionprep.config.json` in your user
-preferences directory with all default thresholds.
+preferences directory with all default thresholds. A rotating log file
+(`sessionprep.log`) is written to the same directory. Set the environment
+variable `SP_LOG_LEVEL` to `DEBUG`, `WARNING`, or `NONE` to control verbosity
+(default: `INFO`).
 
 Use **File → Preferences** to customize settings through a two-tab dialog:
 
