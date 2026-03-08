@@ -1,4 +1,4 @@
-"""Lightweight debug logging for SessionPrep.
+"""Lightweight debug logging for SessionPrep GUI.
 
 Usage::
 
@@ -7,61 +7,39 @@ Usage::
     dbg("Batch job created: {job_id}")
     dbg("Spectrogram cache invalidated")
 
-Output is only emitted when the environment variable ``SP_DEBUG`` is
-set to ``1`` or ``true`` (case-insensitive).  Each message is
-prefixed with a timestamp and the calling class/module for easy
-grep filtering.
+This is a thin convenience wrapper around Python's standard
+:mod:`logging` module.  Each call resolves the calling class or
+module automatically and delegates to ``logging.getLogger(name).debug()``.
+
+The log level and handlers are configured once at startup via
+:func:`sessionpreplib.logging_setup.setup_logging`.
 """
 
 from __future__ import annotations
 
 import inspect
-import os
-import sys
-import time
-
-class _LogConfig:  # pylint: disable=too-few-public-methods
-    """Encapsulates the global debug logging configuration state."""
-    enabled: bool | None = None
-
-    @classmethod
-    def is_enabled(cls) -> bool:
-        """Check if SP_DEBUG is active, caching the result."""
-        if cls.enabled is None:
-            val = os.environ.get("SP_DEBUG", "").strip().lower()
-            cls.enabled = val in ("1", "true")
-        return cls.enabled
+import logging
 
 
-def _caller_name() -> str:
-    """Return the class name (or module name) of the caller's caller."""
+def _caller_logger() -> logging.Logger:
+    """Return a logger named after the calling module/class."""
     frame = inspect.currentframe()
     try:
-        # Walk up: _caller_name -> dbg -> actual caller
+        # Walk up: _caller_logger -> dbg -> actual caller
         caller = frame.f_back.f_back if frame and frame.f_back else None
         if caller is None:
-            return "?"
-        self_obj = caller.f_locals.get("self")
-        if self_obj is not None:
-            return type(self_obj).__name__
-        cls_obj = caller.f_locals.get("cls")
-        if cls_obj is not None:
-            return getattr(cls_obj, "__name__", str(cls_obj))
-        mod = caller.f_globals.get("__name__", "")
-        return mod.rsplit(".", 1)[-1] if mod else "?"
+            return logging.getLogger("sessionprepgui")
+        mod = caller.f_globals.get("__name__", "sessionprepgui")
+        return logging.getLogger(mod)
     finally:
         del frame
 
 
 def dbg(msg: str) -> None:
-    """Print a timestamped debug line to stderr if ``SP_DEBUG`` is active.
+    """Log a debug message, automatically detecting the caller.
 
-    Automatically detects the calling class or module name.
-    Format: ``[HH:MM:SS.mmm ClassName] message``
+    This is a backward-compatible convenience wrapper.  New code should
+    prefer ``log = logging.getLogger(__name__)`` at module level and
+    call ``log.debug(...)`` directly.
     """
-    if not _LogConfig.is_enabled():
-        return
-    t = time.strftime("%H:%M:%S")
-    ms = int((time.time() % 1) * 1000)
-    name = _caller_name()
-    print(f"[{t}.{ms:03d} {name}] {msg}", file=sys.stderr, flush=True)
+    _caller_logger().debug(msg)

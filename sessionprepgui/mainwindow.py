@@ -921,6 +921,9 @@ def _app_icon() -> QIcon:
 
 
 def main():
+    from sessionpreplib.logging_setup import setup_logging
+    setup_logging()
+
     t_main = time.perf_counter()
 
     # Apply HiDPI scale factor before QApplication is created.

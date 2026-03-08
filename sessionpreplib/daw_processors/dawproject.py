@@ -11,11 +11,6 @@ from typing import Any
 from ..daw_processor import DawProcessor
 from ..models import DawCommand, DawCommandResult, SessionContext
 
-try:
-    from sessionprepgui.log import dbg
-except ImportError:
-    def dbg(msg):  # noqa: E302
-        pass
 
 log = logging.getLogger(__name__)
 
@@ -317,7 +312,7 @@ class DawProjectDawProcessor(DawProcessor):
         proc_id = "bimodal_normalize"
         bn_enabled = session.config.get(f"{proc_id}_enabled", True)
 
-        dbg(f"transfer: bn_enabled={bn_enabled}")
+        log.debug(f"transfer: bn_enabled={bn_enabled}")
 
         # ── Create tracks and clips ─────────────────────────────
         for step, (eid, fid) in enumerate(work):
@@ -346,7 +341,7 @@ class DawProjectDawProcessor(DawProcessor):
             fader_db = 0.0
             pr = out_tc.processor_results.get(proc_id)
             skip = proc_id in getattr(out_tc, "processor_skip", set())
-            dbg(
+            log.debug(
                 f"  {eid}: bn_enabled={bn_enabled}, "
                 f"has_pr={pr is not None}, "
                 f"classification={pr.classification if pr else None}, "
@@ -356,7 +351,7 @@ class DawProjectDawProcessor(DawProcessor):
             if bn_enabled and pr:
                 if pr.classification not in ("Silent", "Skip") and not skip:
                     fader_db = pr.data.get("fader_offset", 0.0)
-            dbg(f"  → fader_db={fader_db:.2f}")
+            log.debug(f"  → fader_db={fader_db:.2f}")
             volume_linear = _db_to_linear(fader_db)
 
             # Resolve group color → #rrggbb

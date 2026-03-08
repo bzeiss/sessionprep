@@ -13,12 +13,9 @@ from ..daw_processor import DawProcessor
 from ..models import DawCommand, DawCommandResult, SessionContext
 from . import ptsl_helpers as ptslh
 
-try:
-    from sessionprepgui.log import dbg
-except ImportError:
+import logging
 
-    def dbg(msg: str) -> None:  # type: ignore[misc]
-        pass
+log = logging.getLogger(__name__)
 
 
 # Re-export color helpers from ptsl_helpers (private aliases for
@@ -375,7 +372,7 @@ class ProToolsDawProcessor(DawProcessor):
                     with open(cache_file, "w", encoding="utf-8") as f:
                         json.dump(cache_data, f, indent=2, ensure_ascii=False)
                 except Exception as e:
-                    dbg(f"Failed to write template cache: {e}")
+                    log.debug(f"Failed to write template cache: {e}")
 
         except Exception:
             raise
@@ -385,7 +382,7 @@ class ProToolsDawProcessor(DawProcessor):
                     try:
                         ptslh.close_session(engine)
                     except Exception as e:
-                        dbg(f"Failed to close temp session: {e}")
+                        log.debug(f"Failed to close temp session: {e}")
                 try:
                     engine.close()
                 except Exception:
@@ -521,11 +518,11 @@ class ProToolsDawProcessor(DawProcessor):
         Returns:
             List of DawCommandResult for each operation attempted.
         """
-        dbg("transfer() called")
+        log.debug("transfer() called")
         try:
             from ptsl import PTSL_pb2 as pt  # noqa: F401 – validates install
         except ImportError:
-            dbg("py-ptsl not installed")
+            log.debug("py-ptsl not installed")
             return [
                 DawCommandResult(
                     command=DawCommand("transfer", "", {}),
@@ -540,7 +537,7 @@ class ProToolsDawProcessor(DawProcessor):
         track_order = pt_state.get("track_order", {})
 
         if not assignments:
-            dbg("No assignments, returning early")
+            log.debug("No assignments, returning early")
             return []
 
         # Build lookups
@@ -667,7 +664,7 @@ class ProToolsDawProcessor(DawProcessor):
                 )
 
             if not valid_work:
-                dbg("No valid work items")
+                log.debug("No valid work items")
                 return results
 
             # ── 2. Batch Import ──────────────────────────────────
@@ -808,7 +805,7 @@ class ProToolsDawProcessor(DawProcessor):
                     if not pr or pr.classification in ("Silent", "Skip"):
                         continue
                     fader_db = pr.data.get("fader_offset", 0.0)
-                    dbg(
+                    log.debug(
                         f"Fader logic for {t_id}: classification={pr.classification}, fader_db={fader_db}"
                     )
                     if fader_db == 0.0:
@@ -822,7 +819,7 @@ class ProToolsDawProcessor(DawProcessor):
                             progress=95,
                         )
                     except Exception as e:
-                        dbg(f"Fader set failed for {t_id}: {e}")
+                        log.debug(f"Fader set failed for {t_id}: {e}")
 
             # ── 6. Save & Close ──────────────────────────────────
 

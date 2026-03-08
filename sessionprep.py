@@ -2,6 +2,9 @@ import os
 import sys
 import argparse
 
+from sessionpreplib.logging_setup import setup_logging
+setup_logging()
+
 try:
     from rich.console import Console
     from rich.table import Table

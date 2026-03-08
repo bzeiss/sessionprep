@@ -131,6 +131,45 @@ uv python install 3.12
 uv python pin 3.12
 ```
 
+### 1.9 Logging
+
+SessionPrep uses Python's standard `logging` module with a rotating log file
+and optional stderr output. Logging is configured once at startup via
+`sessionpreplib.logging_setup.setup_logging()`.
+
+**Log file location** — `sessionprep.log` in the OS-specific config directory:
+
+| Platform | Path                                                              |
+|----------|-------------------------------------------------------------------|
+| Windows  | `%APPDATA%\sessionprep\sessionprep.log`                           |
+| macOS    | `~/Library/Application Support/sessionprep/sessionprep.log`       |
+| Linux    | `$XDG_CONFIG_HOME/sessionprep/sessionprep.log` (default `~/.config/`) |
+
+The log file uses a `RotatingFileHandler` (5 MB max, 3 backups) and always
+appends across sessions. A stderr handler is added automatically when a
+terminal is attached.
+
+**Log level** is controlled via the `SP_LOG_LEVEL` environment variable:
+
+| Value      | Effect                              |
+|------------|-------------------------------------|
+| `DEBUG`    | Verbose output (timings, internals) |
+| `INFO`     | Normal operation (default)          |
+| `WARNING`  | Warnings and errors only            |
+| `ERROR`    | Errors only                         |
+| `CRITICAL` | Critical errors only                |
+| `NONE`     | Disable logging entirely            |
+
+Example:
+
+```bash
+# Enable debug logging for a single run
+SP_LOG_LEVEL=DEBUG uv run python sessionprep-gui.py
+
+# Windows (PowerShell)
+$env:SP_LOG_LEVEL = "DEBUG"; uv run python sessionprep-gui.py
+```
+
 ---
 
 ## 2. Building & Distribution
@@ -318,6 +357,7 @@ sessionpreplib/
     detector.py                  # TrackDetector / SessionDetector ABCs
     processor.py                 # AudioProcessor ABC + priority bands
     pipeline.py                  # 3-phase orchestrator + validation
+    logging_setup.py             # Centralized logging config (RotatingFileHandler, SP_LOG_LEVEL)
     queue.py                     # SessionQueue / SessionJob
     rendering.py                 # Diagnostic summary builder + PlainText renderer
     topology.py                  # TopologyMapping, TopologyEntry, TopologySource, ChannelRoute,
@@ -346,7 +386,7 @@ sessionpreplib/
 
 sessionprepgui/                  # GUI package (PySide6)
     __init__.py                  # Exports main()
-    log.py                       # Lightweight debug logging (SP_DEBUG env var gated)
+    log.py                       # Convenience dbg() wrapper over standard logging
     res/                         # Application icons (SVG, PNG, ICO)
     settings.py                  # Persistent config (load/save/validate, OS paths)
     theme.py                     # Colors, FILE_COLOR_* constants, dark theme
