@@ -1033,7 +1033,7 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
         self._prepare_worker.progress.connect(self._on_prepare_progress)
         self._prepare_worker.progress_value.connect(
             self._on_prepare_progress_value)
-        self._prepare_worker.finished.connect(self._on_prepare_done)
+        self._prepare_worker.prepare_finished.connect(self._on_prepare_done)
         self._prepare_worker.error.connect(self._on_prepare_error)
         self._prepare_worker.start()
 

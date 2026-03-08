@@ -352,7 +352,7 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
         self._topo_apply_worker.progress.connect(self._on_topo_apply_progress)
         self._topo_apply_worker.progress_value.connect(
             self._on_topo_apply_progress_value)
-        self._topo_apply_worker.finished.connect(self._on_topo_apply_done)
+        self._topo_apply_worker.apply_finished.connect(self._on_topo_apply_done)
         self._topo_apply_worker.error.connect(self._on_topo_apply_error)
         self._topo_apply_worker.start()
 
