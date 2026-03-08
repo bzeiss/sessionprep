@@ -44,7 +44,7 @@ def setup_logging(level: int | None = None) -> None:
         from the ``SP_LOG_LEVEL`` environment variable.  If not set,
         ``INFO`` is used.  Set to ``NONE`` to disable logging.
     """
-    global _initialized  # noqa: PLW0603
+    global _initialized  # noqa: PLW0603  # pylint: disable=global-statement
     if _initialized:
         return
     _initialized = True
