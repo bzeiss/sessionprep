@@ -89,15 +89,26 @@ class DetailMixin:  # pylint: disable=too-few-public-methods
             self._audio_load_worker.finished.disconnect()
             self._audio_load_worker = None
 
-        # If audio_data is absent but the file exists, load it from disk first
+        # 1. Handle instant preview or loading state
+        peak_cache = getattr(self, '_peak_cache', {})
+        fn = getattr(track, 'filename', None)
+        if fn and fn in peak_cache:
+            self._waveform.set_preview_mode(
+                track.channels, track.total_samples, track.samplerate, peak_cache[fn]
+            )
+        else:
+            self._waveform.set_loading(True)
+            if fn and hasattr(self, '_prioritize_peak'):
+                self._prioritize_peak(fn)
+
+        if self._detail_tabs.currentIndex() == _TAB_FILE:
+            self._wf_container.setVisible(True)
+        self._play_btn.setEnabled(False)
+        self._update_time_label(0)
+
+        # 2. If audio_data is absent but the file exists, load it from disk first
         if (track.audio_data is None or track.audio_data.size == 0) and \
                 track.status == "OK" and os.path.isfile(track.filepath):
-            self._waveform.set_loading(True)
-            if self._detail_tabs.currentIndex() == _TAB_FILE:
-                self._wf_container.setVisible(True)
-            self._play_btn.setEnabled(False)
-            self._update_time_label(0)
-
             worker = AudioLoadWorker(track, parent=self)
             self._audio_load_worker = worker
             worker.finished.connect(
@@ -107,13 +118,9 @@ class DetailMixin:  # pylint: disable=too-few-public-methods
             worker.start()
             return
 
+        # 3. If audio is available in memory, run WaveformLoadWorker (for RMS/Spectrogram)
         has_audio = track.audio_data is not None and track.audio_data.size > 0
         if has_audio:
-            self._waveform.set_loading(True)
-            if self._detail_tabs.currentIndex() == _TAB_FILE:
-                self._wf_container.setVisible(True)
-            self._play_btn.setEnabled(False)
-            self._update_time_label(0)
 
             flat_cfg = self._flat_config()
             win_ms = flat_cfg.get("window", 400)

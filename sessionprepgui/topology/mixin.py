@@ -742,7 +742,17 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
 
         if self._topo_wf_expanded:
             self._topo_wf_panel.setVisible(True)
-        self._topo_wf_panel.waveform.set_loading(True)
+
+        peak_cache = getattr(self, '_peak_cache', {})
+        if filename in peak_cache:
+            self._topo_wf_panel.waveform.set_preview_mode(
+                track.channels, track.total_samples, track.samplerate, peak_cache[filename]
+            )
+        else:
+            self._topo_wf_panel.waveform.set_loading(True)
+            if hasattr(self, '_prioritize_peak'):
+                self._prioritize_peak(filename)
+
         self._topo_wf_panel.play_btn.setEnabled(False)
 
         from ..analysis.worker import AudioLoadWorker

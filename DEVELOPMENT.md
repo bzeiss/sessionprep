@@ -2105,6 +2105,17 @@ Four mip levels at 256, 1024, 4096, and 16384 samples/bin. A 5-minute stereo
 `load_peaks()` compares the stored mtime against the current source file; stale
 caches return `None` and are silently rebuilt.
 
+**Instant Preview Mode (`set_preview_mode`):**
+To eliminate visual latency caused by heavy audio file disk I/O, the UI supports
+an **Instant Preview Mode**. If a track is selected and its `.peaks` cache exists, 
+the GUI initializes the `WaveformWidget` with dummy empty channels and applies the
+peak cache immediately. This renders the perfect waveform visualization instantaneously
+(zero disk I/O, zero CPU). Asynchronously, `AudioLoadWorker` and `WaveformLoadWorker` 
+load the full audio data in the background. When they complete, they seamlessly replace 
+the dummy channels to enable the Mel Spectrogram, RMS envelope, and audio playback.
+If a peak cache finishes building *while* the UI is blocked loading audio, the UI
+aggressively pushes the new peak cache to instantly resolve the loading state.
+
 ---
 
 ## 19. Migration Notes

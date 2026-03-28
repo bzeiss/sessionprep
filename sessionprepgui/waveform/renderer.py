@@ -151,6 +151,8 @@ class WaveformRenderer:
         if ctx.show_rms_lr or ctx.show_rms_avg:
             self._build_rms_envelope(ctx)
         nch = ctx.num_channels
+        if nch == 0:
+            return
         lane_h = ctx.draw_h / nch
         self._draw_db_scale(painter, ctx, nch, lane_h)
         self._draw_waveform_channels(painter, ctx, nch, lane_h)

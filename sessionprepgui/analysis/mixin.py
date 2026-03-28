@@ -1049,10 +1049,37 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
 
     @Slot(str, object)
     def _on_peak_file_done(self, filename: str, peak_data):
-        """Cache a newly built PeakData in memory."""
+        """Cache a newly built PeakData in memory, and push to UI if active."""
         if not hasattr(self, "_peak_cache"):
             self._peak_cache = {}
         self._peak_cache[filename] = peak_data
+
+        # Push to Phase 1 topology preview if active
+        if getattr(self, "_topo_wf_filename", None) == filename:
+            wf = getattr(self, "_topo_wf_panel", None)
+            if wf and hasattr(wf, "waveform"):
+                wf.waveform.set_peak_data(peak_data)
+                if getattr(wf.waveform, "_loading", False):
+                    track = None
+                    if hasattr(self, "_topo_track_map"):
+                        track = self._topo_track_map().get(filename)
+                    if track:
+                        wf.waveform.set_preview_mode(
+                            track.channels, track.total_samples,
+                            track.samplerate, peak_data
+                        )
+
+        # Push to Phase 2 analysis preview if active
+        cur_track = getattr(self, "_current_track", None)
+        if cur_track and cur_track.filename == filename:
+            wf = getattr(self, "_waveform", None)
+            if wf:
+                wf.set_peak_data(peak_data)
+                if getattr(wf, "_loading", False):
+                    wf.set_preview_mode(
+                        cur_track.channels, cur_track.total_samples,
+                        cur_track.samplerate, peak_data
+                    )
 
     def _prioritize_peak(self, filename: str):
         """If a peak build is in progress, move *filename* to the front."""

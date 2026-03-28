@@ -121,6 +121,38 @@ class WaveformWidget(QWidget):
             self._wf_renderer.reset()
         self.update()
 
+    def set_preview_mode(self, channels_count: int, total_samples: int,
+                         samplerate: int, peak_data: object):
+        """Instantly prepare widget for rendering using only peak cache metadata."""
+        channels_count = max(1, channels_count)
+        self._channels = [np.array([], dtype=np.float32) for _ in range(channels_count)]
+        self._num_channels = channels_count
+        self._total_samples = total_samples
+        self._samplerate = samplerate
+        self._cursor_sample = 0
+        self._cursor_y_value = None
+        self._view_start = 0
+        self._view_end = max(1, self._total_samples)
+        self._vscale = 1.0
+        self._rms_window_samples = 0
+
+        self._wf_renderer.set_track_data(
+            self._channels,
+            peak_sample=-1,
+            peak_channel=-1,
+            peak_db=0.0,
+            peak_amplitude=0.0,
+            rms_cumsums=[],
+            rms_window=0,
+            rms_max_sample=-1,
+            rms_max_db=float('-inf'),
+            rms_max_amplitude=0.0,
+        )
+        self._spec_renderer.reset(samplerate)
+        self._wf_renderer.set_peak_data(peak_data)
+        self._loading = False
+        self.update()
+
     def set_precomputed(self, result: dict):
         """Apply pre-computed waveform data from a WaveformLoadWorker."""
         self._channels = result["channels"]
