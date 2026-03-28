@@ -473,6 +473,47 @@ class TopoMultiAudioWorker(QThread):
 
             from sessionprepgui.waveform.panel import WaveformPanel
 
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            
+            # --- 1. Pre-collect all unique audio file paths ---
+            required_files = set()
+            if self._side == "input":
+                required_files.update(item[0] for item in self._items)
+            else:
+                for item in self._items:
+                    for src in item[0].sources:
+                        required_files.add(os.path.join(self._source_dir, src.input_filename))
+                        
+            # --- 2. Parallel I/O Load ---
+            audio_cache: dict[str, tuple[np.ndarray, int]] = {}
+            # Limit workers to 4 to prevent SSD thrashing and massive memory spike
+            max_workers = min(4, (os.cpu_count() or 1))
+            
+            log.debug("[Trace] TopoMultiAudioWorker loading %d unique files with %d workers", len(required_files), max_workers)
+            
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                fut_to_path = {
+                    pool.submit(sf.read, path, dtype='float64'): path
+                    for path in required_files
+                }
+                for fut in as_completed(fut_to_path):
+                    if self._cancelled:
+                        pool.shutdown(wait=False, cancel_futures=True)
+                        return
+                    path = fut_to_path[fut]
+                    t_load = time.perf_counter()
+                    data, file_sr = fut.result()
+                    log.debug("[Trace] TopoMultiAudioWorker loaded '%s'. Shape: %s, %.1f MB", 
+                              os.path.basename(path), data.shape, data.nbytes / (1024 * 1024))
+                    audio_cache[path] = (data, file_sr)
+
+            if self._cancelled:
+                return
+                
+            log.debug("[Trace] TopoMultiAudioWorker completed parallel I/O in %.2f ms", (time.perf_counter() - t0) * 1000)
+            t_process = time.perf_counter()
+
+            # --- 3. Process loaded audio natively ---
             if self._side == "input":
                 for item in self._items:
                     if self._cancelled:
@@ -481,7 +522,8 @@ class TopoMultiAudioWorker(QThread):
                     name = item[1]
                     channels_to_keep = item[2] if len(item) > 2 else None
 
-                    data, file_sr = sf.read(filepath, dtype='float64')
+                    # Retrieve directly from in-memory parallel cache
+                    data, file_sr = audio_cache[filepath]
                     sr = file_sr
                     if data.ndim == 1:
                         data = data.reshape(-1, 1)
@@ -517,7 +559,7 @@ class TopoMultiAudioWorker(QThread):
                         if self._cancelled:
                             return
                         path = os.path.join(self._source_dir, src.input_filename)
-                        data, file_sr = sf.read(path, dtype='float64')
+                        data, file_sr = audio_cache[path]
                         track_audio[src.input_filename] = (data, file_sr)
                         sr = file_sr
                     
@@ -546,6 +588,8 @@ class TopoMultiAudioWorker(QThread):
                 return
 
             # --- Build display audio (list of contiguous 1D channels) ---
+            log.debug("[Trace] TopoMultiAudioWorker building display & playback arrays...")
+            t_stack = time.perf_counter()
             display_audio = []
             max_samples = max(a.shape[0] for a in track_arrays)
             for a in track_arrays:
@@ -574,7 +618,8 @@ class TopoMultiAudioWorker(QThread):
             for lst in track_labels_list:
                 labels.extend(lst)
 
-            log.debug("[Trace] TopoMultiAudioWorker finished %d items (%.2f ms)", len(self._items), (time.perf_counter() - t0) * 1000)
+            log.debug("[Trace] TopoMultiAudioWorker finished %d items (Total: %.2f ms, Process/Stack: %.2f ms)", 
+                      len(self._items), (time.perf_counter() - t0) * 1000, (time.perf_counter() - t_process) * 1000)
             self.finished.emit(display_audio, playback, sr, labels)
         except Exception as exc:
             import traceback, logging

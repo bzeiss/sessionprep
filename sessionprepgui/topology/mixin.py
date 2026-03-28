@@ -6,7 +6,7 @@ import logging
 import os
 
 log = logging.getLogger(__name__)
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Slot, QTimer
 from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -192,7 +192,13 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
 
         h_splitter.setSizes([400, 400])
 
-        # Cross-tree exclusive selection
+        # Cross-tree exclusive selection via debounced timer
+        self._topo_sel_side: str | None = None
+        self._topo_sel_timer = QTimer(page)
+        self._topo_sel_timer.setSingleShot(True)
+        self._topo_sel_timer.setInterval(150)
+        self._topo_sel_timer.timeout.connect(self._do_topo_selection_changed)
+
         self._topo_input_tree.selectionModel().selectionChanged.connect(
             lambda sel, desel: self._on_topo_selection_changed("input"))
         self._topo_output_tree.selectionModel().selectionChanged.connect(
@@ -634,24 +640,36 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
     # ── Cross-tree exclusive selection ────────────────────────────────
 
     def _on_topo_selection_changed(self, side: str):
-        """Handle selection change in input or output tree."""
+        """Handle selection change in input or output tree (debounced)."""
         if side == "input":
-            tree = self._topo_input_tree
             other = self._topo_output_tree
         else:
-            tree = self._topo_output_tree
             other = self._topo_input_tree
 
-        items = tree.selectedItems()
-        if not items:
-            return
-
-        # Clear other tree's selection
+        # Clear other tree's selection immediately for UI responsiveness
         if self._topo_selected_side != side:
             other.blockSignals(True)
             other.clearSelection()
             other.blockSignals(False)
         self._topo_selected_side = side
+
+        # Start or reset the 150ms debounce timer
+        self._topo_sel_side = side
+        self._topo_sel_timer.start()
+
+    def _do_topo_selection_changed(self):
+        side = self._topo_sel_side
+        if not side:
+            return
+
+        if side == "input":
+            tree = self._topo_input_tree
+        else:
+            tree = self._topo_output_tree
+
+        items = tree.selectedItems()
+        if not items:
+            return
 
         # Determine what's selected
         file_items = []

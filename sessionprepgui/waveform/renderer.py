@@ -146,7 +146,11 @@ class WaveformRenderer:
 
     def paint(self, painter: QPainter, ctx: WaveformRenderCtx):
         """Full waveform draw pass: envelope + dB scale + RMS + markers."""
-        painter.setRenderHint(QPainter.Antialiasing, ctx.wf_antialias)
+        # Adaptive Antialiasing: High channel counts pack polygons into just a few pixels. 
+        # Sub-pixel rendering at that density takes 1000ms+ and provides no visual benefit.
+        use_aa = ctx.wf_antialias and (ctx.num_channels <= 12)
+        painter.setRenderHint(QPainter.Antialiasing, use_aa)
+        
         self._build_peaks(ctx)
         if ctx.show_rms_lr or ctx.show_rms_avg:
             self._build_rms_envelope(ctx)
@@ -158,6 +162,7 @@ class WaveformRenderer:
         self._draw_waveform_channels(painter, ctx, nch, lane_h)
         if ctx.show_rms_lr or ctx.show_rms_avg:
             self._draw_rms_overlay(painter, ctx, nch, lane_h)
+            
         painter.setRenderHint(QPainter.Antialiasing, True)
         if ctx.show_markers:
             self._draw_markers(painter, ctx, nch, lane_h)
