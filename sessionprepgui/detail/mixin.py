@@ -128,19 +128,10 @@ class DetailMixin:  # pylint: disable=too-few-public-methods
         # 3. If audio is available in memory, run WaveformLoadWorker (for RMS/Spectrogram)
         has_audio = track.audio_data is not None and track.audio_data.size > 0
         if has_audio:
-
-            flat_cfg = self._flat_config()
-            win_ms = flat_cfg.get("window", 400)
-            ws = get_window_samples(track, win_ms)
-
-            self._wf_worker = WaveformLoadWorker(
-                track.audio_data, track.samplerate, ws,
-                spec_n_fft=self._waveform.spec_n_fft,
-                spec_window=self._waveform.spec_window,
-                parent=self)
-            self._wf_worker.finished.connect(
-                lambda result, t=track: self._on_waveform_loaded(result, t))
-            self._wf_worker.start()
+            nch = track.audio_data.shape[1] if track.audio_data.ndim > 1 else 1
+            self._wf_panel.update_play_mode_channels(nch)
+            self._play_btn.setEnabled(True)
+            self._start_wf_worker(track)
         else:
             self._waveform.set_audio(None, 44100)
             self._update_overlay_menu([])
@@ -148,6 +139,30 @@ class DetailMixin:  # pylint: disable=too-few-public-methods
                 self._wf_container.setVisible(False)
             self._play_btn.setEnabled(False)
             self._update_time_label(0)
+
+    def _start_wf_worker(self, track):
+        flat_cfg = self._flat_config()
+        win_ms = flat_cfg.get("window", 400)
+        ws = get_window_samples(track, win_ms)
+
+        self._wf_worker = WaveformLoadWorker(
+            track.audio_data, track.samplerate, ws,
+            spec_n_fft=self._waveform.spec_n_fft,
+            spec_window=self._waveform.spec_window,
+            compute_spectrogram=(self._waveform._display_mode == "spectrogram"),
+            parent=self)
+        self._wf_worker.finished.connect(
+            lambda result, t=track: self._on_waveform_loaded(result, t))
+        self._wf_worker.start()
+
+    @Slot(str)
+    def _on_display_mode_changed(self, mode: str):
+        if mode == "spectrogram" and self._current_track:
+            track = self._current_track
+            if track.audio_data is not None and track.audio_data.size > 0:
+                if getattr(self._waveform._spec_renderer, '_spec_data', None) is None:
+                    if self._wf_worker is None:
+                        self._start_wf_worker(track)
 
     @Slot(object, object)
     def _on_waveform_loaded(self, result: dict, track):
@@ -180,8 +195,6 @@ class DetailMixin:  # pylint: disable=too-few-public-methods
             all_issues.extend(getattr(det_result, "issues", []))
         self._waveform.set_issues(all_issues)
         self._update_overlay_menu(all_issues)
-        self._wf_panel.update_play_mode_channels(len(result["channels"]))
-        self._play_btn.setEnabled(True)
         self._update_time_label(0)
 
     def _on_audio_loaded(self, track, orig_track):

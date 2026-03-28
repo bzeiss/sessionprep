@@ -209,6 +209,13 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
         self._topo_wf_panel.play_clicked.connect(self._on_topo_play)
         self._topo_wf_panel.stop_clicked.connect(self._on_topo_stop)
         self._topo_wf_panel.position_clicked.connect(self._on_topo_wf_seek)
+        self._topo_wf_panel.display_mode_changed.connect(self._on_topo_display_mode_changed)
+
+        self._topo_wf_panel.fft_group.triggered.connect(self._on_topo_spec_fft_changed)
+        self._topo_wf_panel.win_group.triggered.connect(self._on_topo_spec_window_changed)
+        self._topo_wf_panel.cmap_group.triggered.connect(self._on_topo_spec_cmap_changed)
+        self._topo_wf_panel.floor_group.triggered.connect(self._on_topo_spec_floor_changed)
+        self._topo_wf_panel.ceil_group.triggered.connect(self._on_topo_spec_ceil_changed)
 
         # Vertical splitter: trees on top, waveform at bottom
         v_splitter = QSplitter(Qt.Vertical)
@@ -1005,6 +1012,32 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
         self._topo_wf_panel.play_btn.setEnabled(True)
         self._topo_update_time_label(0)
         log.debug("[Trace] _on_topo_wf_loaded final UI application: %.2f ms", (time.perf_counter() - t0) * 1000)
+
+    @Slot(str)
+    def _on_topo_display_mode_changed(self, mode: str):
+        if mode == "spectrogram" and self._topo_cached_audio:
+            if getattr(self._topo_wf_panel.waveform._spec_renderer, '_spec_data', None) is None:
+                self._topo_show_waveform(self._topo_cached_audio[1], self._topo_cached_audio[3])
+
+    @Slot(QAction)
+    def _on_topo_spec_fft_changed(self, action: QAction):
+        self._topo_wf_panel.waveform.set_spec_fft(int(action.data()))
+
+    @Slot(QAction)
+    def _on_topo_spec_window_changed(self, action: QAction):
+        self._topo_wf_panel.waveform.set_spec_window(action.data())
+
+    @Slot(QAction)
+    def _on_topo_spec_cmap_changed(self, action: QAction):
+        self._topo_wf_panel.waveform.set_colormap(action.data())
+
+    @Slot(QAction)
+    def _on_topo_spec_floor_changed(self, action: QAction):
+        self._topo_wf_panel.waveform.set_spec_db_floor(float(action.data()))
+
+    @Slot(QAction)
+    def _on_topo_spec_ceil_changed(self, action: QAction):
+        self._topo_wf_panel.waveform.set_spec_db_ceil(float(action.data()))
 
     # ── Playback ──────────────────────────────────────────────────────
 

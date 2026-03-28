@@ -34,6 +34,7 @@ class WaveformPanel(QWidget):
     play_clicked = Signal()
     stop_clicked = Signal()
     position_clicked = Signal(int)
+    display_mode_changed = Signal(str)
 
     def __init__(self, analysis_mode: bool = True, parent=None):
         super().__init__(parent)
@@ -442,6 +443,7 @@ class WaveformPanel(QWidget):
             self.rms_avg_toggle.setVisible(is_waveform)
         # Show spectrogram-only controls
         self.spec_settings_btn.setVisible(not is_waveform)
+        self.display_mode_changed.emit(mode)
 
     # ------------------------------------------------------------------
     # analysis_mode setter

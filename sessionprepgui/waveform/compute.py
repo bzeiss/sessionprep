@@ -122,15 +122,15 @@ def compute_mel_spectrogram(channels: list[np.ndarray], sr: int, *,
     if not channels:
         return None
     if hop is None:
-        hop = n_fft // 4
-    # Mix to mono
+        hop = n_fft  # optimized for UI speed (4x faster than n_fft // 4)
+    # Mix to mono in-place to avoid massive memory allocations
     if len(channels) == 1:
-        mono = channels[0].astype(np.float64)
+        mono = channels[0]
     else:
-        mono = np.mean(
-            np.column_stack([ch.astype(np.float64) for ch in channels]),
-            axis=1,
-        )
+        mono = channels[0].copy()
+        for ch in channels[1:]:
+            mono += ch
+        mono /= len(channels)
     if len(mono) < n_fft:
         return None
     # STFT
@@ -165,6 +165,7 @@ class WaveformLoadWorker(QThread):
                  rms_window_samples: int, *,
                  spec_n_fft: int = _SPEC_N_FFT,
                  spec_window: str = "hann",
+                 compute_spectrogram: bool = True,
                  parent=None):
         super().__init__(parent)
         self._audio_data = audio_data
@@ -172,6 +173,7 @@ class WaveformLoadWorker(QThread):
         self._rms_win = rms_window_samples
         self._spec_n_fft = spec_n_fft
         self._spec_window = spec_window
+        self._compute_spectrogram = compute_spectrogram
         self._cancelled = threading.Event()
 
     def cancel(self):
@@ -191,12 +193,9 @@ class WaveformLoadWorker(QThread):
         if data is None or data.size == 0:
             return
         if data.ndim == 1:
-            channels = [np.ascontiguousarray(data)]
+            channels = [data]
         else:
-            channels = [
-                np.ascontiguousarray(data[:, ch])
-                for ch in range(data.shape[1])
-            ]
+            channels = [data[:, ch] for ch in range(data.shape[1])]
         if not channels:
             return
         nch = len(channels)
@@ -208,16 +207,22 @@ class WaveformLoadWorker(QThread):
         if self._cancelled.is_set():
             return
 
-        # --- Peak finding ---
+        # --- Peak finding (Zero allocation) ---
         t0 = time.perf_counter()
+        
+        def _find_peak(ch: np.ndarray) -> int:
+            p_max = int(np.argmax(ch))
+            p_min = int(np.argmin(ch))
+            return p_min if abs(float(ch[p_min])) > abs(float(ch[p_max])) else p_max
+
         if nch == 1:
-            peak_sample = int(np.argmax(np.abs(channels[0])))
+            peak_sample = _find_peak(channels[0])
             peak_channel = 0
         else:
-            abs_cols = np.column_stack([np.abs(ch) for ch in channels])
-            max_per_sample = np.max(abs_cols, axis=1)
-            peak_sample = int(np.argmax(max_per_sample))
-            peak_channel = int(np.argmax(abs_cols[peak_sample]))
+            peaks_per_ch = [_find_peak(ch) for ch in channels]
+            max_vals = [abs(float(channels[i][p])) for i, p in enumerate(peaks_per_ch)]
+            peak_channel = int(np.argmax(max_vals))
+            peak_sample = peaks_per_ch[peak_channel]
         peak_lin = abs(float(channels[peak_channel][peak_sample]))
         peak_db = 20.0 * np.log10(peak_lin) if peak_lin > 0 else float('-inf')
         peak_amplitude = float(channels[peak_channel][peak_sample])
@@ -266,16 +271,17 @@ class WaveformLoadWorker(QThread):
             return
 
         # --- Spectrogram ---
-        t0 = time.perf_counter()
-        spec_db = compute_mel_spectrogram(
-            channels, sr,
-            n_fft=self._spec_n_fft, window=self._spec_window,
-        )
+        spec_db = None
+        if self._compute_spectrogram:
+            t0 = time.perf_counter()
+            spec_db = compute_mel_spectrogram(
+                channels, sr,
+                n_fft=self._spec_n_fft, window=self._spec_window,
+            )
+            log.debug("[Trace] WaveformLoadWorker STFT: %.2f ms", (time.perf_counter() - t0) * 1000)
 
-        log.debug("[Trace] WaveformLoadWorker STFT: %.2f ms", (time.perf_counter() - t0) * 1000)
-
-        if self._cancelled.is_set():
-            return
+            if self._cancelled.is_set():
+                return
 
         log.debug("[Trace] WaveformLoadWorker TOTAL: %.2f ms", (time.perf_counter() - t_start) * 1000)
 
