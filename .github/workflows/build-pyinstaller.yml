@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -104,7 +104,7 @@ jobs:
 
       - name: Upload Artifacts (Windows)
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: sessionprep-${{ matrix.os }}
           path: |
@@ -115,7 +115,7 @@ jobs:
 
       - name: Upload Artifacts (macOS)
         if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: sessionprep-${{ matrix.os }}
           path: dist_pyinstaller/*.dmg
@@ -123,7 +123,7 @@ jobs:
 
       - name: Upload Artifacts (Linux)
         if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: sessionprep-${{ matrix.os }}
           path: |
