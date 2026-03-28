@@ -138,9 +138,9 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
 
         toolbar.addSeparator()
 
-        self._topo_wf_toggle = QAction("\u25B6 Waveform", self)
+        self._topo_wf_toggle = QAction("\u25BC Waveform", self)
         self._topo_wf_toggle.setCheckable(True)
-        self._topo_wf_toggle.setChecked(False)
+        self._topo_wf_toggle.setChecked(True)
         self._topo_wf_toggle.setToolTip("Show / hide the waveform preview")
         self._topo_wf_toggle.toggled.connect(self._on_topo_wf_toggle)
         toolbar.addAction(self._topo_wf_toggle)
@@ -202,10 +202,10 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
         self._syncing_scroll = False
         self._topo_input_tree.verticalScrollBar().valueChanged.connect(self._on_input_scroll)
 
-        # Waveform preview panel (starts collapsed)
+        # Waveform preview panel (starts expanded)
         self._topo_wf_panel = WaveformPanel(analysis_mode=False)
-        self._topo_wf_panel.setVisible(False)
-        self._topo_wf_expanded = False
+        self._topo_wf_panel.setVisible(True)
+        self._topo_wf_expanded = True
         self._topo_wf_panel.play_clicked.connect(self._on_topo_play)
         self._topo_wf_panel.stop_clicked.connect(self._on_topo_stop)
         self._topo_wf_panel.position_clicked.connect(self._on_topo_wf_seek)

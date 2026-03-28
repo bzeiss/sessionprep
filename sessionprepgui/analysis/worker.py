@@ -711,6 +711,10 @@ class TopologyApplyWorker(QThread):
                 self.progress.emit(f"Writing {entry.output_filename}")
                 self.progress_value.emit(step, total)
 
+                # Skip entries with no channels (e.g. all channels moved elsewhere)
+                if entry.output_channels < 1 or not entry.sources:
+                    continue
+
                 try:
                     # Check all sources are available before resolving
                     missing = [
