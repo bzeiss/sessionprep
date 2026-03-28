@@ -755,13 +755,15 @@ class TopologyApplyWorker(QThread):
                                 build_peaks, save_peaks, peaks_path_for,
                                 get_source_mtime,
                             )
+                            log.debug("Building peak cache for applied output '%s'", entry.output_filename)
                             mtime = get_source_mtime(dst)
                             pd = build_peaks(resolved, sr, source_mtime=mtime)
                             pp = peaks_path_for(
                                 self._peaks_dir, entry.output_filename)
                             save_peaks(pd, pp)
-                        except Exception:
-                            pass  # non-fatal
+                            log.debug("Saved peak cache for '%s' (%d levels)", entry.output_filename, len(pd.levels))
+                        except Exception as e:
+                            log.debug("Failed to build/save peak cache for '%s': %s", entry.output_filename, e)
 
                     n_samples = resolved.shape[0]
                     out_tc = TrackContext(

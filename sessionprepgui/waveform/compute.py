@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import collections
+import logging
 import threading
 
 import numpy as np
@@ -14,6 +15,8 @@ from scipy.signal import stft as scipy_stft
 # ---------------------------------------------------------------------------
 # Spectrogram colormaps
 # ---------------------------------------------------------------------------
+
+log = logging.getLogger(__name__)
 
 SPECTROGRAM_COLORMAPS: dict[str, np.ndarray] = {}  # name → (256, 4) uint8 RGBA
 
@@ -352,6 +355,7 @@ class PeakBuildWorker(QThread):
             except ValueError:
                 return  # already processed or not in queue
             self._queue.appendleft(filename)
+            log.debug("Prioritized peak build for '%s'", filename)
 
     def _next_item(self) -> tuple[str, str, str] | None:
         """Pop the next item from the queue under lock."""
@@ -380,17 +384,20 @@ class PeakBuildWorker(QThread):
             if existing is not None:
                 return filename, existing
             # Build from audio
+            log.debug("Building peak cache for '%s'", filename)
             try:
                 data, sr = sf.read(filepath, dtype="float64")
-            except Exception:
+            except Exception as e:
+                log.debug("Failed to read '%s' for peak cache: %s", filename, e)
                 return None, None
             if self._cancelled.is_set():
                 return None, None
             peak_data = build_peaks(data, sr, source_mtime=mtime)
             try:
                 save_peaks(peak_data, peaks_path)
-            except OSError:
-                pass  # non-fatal
+                log.debug("Saved peak cache for '%s' (%d levels)", filename, len(peak_data.levels))
+            except OSError as e:
+                log.debug("Failed to save peak cache for '%s': %s", filename, e)
             return filename, peak_data
 
         max_workers = min(os.cpu_count() or 4, 6)
@@ -429,6 +436,7 @@ class PeakBuildWorker(QThread):
 
         if not self._cancelled.is_set():
             self.progress.emit("Peak cache creation finished.")
+            log.info("Peak cache background batch finished (%d files)", self._total)
             self.all_done.emit()
 
 
