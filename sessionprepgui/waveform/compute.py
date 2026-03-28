@@ -190,12 +190,15 @@ class WaveformLoadWorker(QThread):
         win = self._rms_win
 
         # --- Channel splitting ---
-        if data is None or data.size == 0:
-            return
-        if data.ndim == 1:
-            channels = [data]
+        if isinstance(data, list):
+            channels = data
         else:
-            channels = [data[:, ch] for ch in range(data.shape[1])]
+            if data is None or data.size == 0:
+                return
+            if data.ndim == 1:
+                channels = [data]
+            else:
+                channels = [data[:, ch] for ch in range(data.shape[1])]
         if not channels:
             return
         nch = len(channels)

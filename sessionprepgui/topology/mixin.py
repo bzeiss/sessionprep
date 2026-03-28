@@ -970,8 +970,13 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
         log = logging.getLogger(__name__)
 
         import numpy as np
-        if audio_data is None or (isinstance(audio_data, np.ndarray)
-                                  and audio_data.size == 0):
+        if audio_data is None:
+            self._topo_wf_panel.waveform.set_loading(False)
+            return
+        if isinstance(audio_data, np.ndarray) and audio_data.size == 0:
+            self._topo_wf_panel.waveform.set_loading(False)
+            return
+        if isinstance(audio_data, list) and not audio_data:
             self._topo_wf_panel.waveform.set_loading(False)
             return
 
@@ -1079,7 +1084,12 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
         if not cached:
             return
         _, display_audio, _playback, sr = cached
-        total = display_audio.shape[0] if display_audio is not None else 0
+        if display_audio is None:
+            total = 0
+        elif isinstance(display_audio, list):
+            total = display_audio[0].shape[0] if display_audio else 0
+        else:
+            total = display_audio.shape[0]
         from sessionpreplib.audio import format_duration
         cur_str = format_duration(current_sample, sr)
         tot_str = format_duration(total, sr)

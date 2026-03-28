@@ -456,6 +456,11 @@ class TopoMultiAudioWorker(QThread):
         self._cancelled = True
 
     def run(self):
+        import logging, time
+        t0 = time.perf_counter()
+        log = logging.getLogger(__name__)
+        log.debug("[Trace] TopoMultiAudioWorker loading %d items", len(self._items))
+        
         try:
             import os
             import numpy as np
@@ -540,38 +545,40 @@ class TopoMultiAudioWorker(QThread):
             if self._cancelled or not track_arrays:
                 return
 
-            # --- Build display audio (all channels concatenated) ---
+            # --- Build display audio (list of contiguous 1D channels) ---
+            display_audio = []
             max_samples = max(a.shape[0] for a in track_arrays)
-            padded = []
             for a in track_arrays:
                 if a.shape[0] < max_samples:
                     pad = np.zeros((max_samples - a.shape[0], a.shape[1]),
                                    dtype=np.float64)
                     a = np.vstack([a, pad])
-                padded.append(a)
-            display_audio = np.hstack(padded)  # (max_samples, total_ch)
+                # Each channel becomes its own perfectly contiguous slice
+                for c in range(a.shape[1]):
+                    display_audio.append(np.ascontiguousarray(a[:, c]))
 
             # --- Build playback audio (summed by channel position) ---
             max_ch = max(track_ch_counts)
             n_tracks = len(track_arrays)
             playback = np.zeros((max_samples, max_ch), dtype=np.float64)
-            for a in padded:
-                playback[:, :a.shape[1]] += a
+            for a in track_arrays:
+                playback[:a.shape[0], :a.shape[1]] += a
             playback /= n_tracks
 
-            # Squeeze mono
+            # Squeeze mono playback
             if playback.shape[1] == 1:
                 playback = playback[:, 0]
-            if display_audio.shape[1] == 1:
-                display_audio = display_audio[:, 0]
 
             # --- Channel labels ---
             labels = []
             for lst in track_labels_list:
                 labels.extend(lst)
 
+            log.debug("[Trace] TopoMultiAudioWorker finished %d items (%.2f ms)", len(self._items), (time.perf_counter() - t0) * 1000)
             self.finished.emit(display_audio, playback, sr, labels)
         except Exception as exc:
+            import traceback, logging
+            logging.getLogger(__name__).error("TopoMultiAudioWorker error: %s", traceback.format_exc())
             self.error.emit(str(exc))
 
 
