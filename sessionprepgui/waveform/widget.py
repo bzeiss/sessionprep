@@ -55,6 +55,8 @@ class WaveformWidget(QWidget):
         # Mouse crosshair
         self._mouse_x: int = -1
         self._mouse_y: int = -1
+        # Offscreen rendering cache
+        self._bg_pixmap = None
         # Scroll inversion
         self._invert_h: bool = False
         self._invert_v: bool = False
@@ -99,7 +101,7 @@ class WaveformWidget(QWidget):
             peak_dirty=bool(self._channels),
         )
         self._spec_renderer.reset(samplerate)
-        self.update()
+        self._invalidate_bg()
 
     def set_peak_data(self, peak_data):
         """Set pre-computed peak mipmap data for fast rendering.
@@ -109,7 +111,7 @@ class WaveformWidget(QWidget):
         downsampling raw samples on each paint.
         """
         self._wf_renderer.set_peak_data(peak_data)
-        self.update()
+        self._invalidate_bg()
 
     def set_loading(self, loading: bool):
         """Show or hide a 'Loading waveform…' placeholder."""
@@ -119,7 +121,7 @@ class WaveformWidget(QWidget):
             self._num_channels = 0
             self._total_samples = 0
             self._wf_renderer.reset()
-        self.update()
+        self._invalidate_bg()
 
     def set_preview_mode(self, channels_count: int, total_samples: int,
                          samplerate: int, peak_data: object):
@@ -151,7 +153,7 @@ class WaveformWidget(QWidget):
         self._spec_renderer.reset(samplerate)
         self._wf_renderer.set_peak_data(peak_data)
         self._loading = False
-        self.update()
+        self._invalidate_bg()
 
     def set_precomputed(self, result: dict):
         """Apply pre-computed waveform data from a WaveformLoadWorker."""
@@ -180,11 +182,14 @@ class WaveformWidget(QWidget):
         self._spec_renderer.reset(result["samplerate"])
         self._spec_renderer.set_spec_data(result.get("spec_db"))
         self._loading = False
-        self.update()
+        self._invalidate_bg()
 
     def set_issues(self, issues: list):
         """Set the list of IssueLocation objects to overlay on the waveform."""
         self._issues = list(issues)
+    def _invalidate_bg(self):
+        """Invalidate the static background render cache."""
+        self._bg_pixmap = None
         self.update()
 
     def set_cursor(self, sample_index: int):
@@ -195,7 +200,9 @@ class WaveformWidget(QWidget):
             self._view_start = self._cursor_sample
             self._view_end = min(self._cursor_sample + view_len, self._total_samples)
             self._wf_renderer.invalidate()
-        self.update()
+            self._invalidate_bg()
+        else:
+            self.update()
 
     # ── Coordinate helpers ─────────────────────────────────────────────────
 
@@ -238,43 +245,67 @@ class WaveformWidget(QWidget):
 
     # ── paintEvent ─────────────────────────────────────────────────────────
 
-    def paintEvent(self, event):
-        w = self.width()
-        h = self.height()
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, True)
+    def _update_bg_pixmap(self, w: int, h: int):
+        from PySide6.QtGui import QPixmap
+        sz = self.size()
+        dpr = self.devicePixelRatio()
+        self._bg_pixmap = QPixmap(sz * dpr)
+        self._bg_pixmap.setDevicePixelRatio(dpr)
+        self._bg_pixmap._logical_size = sz
 
-        painter.fillRect(0, 0, w, h, QColor(COLORS["bg"]))
+        bg_painter = QPainter(self._bg_pixmap)
+        bg_painter.setRenderHint(QPainter.Antialiasing, True)
+        bg_painter.fillRect(0, 0, w, h, QColor(COLORS["bg"]))
 
         if self._loading:
-            painter.setPen(QPen(QColor(COLORS["dim"])))
-            painter.drawText(self.rect(), Qt.AlignCenter, "Loading waveform\u2026")
-            painter.end()
+            bg_painter.setPen(QPen(QColor(COLORS["dim"])))
+            bg_painter.drawText(self.rect(), Qt.AlignCenter, "Loading waveform\u2026")
+            bg_painter.end()
             return
 
         if not self._channels or self._total_samples == 0:
-            painter.setPen(QPen(QColor(COLORS["dim"])))
-            painter.drawText(self.rect(), Qt.AlignCenter, "No waveform")
-            painter.end()
+            bg_painter.setPen(QPen(QColor(COLORS["dim"])))
+            bg_painter.drawText(self.rect(), Qt.AlignCenter, "No waveform")
+            bg_painter.end()
             return
 
         x0, draw_w = self._draw_area()
         draw_h = h - self._MARGIN_BOTTOM
 
         if self._display_mode == "spectrogram":
-            self._spec_renderer.paint(painter, self._make_spec_ctx(x0, draw_w, draw_h))
+            self._spec_renderer.paint(bg_painter, self._make_spec_ctx(x0, draw_w, draw_h))
         else:
-            self._wf_renderer.paint(painter, self._make_wf_ctx(x0, draw_w, draw_h))
+            self._wf_renderer.paint(bg_painter, self._make_wf_ctx(x0, draw_w, draw_h))
 
         draw_issue_overlays(
-            painter, x0, draw_w, draw_h,
+            bg_painter, x0, draw_w, draw_h,
             self._view_start, self._view_end, self._total_samples,
             self._issues, self._enabled_overlays,
             self._display_mode, self._num_channels,
             self._spec_renderer.mel_view_min, self._spec_renderer.mel_view_max,
         )
-        draw_time_scale(painter, x0, draw_w, draw_h,
+        draw_time_scale(bg_painter, x0, draw_w, draw_h,
                         self._view_start, self._view_end, self._samplerate)
+        bg_painter.end()
+
+    def paintEvent(self, event):
+        w = max(1, self.width())
+        h = max(1, self.height())
+        sz = self.size()
+
+        if self._bg_pixmap is None or getattr(self._bg_pixmap, "_logical_size", None) != sz:
+            self._update_bg_pixmap(w, h)
+
+        painter = QPainter(self)
+        painter.drawPixmap(0, 0, self._bg_pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+
+        if self._loading or not self._channels or self._total_samples == 0:
+            painter.end()
+            return
+
+        x0, draw_w = self._draw_area()
+        draw_h = h - self._MARGIN_BOTTOM
 
         # Playback cursor
         if self._total_samples > 0:
@@ -398,7 +429,7 @@ class WaveformWidget(QWidget):
                         self._cursor_y_value = None
                 else:
                     self._cursor_y_value = None
-            self.update()
+            self._invalidate_bg()
             self.position_clicked.emit(sample)
 
     def mouseMoveEvent(self, event):
@@ -479,7 +510,7 @@ class WaveformWidget(QWidget):
             else:
                 self._vscale = (min(self._vscale * 1.25, 20.0) if delta > 0
                                 else max(self._vscale / 1.25, 0.1))
-            self.update()
+            self._invalidate_bg()
             event.accept()
         elif ctrl:
             x0, draw_w = self._draw_area()
@@ -504,7 +535,7 @@ class WaveformWidget(QWidget):
             self._view_start = new_start
             self._view_end = new_end
             self._wf_renderer.invalidate()
-            self.update()
+            self._invalidate_bg()
             event.accept()
         elif shift and alt:
             if self._display_mode == "spectrogram":
@@ -515,7 +546,7 @@ class WaveformWidget(QWidget):
                 if self._invert_v:
                     scroll = -scroll
                 self._spec_renderer.scroll_freq(scroll, self._samplerate)
-                self.update()
+                self._invalidate_bg()
             event.accept()
         elif shift:
             view_len = self._view_end - self._view_start
@@ -544,7 +575,7 @@ class WaveformWidget(QWidget):
 
     def _flush_scroll(self):
         self._scroll_pending = False
-        self.update()
+        self._invalidate_bg()
 
     def keyPressEvent(self, event):
         key = event.key()
@@ -583,7 +614,7 @@ class WaveformWidget(QWidget):
         self._view_start = new_start
         self._view_end = new_end
         self._wf_renderer.invalidate()
-        self.update()
+        self._invalidate_bg()
 
     # ── Zoom / vertical-scale public API ───────────────────────────────────
 
@@ -594,7 +625,7 @@ class WaveformWidget(QWidget):
         self._vscale = 1.0
         self._spec_renderer.reset_freq_view(self._samplerate)
         self._wf_renderer.invalidate()
-        self.update()
+        self._invalidate_bg()
 
     def zoom_in(self):
         """Zoom in 2× centered on the cursor."""
@@ -614,7 +645,7 @@ class WaveformWidget(QWidget):
         self._view_start = new_start
         self._view_end = new_end
         self._wf_renderer.invalidate()
-        self.update()
+        self._invalidate_bg()
 
     def zoom_out(self):
         """Zoom out 2× centered on the cursor."""
@@ -634,7 +665,7 @@ class WaveformWidget(QWidget):
         self._view_start = new_start
         self._view_end = new_end
         self._wf_renderer.invalidate()
-        self.update()
+        self._invalidate_bg()
 
     def scale_up(self):
         """Increase vertical amplitude scale / zoom freq in (spectrogram)."""
@@ -643,7 +674,7 @@ class WaveformWidget(QWidget):
                 2 / 3, self._cursor_y_value, self._samplerate)
         else:
             self._vscale = min(self._vscale * 1.5, 20.0)
-        self.update()
+        self._invalidate_bg()
 
     def scale_down(self):
         """Decrease vertical amplitude scale / zoom freq out (spectrogram)."""
@@ -652,7 +683,7 @@ class WaveformWidget(QWidget):
                 3 / 2, self._cursor_y_value, self._samplerate)
         else:
             self._vscale = max(self._vscale / 1.5, 0.1)
-        self.update()
+        self._invalidate_bg()
 
     # ── Public setters ─────────────────────────────────────────────────────
 
@@ -660,30 +691,30 @@ class WaveformWidget(QWidget):
         """Set the RMS window size."""
         self._rms_window_samples = max(window_samples, 0)
         self._wf_renderer.set_rms_window(window_samples)
-        self.update()
+        self._invalidate_bg()
 
     def toggle_markers(self, on: bool):
         self._show_markers = on
-        self.update()
+        self._invalidate_bg()
 
     def toggle_rms_lr(self, on: bool):
         self._show_rms_lr = on
-        self.update()
+        self._invalidate_bg()
 
     def toggle_rms_avg(self, on: bool):
         self._show_rms_avg = on
-        self.update()
+        self._invalidate_bg()
 
     def set_enabled_overlays(self, labels: set[str]):
         self._enabled_overlays = set(labels)
-        self.update()
+        self._invalidate_bg()
 
     def set_display_mode(self, mode: str):
         if mode not in ("waveform", "spectrogram"):
             return
         self._display_mode = mode
         self._spec_renderer.invalidate()
-        self.update()
+        self._invalidate_bg()
 
     def set_invert_scroll(self, mode: str):
         self._invert_h = mode in ("horizontal", "both")
@@ -691,15 +722,15 @@ class WaveformWidget(QWidget):
 
     def set_wf_antialias(self, enabled: bool):
         self._wf_antialias = enabled
-        self.update()
+        self._invalidate_bg()
 
     def set_wf_line_width(self, width: int):
         self._wf_line_width = max(1, min(width, 3))
-        self.update()
+        self._invalidate_bg()
 
     def set_colormap(self, name: str):
         self._spec_renderer.set_colormap(name)
-        self.update()
+        self._invalidate_bg()
 
     def set_spec_fft(self, n_fft: int):
         if n_fft == self._spec_renderer.spec_n_fft:
@@ -715,11 +746,11 @@ class WaveformWidget(QWidget):
 
     def set_spec_db_floor(self, val: float):
         self._spec_renderer.set_db_floor(val)
-        self.update()
+        self._invalidate_bg()
 
     def set_spec_db_ceil(self, val: float):
         self._spec_renderer.set_db_ceil(val)
-        self.update()
+        self._invalidate_bg()
 
     @property
     def spec_n_fft(self) -> int:
@@ -734,6 +765,6 @@ class WaveformWidget(QWidget):
             return
         self._spec_renderer.recompute(
             self._channels, self._samplerate,
-            on_done=self.update, parent=self,
+            on_done=self._invalidate_bg, parent=self,
         )
-        self.update()
+        self._invalidate_bg()
