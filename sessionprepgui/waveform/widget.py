@@ -57,6 +57,13 @@ class WaveformWidget(QWidget):
         self._mouse_y: int = -1
         # Offscreen rendering cache
         self._bg_pixmap = None
+        # Fast resize debounce
+        self._is_resizing: bool = False
+        self._stale_pixmap = None
+        self._resize_timer: QTimer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(150)
+        self._resize_timer.timeout.connect(self._flush_resize)
         # Scroll inversion
         self._invert_h: bool = False
         self._invert_v: bool = False
@@ -308,11 +315,17 @@ class WaveformWidget(QWidget):
         h = max(1, self.height())
         sz = self.size()
 
-        if self._bg_pixmap is None or getattr(self._bg_pixmap, "_logical_size", None) != sz:
+        if not self._is_resizing and (self._bg_pixmap is None or getattr(self._bg_pixmap, "_logical_size", None) != sz):
             self._update_bg_pixmap(w, h)
 
         painter = QPainter(self)
-        painter.drawPixmap(0, 0, self._bg_pixmap)
+        
+        if self._is_resizing and self._stale_pixmap is not None:
+            # Draw the stale pixmap stretched to fit the current size (fast path)
+            painter.drawPixmap(self.rect(), self._stale_pixmap)
+        elif self._bg_pixmap is not None:
+            painter.drawPixmap(0, 0, self._bg_pixmap)
+            
         painter.setRenderHint(QPainter.Antialiasing, True)
 
         if self._loading or not self._channels or self._total_samples == 0:
@@ -407,9 +420,20 @@ class WaveformWidget(QWidget):
     # ── Qt event handlers ──────────────────────────────────────────────────
 
     def resizeEvent(self, event):
+        if not self._is_resizing:
+            self._is_resizing = True
+            self._stale_pixmap = self._bg_pixmap
+        self._resize_timer.start()
+        # Invalidate deferred to _flush_resize for fast-draft dragging
+        super().resizeEvent(event)
+
+    def _flush_resize(self):
+        """Called when the 150ms debounce timer expires after a resize drag."""
+        self._is_resizing = False
+        self._stale_pixmap = None
         self._wf_renderer.invalidate()
         self._spec_renderer.invalidate()
-        super().resizeEvent(event)
+        self._invalidate_bg()
 
     def mousePressEvent(self, event):
         self.setFocus()
