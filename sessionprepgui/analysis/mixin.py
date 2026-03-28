@@ -220,6 +220,8 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
         self._cancel_worker("_worker")
         self._cancel_worker("_batch_reanalyze_worker")
         self._cancel_worker("_prepare_worker")
+        self._cancel_worker("_peak_build_worker")
+        self._peak_cache = {}
         self._session = None
         self._summary = None
         self._current_track = None
@@ -302,6 +304,7 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
         skip_folders = {
             app_cfg.get("phase1_output_folder", "sp_01_tracklayout"),
             app_cfg.get("phase2_output_folder", "sp_02_prepared"),
+            app_cfg.get("peak_cache_folder", "sp_peaks"),
         }
         wav_files = discover_audio_files(
             path, recursive=self._recursive_scan,
@@ -384,6 +387,9 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
         self._right_stack.setCurrentIndex(_PAGE_TABS)
         self._save_session_action.setEnabled(True)
         self.setWindowTitle("SessionPrep")
+
+        # Eagerly build peak cache for all source tracks in the background
+        self._start_peak_build(session.tracks, self._source_dir)
 
     @Slot()
     def _on_save_session(self):
@@ -489,6 +495,7 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
         skip_folders = {
             app_cfg.get("phase1_output_folder", "sp_01_tracklayout"),
             app_cfg.get("phase2_output_folder", "sp_02_prepared"),
+            app_cfg.get("peak_cache_folder", "sp_peaks"),
         }
         source_tracks = []
         for rel in discover_audio_files(
@@ -979,6 +986,79 @@ class AnalysisMixin:  # pylint: disable=too-few-public-methods
         self._status_bar.showMessage(
             f"Analysis complete: {ok_count}/{len(session.tracks)} tracks OK"
         )
+
+        # Eagerly build peak cache for Phase 2 tracks
+        analyze_dir = self._topology_dir or self._source_dir
+        if analyze_dir:
+            self._start_peak_build(session.tracks, analyze_dir)
+
+    # ── Peak cache ────────────────────────────────────────────────────────
+
+    def _start_peak_build(self, tracks, base_dir: str):
+        """Launch a background PeakBuildWorker for all tracks under *base_dir*.
+
+        Before launching, scan existing ``sp_peaks/`` for valid ``.peaks``
+        files and load them into the in-memory cache — only stale or missing
+        files are queued for background building.
+        """
+        from ..waveform.compute import PeakBuildWorker
+        from ..waveform.peakcache import (
+            peaks_path_for, load_peaks, get_source_mtime,
+        )
+
+        app_cfg = self._config.get("app", {})
+        peaks_folder = app_cfg.get("peak_cache_folder", "sp_peaks")
+        peaks_dir = os.path.join(base_dir, peaks_folder)
+
+        if not hasattr(self, "_peak_cache"):
+            self._peak_cache = {}
+
+        items = []
+        for track in tracks:
+            filepath = getattr(track, "filepath", None)
+            if not filepath:
+                filepath = os.path.join(base_dir, track.filename)
+            if not os.path.isfile(filepath):
+                continue
+            pp = peaks_path_for(peaks_dir, track.filename)
+            # Try to reuse existing .peaks from disk
+            mtime = get_source_mtime(filepath)
+            existing = load_peaks(pp, expected_mtime=mtime)
+            if existing is not None:
+                self._peak_cache[track.filename] = existing
+            else:
+                items.append((filepath, track.filename, pp))
+
+        if not items:
+            log.info("Peak cache: all %d files already cached", len(tracks))
+            return
+
+        log.info(
+            "Peak cache: %d cached from disk, %d to build",
+            len(tracks) - len(items), len(items),
+        )
+
+        self._cancel_worker("_peak_build_worker")
+        worker = PeakBuildWorker(items)
+        worker.file_done.connect(self._on_peak_file_done)
+        worker.progress.connect(self._status_bar.showMessage)
+        worker.all_done.connect(
+            lambda: log.info("Peak cache build complete (%d files)", len(items)))
+        self._peak_build_worker = worker
+        worker.start()
+
+    @Slot(str, object)
+    def _on_peak_file_done(self, filename: str, peak_data):
+        """Cache a newly built PeakData in memory."""
+        if not hasattr(self, "_peak_cache"):
+            self._peak_cache = {}
+        self._peak_cache[filename] = peak_data
+
+    def _prioritize_peak(self, filename: str):
+        """If a peak build is in progress, move *filename* to the front."""
+        worker = getattr(self, "_peak_build_worker", None)
+        if worker is not None and worker.isRunning():
+            worker.prioritize(filename)
 
     @Slot(str)
     def _on_analyze_error(self, message: str):

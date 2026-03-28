@@ -56,6 +56,7 @@ _APP_DEFAULTS: dict[str, Any] = {
     "report_verbosity": "normal",
     "phase1_output_folder": "sp_01_tracklayout",
     "phase2_output_folder": "sp_02_prepared",
+    "peak_cache_folder": "sp_peaks",
     "spectrogram_colormap": "magma",
     "default_project_dir": "",
     "invert_scroll": "default",

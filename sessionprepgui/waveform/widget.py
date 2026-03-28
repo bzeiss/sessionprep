@@ -101,6 +101,16 @@ class WaveformWidget(QWidget):
         self._spec_renderer.reset(samplerate)
         self.update()
 
+    def set_peak_data(self, peak_data):
+        """Set pre-computed peak mipmap data for fast rendering.
+
+        Can be called before or after set_audio / set_precomputed.
+        When set, the renderer uses mip-level lookups instead of
+        downsampling raw samples on each paint.
+        """
+        self._wf_renderer.set_peak_data(peak_data)
+        self.update()
+
     def set_loading(self, loading: bool):
         """Show or hide a 'Loading waveform…' placeholder."""
         self._loading = loading

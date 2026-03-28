@@ -145,6 +145,14 @@ class DetailMixin:  # pylint: disable=too-few-public-methods
             return
 
         self._waveform.set_precomputed(result)
+        # Apply cached peak data for mip-level rendering
+        peak_cache = getattr(self, '_peak_cache', {})
+        fn = getattr(track, 'filename', None)
+        if fn and fn in peak_cache:
+            self._waveform.set_peak_data(peak_cache[fn])
+        elif fn and hasattr(self, '_prioritize_peak'):
+            self._prioritize_peak(fn)
+
         cmap = self._config.get("app", {}).get("spectrogram_colormap", "magma")
         self._waveform.set_colormap(cmap)
         # Sync colormap dropdown with preference

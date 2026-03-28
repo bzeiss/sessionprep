@@ -339,6 +339,9 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
         output_folder = self._config.get("app", {}).get(
             "phase1_output_folder", "sp_01_tracklayout")
         output_dir = os.path.join(self._source_dir, output_folder)
+        peaks_folder = self._config.get("app", {}).get(
+            "peak_cache_folder", "sp_peaks")
+        peaks_dir = os.path.join(output_dir, peaks_folder)
 
         self._topo_apply_action.setEnabled(False)
         self._topo_reset_action.setEnabled(False)
@@ -348,7 +351,8 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
         # Put Phase 1 topology on session for the worker to read
         self._session.topology = self._topo_topology
         self._topo_apply_worker = TopologyApplyWorker(
-            self._session, output_dir, source_dir=self._source_dir)
+            self._session, output_dir, source_dir=self._source_dir,
+            peaks_dir=peaks_dir)
         self._topo_apply_worker.progress.connect(self._on_topo_apply_progress)
         self._topo_apply_worker.progress_value.connect(
             self._on_topo_apply_progress_value)
@@ -724,6 +728,7 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
         """Load waveform for a single input file."""
         self._topo_cancel_workers()
         self._on_topo_stop()
+        self._topo_wf_filename = filename  # track for peak cache lookup
 
         track_map = self._topo_track_map()
         track = track_map.get(filename)
@@ -963,6 +968,13 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
     def _on_topo_wf_loaded(self, result: dict):
         self._topo_wf_worker = None
         self._topo_wf_panel.waveform.set_precomputed(result)
+        # Apply cached peak data for mip-level rendering
+        peak_cache = getattr(self, '_peak_cache', {})
+        wf_fn = getattr(self, '_topo_wf_filename', None)
+        if wf_fn and wf_fn in peak_cache:
+            self._topo_wf_panel.waveform.set_peak_data(peak_cache[wf_fn])
+        elif wf_fn and hasattr(self, '_prioritize_peak'):
+            self._prioritize_peak(wf_fn)
         n_ch = len(result["channels"])
         labels = getattr(self, '_topo_pending_labels', None)
         self._topo_wf_panel.update_play_mode_channels(n_ch, labels=labels)

@@ -618,11 +618,13 @@ class TopologyApplyWorker(QThread):
     apply_finished = Signal()           # renamed: avoid shadowing QThread.finished
     error = Signal(str)
 
-    def __init__(self, session, output_dir: str, source_dir: str | None = None):
+    def __init__(self, session, output_dir: str, source_dir: str | None = None,
+                 peaks_dir: str | None = None):
         super().__init__()
         self._session = session
         self._output_dir = output_dir
         self._source_dir = source_dir
+        self._peaks_dir = peaks_dir
 
     def run(self):
         try:
@@ -745,6 +747,21 @@ class TopologyApplyWorker(QThread):
                     dst = os.path.join(output_dir, entry.output_filename)
                     os.makedirs(os.path.dirname(dst), exist_ok=True)
                     sf.write(dst, resolved, sr, subtype=subtype)
+
+                    # Build + save peak cache for this output file
+                    if self._peaks_dir:
+                        try:
+                            from ..waveform.peakcache import (
+                                build_peaks, save_peaks, peaks_path_for,
+                                get_source_mtime,
+                            )
+                            mtime = get_source_mtime(dst)
+                            pd = build_peaks(resolved, sr, source_mtime=mtime)
+                            pp = peaks_path_for(
+                                self._peaks_dir, entry.output_filename)
+                            save_peaks(pd, pp)
+                        except Exception:
+                            pass  # non-fatal
 
                     n_samples = resolved.shape[0]
                     out_tc = TrackContext(

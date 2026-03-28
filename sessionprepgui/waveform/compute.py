@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import collections
 import threading
 
 import numpy as np
@@ -301,3 +302,133 @@ class SpectrogramRecomputeWorker(QThread):
         if self._cancelled.is_set():
             return
         self.finished.emit(result)
+
+
+class PeakBuildWorker(QThread):
+    """Eagerly build and save ``.peaks`` files for a batch of audio files.
+
+    Runs in the background with a thread pool — does not block the UI.
+    Emits ``file_done(filename, PeakData)`` for each completed file so the
+    caller can cache the result in memory.
+
+    The work queue is mutable: call ``prioritize(filename)`` to move a file
+    to the front of the pending queue so it is processed next.
+    """
+
+    progress = Signal(str)                 # status message
+    progress_value = Signal(int, int)      # (current, total)
+    file_done = Signal(str, object)        # (filename, PeakData)
+    all_done = Signal()
+
+    def __init__(self, items: list[tuple[str, str, str]],
+                 parent=None):
+        """
+        Parameters
+        ----------
+        items : list of (filepath, filename, peaks_path)
+            *filepath*: absolute path to the audio file on disk.
+            *filename*: canonical filename (used as cache key).
+            *peaks_path*: absolute path for the ``.peaks`` output file.
+        """
+        super().__init__(parent)
+        self._items_map: dict[str, tuple[str, str, str]] = {
+            fn: (fp, fn, pp) for fp, fn, pp in items
+        }
+        self._queue: collections.deque[str] = collections.deque(
+            fn for _, fn, _ in items
+        )
+        self._lock = threading.Lock()
+        self._cancelled = threading.Event()
+        self._total = len(items)
+
+    def cancel(self):
+        self._cancelled.set()
+
+    def prioritize(self, filename: str):
+        """Move *filename* to the front of the pending queue (if still pending)."""
+        with self._lock:
+            try:
+                self._queue.remove(filename)
+            except ValueError:
+                return  # already processed or not in queue
+            self._queue.appendleft(filename)
+
+    def _next_item(self) -> tuple[str, str, str] | None:
+        """Pop the next item from the queue under lock."""
+        with self._lock:
+            while self._queue:
+                fn = self._queue.popleft()
+                item = self._items_map.get(fn)
+                if item:
+                    return item
+        return None
+
+    def run(self):
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import os
+        import soundfile as sf
+        from .peakcache import (
+            build_peaks, save_peaks, load_peaks, get_source_mtime,
+        )
+
+        def _process(filepath, filename, peaks_path):
+            if self._cancelled.is_set():
+                return None, None
+            mtime = get_source_mtime(filepath)
+            # Check if existing peaks are still valid
+            existing = load_peaks(peaks_path, expected_mtime=mtime)
+            if existing is not None:
+                return filename, existing
+            # Build from audio
+            try:
+                data, sr = sf.read(filepath, dtype="float64")
+            except Exception:
+                return None, None
+            if self._cancelled.is_set():
+                return None, None
+            peak_data = build_peaks(data, sr, source_mtime=mtime)
+            try:
+                save_peaks(peak_data, peaks_path)
+            except OSError:
+                pass  # non-fatal
+            return filename, peak_data
+
+        max_workers = min(os.cpu_count() or 4, 6)
+        completed = 0
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            # Process items in small batches to keep the queue reorderable
+            while not self._cancelled.is_set():
+                # grab a batch of up to max_workers items
+                batch = []
+                for _ in range(max_workers):
+                    item = self._next_item()
+                    if item is None:
+                        break
+                    batch.append(item)
+                if not batch:
+                    break  # queue exhausted
+
+                futures = {
+                    pool.submit(_process, fp, fn, pp): fn
+                    for fp, fn, pp in batch
+                }
+                for future in as_completed(futures):
+                    if self._cancelled.is_set():
+                        return
+                    filename, peak_data = future.result()
+                    completed += 1
+                    if filename and peak_data:
+                        self.progress.emit(
+                            f"Building peak cache: {filename}"
+                            f"  ({completed}/{self._total})")
+                        self.progress_value.emit(completed, self._total)
+                        self.file_done.emit(filename, peak_data)
+                    else:
+                        self.progress_value.emit(completed, self._total)
+
+        if not self._cancelled.is_set():
+            self.progress.emit("Peak cache creation finished.")
+            self.all_done.emit()
+
+
