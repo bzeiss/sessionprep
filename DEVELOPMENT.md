@@ -1026,7 +1026,7 @@ DAWproject, +12 dB for Pro Tools). The headroom margin is configured via
 `fader_headroom_db` (default 8 dB). If the highest fader offset exceeds
 `ceiling - headroom`, all fader offsets are shifted down uniformly by the
 excess amount. The shift is stored in `ProcessorResult.data["fader_rebalance_shift"]`
-and logged via `dbg()` when `SP_DEBUG` is active.
+and logged via `dbg()` when `SP_LOG_LEVEL=DEBUG` is active.
 
 ### 7.7 Registration
 
@@ -1311,7 +1311,7 @@ the current state.
 
 ### 9.5 Profiling & Debugging
 
-When the `SP_DEBUG` environment variable is set to `1` or `true`, the pipeline
+When the `SP_LOG_LEVEL` environment variable is set to `DEBUG`, the pipeline
 emits per-component timing via `dbg()` (from `sessionprepgui/log.py`).
 Output goes to stderr with timestamps and caller class names.
 
@@ -1668,7 +1668,7 @@ group).
 | `theme.py`                | `COLORS` dict, `FILE_COLOR_*` constants, dark palette + stylesheet                                                                                                                                                                                                                                                                                                                            |
 | `helpers.py`              | `esc()`, `track_analysis_label(track, detectors=None)` (filters via `is_relevant()`), `fmt_time()`, severity maps                                                                                                                                                                                                                                                                             |
 | `widgets.py`              | `BatchEditTableWidget`, `BatchComboBox` — reusable batch-edit base classes preserving multi-row selection across cell-widget clicks (zero app imports)                                                                                                                                                                                                                                        |
-| `log.py`                  | `dbg(msg)` — lightweight debug logging to stderr, gated by `SP_DEBUG` env var. Timestamped output with caller class name. Used by `pipeline.py`, `dawproject.py`, and other modules via conditional import.                                                                                                                                                                                   |
+| `log.py`                  | `dbg(msg)` — lightweight debug logging to stderr, gated by `SP_LOG_LEVEL=DEBUG`. Timestamped output with caller class name. Used by `pipeline.py`, `dawproject.py`, and other modules via conditional import.                                                                                                                                                                                   |
 | `analysis/mixin.py`       | `AnalysisMixin` — open/save/load session, analyze, prepare, session Config tab wiring                                                                                                                                                                                                                                                                                                         |
 | `analysis/worker.py`      | QThread workers: `AnalyzeWorker` (pipeline in background, thread-safe progress, per-track signals), `BatchReanalyzeWorker` (subset re-analysis after batch overrides), `PrepareWorker` (runs `Pipeline.prepare()` in background with progress), `DawCheckWorker` (connectivity check), `DawFetchWorker` (folder fetch), `DawTransferWorker` (transfer with progress + progress_value signals) |
 | `daw/mixin.py`            | `DawMixin` — DAW processor selection, check/fetch/transfer/sync, folder tree, drag-and-drop track assignment, Track Name inline editing, duplication with `-[N]` naming                                                                                                                                                                                                                       |

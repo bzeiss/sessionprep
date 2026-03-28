@@ -126,6 +126,10 @@ class WaveformWidget(QWidget):
     def set_preview_mode(self, channels_count: int, total_samples: int,
                          samplerate: int, peak_data: object):
         """Instantly prepare widget for rendering using only peak cache metadata."""
+        import time, logging
+        t0 = time.perf_counter()
+        log = logging.getLogger(__name__)
+
         channels_count = max(1, channels_count)
         self._channels = [np.array([], dtype=np.float32) for _ in range(channels_count)]
         self._num_channels = channels_count
@@ -154,9 +158,14 @@ class WaveformWidget(QWidget):
         self._wf_renderer.set_peak_data(peak_data)
         self._loading = False
         self._invalidate_bg()
+        log.debug("[Trace] WaveformWidget.set_preview_mode finished in %.2f ms", (time.perf_counter() - t0) * 1000)
 
     def set_precomputed(self, result: dict):
         """Apply pre-computed waveform data from a WaveformLoadWorker."""
+        import time, logging
+        t0 = time.perf_counter()
+        log = logging.getLogger(__name__)
+
         self._channels = result["channels"]
         self._num_channels = len(self._channels)
         self._total_samples = result["total_samples"]
@@ -183,6 +192,7 @@ class WaveformWidget(QWidget):
         self._spec_renderer.set_spec_data(result.get("spec_db"))
         self._loading = False
         self._invalidate_bg()
+        log.debug("[Trace] WaveformWidget.set_precomputed finished in %.2f ms", (time.perf_counter() - t0) * 1000)
 
     def set_issues(self, issues: list):
         """Set the list of IssueLocation objects to overlay on the waveform."""
@@ -246,6 +256,10 @@ class WaveformWidget(QWidget):
     # ── paintEvent ─────────────────────────────────────────────────────────
 
     def _update_bg_pixmap(self, w: int, h: int):
+        import time, logging
+        t0 = time.perf_counter()
+        log = logging.getLogger(__name__)
+
         from PySide6.QtGui import QPixmap
         sz = self.size()
         dpr = self.devicePixelRatio()
@@ -287,6 +301,7 @@ class WaveformWidget(QWidget):
         draw_time_scale(bg_painter, x0, draw_w, draw_h,
                         self._view_start, self._view_end, self._samplerate)
         bg_painter.end()
+        log.debug("[Trace] WaveformWidget._update_bg_pixmap rendered in %.2f ms", (time.perf_counter() - t0) * 1000)
 
     def paintEvent(self, event):
         w = max(1, self.width())

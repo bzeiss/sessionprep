@@ -75,6 +75,10 @@ class DetailMixin:  # pylint: disable=too-few-public-methods
 
     def _load_waveform(self, track):
         """Start background waveform loading for *track*."""
+        import time, logging
+        t0 = time.perf_counter()
+        log = logging.getLogger(__name__)
+
         # Guard: user may have clicked a different track while we were queued
         if self._current_track is not track:
             return
@@ -105,6 +109,9 @@ class DetailMixin:  # pylint: disable=too-few-public-methods
             self._wf_container.setVisible(True)
         self._play_btn.setEnabled(False)
         self._update_time_label(0)
+
+        if fn:
+            log.debug("[Trace] _load_waveform UI setup for '%s': %.2f ms", fn, (time.perf_counter() - t0) * 1000)
 
         # 2. If audio_data is absent but the file exists, load it from disk first
         if (track.audio_data is None or track.audio_data.size == 0) and \

@@ -179,6 +179,10 @@ class WaveformLoadWorker(QThread):
         self._cancelled.set()
 
     def run(self):
+        import time, logging
+        t_start = time.perf_counter()
+        log = logging.getLogger(__name__)
+
         data = self._audio_data
         sr = self._samplerate
         win = self._rms_win
@@ -201,7 +205,11 @@ class WaveformLoadWorker(QThread):
         if self._cancelled.is_set():
             return
 
+        if self._cancelled.is_set():
+            return
+
         # --- Peak finding ---
+        t0 = time.perf_counter()
         if nch == 1:
             peak_sample = int(np.argmax(np.abs(channels[0])))
             peak_channel = 0
@@ -214,10 +222,13 @@ class WaveformLoadWorker(QThread):
         peak_db = 20.0 * np.log10(peak_lin) if peak_lin > 0 else float('-inf')
         peak_amplitude = float(channels[peak_channel][peak_sample])
 
+        log.debug("[Trace] WaveformLoadWorker Peak finding: %.2f ms", (time.perf_counter() - t0) * 1000)
+
         if self._cancelled.is_set():
             return
 
         # --- RMS cumsum (computed once, reused for envelope drawing) ---
+        t0 = time.perf_counter()
         rms_max_sample = -1
         rms_max_db = float('-inf')
         rms_max_amplitude = 0.0
@@ -249,17 +260,24 @@ class WaveformLoadWorker(QThread):
                 rms_max_db = 20.0 * np.log10(rms_lin) if rms_lin > 0 else float('-inf')
                 rms_max_amplitude = rms_lin
 
+        log.debug("[Trace] WaveformLoadWorker RMS: %.2f ms", (time.perf_counter() - t0) * 1000)
+
         if self._cancelled.is_set():
             return
 
         # --- Spectrogram ---
+        t0 = time.perf_counter()
         spec_db = compute_mel_spectrogram(
             channels, sr,
             n_fft=self._spec_n_fft, window=self._spec_window,
         )
 
+        log.debug("[Trace] WaveformLoadWorker STFT: %.2f ms", (time.perf_counter() - t0) * 1000)
+
         if self._cancelled.is_set():
             return
+
+        log.debug("[Trace] WaveformLoadWorker TOTAL: %.2f ms", (time.perf_counter() - t_start) * 1000)
 
         self.finished.emit({
             "channels": channels,

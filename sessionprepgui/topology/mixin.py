@@ -726,6 +726,10 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
 
     def _topo_load_input_waveform(self, filename: str):
         """Load waveform for a single input file."""
+        import time, logging
+        t0 = time.perf_counter()
+        log = logging.getLogger(__name__)
+
         self._topo_cancel_workers()
         self._on_topo_stop()
         self._topo_wf_filename = filename  # track for peak cache lookup
@@ -754,6 +758,7 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
                 self._prioritize_peak(filename)
 
         self._topo_wf_panel.play_btn.setEnabled(False)
+        log.debug("[Trace] _topo_load_input_waveform setup for '%s': %.2f ms", filename, (time.perf_counter() - t0) * 1000)
 
         from ..analysis.worker import AudioLoadWorker
         worker = AudioLoadWorker(track, parent=self)
@@ -953,6 +958,10 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
     def _topo_show_waveform(self, audio_data, samplerate: int,
                             labels: list[str] | None = None):
         """Run WaveformLoadWorker and display result."""
+        import time, logging
+        t0 = time.perf_counter()
+        log = logging.getLogger(__name__)
+
         import numpy as np
         if audio_data is None or (isinstance(audio_data, np.ndarray)
                                   and audio_data.size == 0):
@@ -974,8 +983,13 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
         self._topo_wf_worker = worker
         worker.finished.connect(self._on_topo_wf_loaded)
         worker.start()
+        log.debug("[Trace] _topo_show_waveform setup: %.2f ms", (time.perf_counter() - t0) * 1000)
 
     def _on_topo_wf_loaded(self, result: dict):
+        import time, logging
+        t0 = time.perf_counter()
+        log = logging.getLogger(__name__)
+
         self._topo_wf_worker = None
         self._topo_wf_panel.waveform.set_precomputed(result)
         # Apply cached peak data for mip-level rendering
@@ -990,6 +1004,7 @@ class TopologyMixin:  # pylint: disable=too-few-public-methods
         self._topo_wf_panel.update_play_mode_channels(n_ch, labels=labels)
         self._topo_wf_panel.play_btn.setEnabled(True)
         self._topo_update_time_label(0)
+        log.debug("[Trace] _on_topo_wf_loaded final UI application: %.2f ms", (time.perf_counter() - t0) * 1000)
 
     # ── Playback ──────────────────────────────────────────────────────
 

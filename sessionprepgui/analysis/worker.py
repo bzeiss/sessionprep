@@ -356,10 +356,19 @@ class AudioLoadWorker(QThread):
 
     def run(self):
         try:
+            import time, logging
+            t0 = time.perf_counter()
+            log = logging.getLogger(__name__)
+
             from sessionpreplib.audio import load_track
             import soundfile as sf
             import numpy as np
             data, sr = sf.read(self._track.filepath, dtype='float64')
+            
+            elapsed = (time.perf_counter() - t0) * 1000
+            if getattr(self._track, 'filename', None):
+                log.debug("[Trace] AudioLoadWorker I/O (sf.read) for '%s': %.2f ms", self._track.filename, elapsed)
+
             if self._cancelled:
                 return
             self._track.audio_data = data
